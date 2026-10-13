@@ -1253,7 +1253,8 @@ test("draftFromGaps projects the flow's configured sources into the enqueued inp
   const log = await ctx.stores.questionLogs.record({
     question: "How do I configure X?",
     chatProvider: "openai-compatible",
-    retrievedSectionIds: []
+    retrievedSectionIds: [],
+    flowId: "support"
   });
   await ctx.stores.questionLogs.recordManualGap(log.id, "How to configure X");
 

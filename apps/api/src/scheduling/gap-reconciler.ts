@@ -628,13 +628,15 @@ interface PendingCandidate {
 
 // Resolves this flow's candidates that still have unassigned gap rows, then
 // routes to the embedding-based assignment or the exact-summary fallback. The
-// gap ids for every candidate are resolved in ONE batched query (not one per
-// candidate), and only this flow's active memberships are loaded. Returns the
-// number of clusters created.
+// candidate read is flow-scoped and uncapped (never the global, capped display
+// window, which a busier flow can fill and starve this one out of). The gap ids
+// for every candidate are resolved in ONE batched query (not one per candidate),
+// and only this flow's active memberships are loaded. Returns the number of
+// clusters created.
 async function assignNewGaps(ctx: AppContext, flowId: string | undefined, flowLabel: string): Promise<number> {
-  const candidates = (await ctx.stores.questionLogs.listGapCandidates(200)).filter((c) => sameFlow(c.flowId, flowId));
   const activeMemberships = await ctx.stores.gapClusters.listActiveMembershipsForFlow(flowId);
   const assignedGapIds = new Set(activeMemberships.map((m) => m.gapId));
+  const candidates = await ctx.stores.questionLogs.listUnassignedGapCandidates(flowId, assignedGapIds);
   const gapIdsByCandidate = await ctx.stores.questionLogs.gapIdsForSummaries(
     candidates.map((candidate) => ({ summary: candidate.summary, flowId: candidate.flowId }))
   );
@@ -826,12 +828,17 @@ async function embedAll(provider: EmbeddingProvider, texts: string[]): Promise<n
 // turns a silent runaway into a slow, observable bleed an operator can catch.
 const MAX_DRAFTS_PER_TICK = 10;
 
-// Drafts a proposal for each active cluster in this flow with no linked proposal, up
-// to MAX_DRAFTS_PER_TICK per tick. draftFromCluster links the proposal and enqueues
-// its publish action, which drainPublicationOutbox processes in the same run. Frozen
-// clusters (merged/rejected PRs) are excluded by listActiveClusters, so content a
-// reviewer already declined is never re-raised. Returns the count drafted this tick
-// and how many uncovered clusters were left undrafted by the cap (deferred).
+// Drafts a proposal for each active cluster in this flow with no linked proposal,
+// enqueuing at most MAX_DRAFTS_PER_TICK per tick. Only an ENQUEUED draft spends a
+// slot: a cluster that cannot be drafted (a non-transient refusal such as
+// cluster_not_found or gap_candidate_not_found) is skipped without using one, so
+// failing clusters at the head of the list never starve the rest. A transient
+// failure (a throw) defers that cluster; a capacity shed defers it and every
+// remaining one. draftFromCluster links the proposal and enqueues its publish
+// action, which drainPublicationOutbox processes in the same run. Frozen clusters
+// (merged/rejected PRs) are excluded by listActiveClusters, so content a reviewer
+// already declined is never re-raised. Returns the count drafted this tick and how
+// many uncovered clusters were left for a later tick (deferred).
 async function draftProposalsForUncoveredClusters(
   ctx: AppContext,
   flowId: string | undefined,
@@ -852,69 +859,67 @@ async function draftProposalsForUncoveredClusters(
   }
 
   const uncovered = active.filter((cluster) => !coveredClusterIds.has(cluster.id));
-  const toDraft = uncovered.slice(0, MAX_DRAFTS_PER_TICK);
-  let deferred = uncovered.length - toDraft.length;
-  if (deferred > 0) {
-    // Loud on purpose: reaching the cap means reshape did not collapse the singleton
-    // set the way it should have — the fan-out signature. Surface it so it's alertable.
-    logger.warn(
-      {
-        flowId: flowId ?? "default",
-        uncovered: uncovered.length,
-        drafting: toDraft.length,
-        deferred,
-        cap: MAX_DRAFTS_PER_TICK
-      },
-      "gap reconciler: uncovered cluster count exceeds the per-tick draft cap; drafting a capped batch and deferring the rest (reshape likely under-collapsed)"
-    );
-  }
-
+  const flowLabel = flowId ?? "default";
   let drafted = 0;
-  // Deferred = the cap overflow above PLUS any cluster the outer fan-out budget
-  // sheds (budget/capacity). Once the budget sheds, every remaining cluster this
-  // tick is deferred too — the shed persists for the tick — so we stop attempting
-  // and count the rest. draftsDeferred > 0 holds the processed revision, so the
-  // next tick re-enters and drafts the remainder (reshape is composition-hash-
-  // skipped on re-entry, so deferral spends no extra model work).
-  let budgetShed = false;
-  for (const cluster of toDraft) {
-    if (budgetShed) {
-      deferred += 1;
-      continue;
+  let skipped = 0;
+  // Deferred = clusters left for a later tick: the cap overflow, any transient
+  // failure, and — once the outer fan-out budget sheds — every remaining cluster
+  // (the shed persists for the tick, so we stop attempting). draftsDeferred > 0
+  // holds the processed revision, so the next tick re-enters and drafts the
+  // remainder (reshape is composition-hash-skipped on re-entry, so deferral spends
+  // no extra model work).
+  let deferred = 0;
+  for (const [index, cluster] of uncovered.entries()) {
+    const remaining = uncovered.length - index;
+    if (drafted >= MAX_DRAFTS_PER_TICK) {
+      deferred += remaining;
+      // Loud on purpose: reaching the cap means reshape did not collapse the
+      // singleton set the way it should have — the fan-out signature. Surface it so
+      // it's alertable.
+      logger.warn(
+        { flowId: flowLabel, uncovered: uncovered.length, drafted, deferred: remaining, cap: MAX_DRAFTS_PER_TICK },
+        "gap reconciler: uncovered cluster count exceeds the per-tick draft cap; drafted a capped batch and deferring the rest (reshape likely under-collapsed)"
+      );
+      break;
     }
     try {
       const outcome = await gapsService.draftFromCluster(ctx, cluster.id, {}, { budget });
       if (outcome.ok) {
         drafted += 1;
         logger.info(
-          { flowId: flowId ?? "default", clusterId: cluster.id, clusterTitle: cluster.title, jobId: outcome.job.id },
+          { flowId: flowLabel, clusterId: cluster.id, clusterTitle: cluster.title, jobId: outcome.job.id },
           "gap reconciler: enqueued draft for cluster"
         );
       } else if (outcome.code === "capacity") {
         // Not a real drafting failure — the tick's fan-out budget/admission is
         // spent. Defer this cluster and every remaining one to a later tick.
-        budgetShed = true;
-        deferred += 1;
+        deferred += remaining;
         logger.warn(
-          { flowId: flowId ?? "default", clusterId: cluster.id },
+          { flowId: flowLabel, clusterId: cluster.id, deferred: remaining },
           "gap reconciler: fan-out budget/capacity exhausted; deferring remaining cluster drafts to a later tick"
         );
+        break;
       } else {
+        // Non-transient: retrying next tick would fail the same way, so skip it
+        // without spending a slot or holding the revision.
+        skipped += 1;
         logger.warn(
-          { flowId: flowId ?? "default", clusterId: cluster.id, code: outcome.code },
-          "gap reconciler: could not draft proposal for cluster"
+          { flowId: flowLabel, clusterId: cluster.id, code: outcome.code },
+          "gap reconciler: could not draft proposal for cluster; skipping"
         );
       }
     } catch (error) {
+      // Transient (store/broker error): defer so a later tick retries it.
+      deferred += 1;
       const message = error instanceof Error ? error.message : "draft failed";
       logger.warn(
-        { flowId: flowId ?? "default", clusterId: cluster.id, err: message },
-        "gap reconciler: failed to draft proposal for cluster"
+        { flowId: flowLabel, clusterId: cluster.id, err: message },
+        "gap reconciler: failed to draft proposal for cluster; deferring to a later tick"
       );
     }
   }
   logger.info(
-    { flowId: flowId ?? "default", drafted, deferred },
+    { flowId: flowLabel, drafted, skipped, deferred },
     "gap reconciler: drafted new proposals for uncovered clusters"
   );
   return { drafted, deferred };

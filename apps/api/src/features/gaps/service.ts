@@ -80,6 +80,9 @@ export async function draftFromCluster(
   });
   const outcome = await draftFromGaps(ctx, summaries, {
     flowId: cluster.flowId,
+    // Clustering is per-flow, so resolve the cluster's gaps within its own flow —
+    // including the un-routed/default flow, which has no flowId to name.
+    candidateScope: { kind: "flow", flowId: cluster.flowId },
     targetPath: overrides.targetPath,
     destinationId: overrides.destinationId,
     openPullRequests,
