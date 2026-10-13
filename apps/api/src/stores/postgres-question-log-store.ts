@@ -20,6 +20,7 @@ import {
   countsAsCitationUsage,
   gapSummaryKey,
   isSeedableGapSummary,
+  type GapCandidateScope,
   type QuestionLogStore
 } from "./question-log-store.js";
 import { valuesClause } from "./sql-bulk.js";
@@ -40,25 +41,10 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
         SELECT qg.id::text AS id
         FROM question_gaps qg
         JOIN questions q ON q.id = qg.question_id
-        WHERE qg.resolved_at IS NULL
-          AND qg.dismissed_at IS NULL
-          -- Gap-candidate purposes: live asks and questionnaire item asks (an
-          -- unanswerable questionnaire question is a real gap). Verification
-          -- re-asks stay excluded (#154).
-          AND q.purpose IN ('live', 'questionnaire')
-          -- Exclude EVERY gap of a parked question (question-level, matching
-          -- candidacy) so a parked escalation — or its sibling auto row — can
-          -- never be swept into a cluster where an AI dismissal discharges it (#158).
-          AND qg.question_id NOT IN (
-            SELECT question_id FROM question_gaps
-            WHERE parked_at IS NOT NULL AND resolved_at IS NULL AND dismissed_at IS NULL
-          )
+        WHERE ${CANDIDATE_GAP_CONDITIONS}
+          AND ${DRAFTABLE_GAP_CONDITION}
           AND qg.summary = $1
           AND coalesce(q.flow_id, '') = coalesce($2, '')
-          -- Keyword-mode gaps rest on "no lexeme matched", not "nothing close
-          -- exists", so they never drive unattended proposal generation. NULL
-          -- (pre-existing, manual, or feedback gaps) stays a candidate.
-          AND qg.retrieval_mode IS DISTINCT FROM 'keyword'
         ORDER BY qg.id ASC
       `,
       [summary, flowId ?? null]
@@ -98,18 +84,10 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
         )
         SELECT p.summary AS summary, p.flow AS flow, qg.id::text AS id
         FROM pairs p
-        JOIN question_gaps qg ON qg.summary = p.summary AND qg.resolved_at IS NULL AND qg.dismissed_at IS NULL
-          -- Keyword-mode gaps rest on "no lexeme matched", not "nothing close
-          -- exists", so they never drive unattended proposal generation. NULL
-          -- (pre-existing, manual, or feedback gaps) stays a candidate.
-          AND qg.retrieval_mode IS DISTINCT FROM 'keyword'
+        JOIN question_gaps qg ON qg.summary = p.summary
         JOIN questions q ON q.id = qg.question_id AND coalesce(q.flow_id, '') = p.flow
-          AND q.purpose IN ('live', 'questionnaire')
-        -- Exclude every gap of a parked question, matching gapIdsForSummary/candidacy (#158).
-        WHERE qg.question_id NOT IN (
-          SELECT question_id FROM question_gaps
-          WHERE parked_at IS NOT NULL AND resolved_at IS NULL AND dismissed_at IS NULL
-        )
+        WHERE ${CANDIDATE_GAP_CONDITIONS}
+          AND ${DRAFTABLE_GAP_CONDITION}
         ORDER BY qg.id ASC
       `,
       [summaries, flows]
@@ -991,67 +969,122 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
   }
 
   async listGapCandidates(limit: number): Promise<GapCandidate[]> {
-    // Cluster across individual gap rows so each distinct gap of a multi-topic
-    // question can group with the same gap from other questions. A question with
-    // both a 'manual' and an 'auto' row for the same summary is counted once.
-    // Group by (summary, flow_id) so the same gap raised under two flows yields
-    // two candidates, each clustering and drafting within its own flow. flow_id
-    // is coalesced to '' so NULL (un-routed) gaps still group with each other.
-    //
-    // Every unresolved, undismissed gap row is a candidate — candidacy keys on
-    // the gap rows, NOT on the question's confidence. Gap rows are only written
-    // when something was verifiably missing ('auto' rows only when the model
-    // declared a whole-question gap — which ships at low, or at medium for a
-    // substantive partial answer; 'followup' rows only when a search observably
-    // came back empty, 'manual' rows only when an admin flags), so a
-    // question-level confidence filter adds nothing for those — and it wrongly
-    // hid gaps raised alongside confident answers (e.g. "searched for SOC 2
-    // docs, found none", or a medium partial answer's declared miss), which are
-    // exactly the gaps that should cluster and draft.
-    const result = await this.pool.query<GapCandidateRow>(
-      `
-        SELECT
-          summary,
-          flow_id,
-          array_agg(question_id ORDER BY asked_at DESC) AS question_ids,
-          count(*)::int AS count,
-          max(asked_at) AS latest_asked_at
-        FROM (
-          SELECT DISTINCT qg.summary, coalesce(q.flow_id, '') AS flow_id, q.id AS question_id, q.asked_at
-          FROM question_gaps qg
-          JOIN questions q ON q.id = qg.question_id
-          WHERE qg.resolved_at IS NULL AND qg.dismissed_at IS NULL
-            -- Verification re-ask logs (#154) are synthetic; their gap signals are
-            -- the merged doc's shortfall, never a fresh candidate. Questionnaire
-            -- item asks ARE candidates — an unanswerable questionnaire question
-            -- is a real gap (docs/questionnaires.md).
-            AND q.purpose IN ('live', 'questionnaire')
-            -- A question with a live PARKED gap hit the verification retry cap: it
-            -- awaits a human, so park the WHOLE question (all its gap rows,
-            -- including the sibling auto/manual gap) out of the candidate set so
-            -- it does not auto-recluster/redraft. Gaps on OTHER questions sharing
-            -- the summary are unaffected.
-            AND qg.question_id NOT IN (
-              SELECT question_id FROM question_gaps
-              WHERE parked_at IS NOT NULL AND resolved_at IS NULL AND dismissed_at IS NULL
-            )
-        ) AS distinct_gaps
-        GROUP BY summary, flow_id
-        ORDER BY count DESC, latest_asked_at DESC
-        LIMIT $1
-      `,
-      [limit]
-    );
-
-    return result.rows.map((row) => ({
-      summary: row.summary,
-      questionIds: row.question_ids,
-      count: row.count,
-      latestAskedAt: row.latest_asked_at.toISOString(),
-      confidence: "low",
-      ...(row.flow_id ? { flowId: row.flow_id } : {})
-    }));
+    // Display-only and capped (see the interface). Keyword-mode gaps stay visible
+    // here — a human can still see and act on them — they just never drive the
+    // unattended clustering/drafting reads below.
+    const result = await this.pool.query<GapCandidateRow>(gapCandidateSql({ tail: "LIMIT $1" }), [limit]);
+    return result.rows.map(toGapCandidate);
   }
+
+  async listUnassignedGapCandidates(
+    flowId: string | undefined,
+    assignedGapIds: ReadonlySet<string>
+  ): Promise<GapCandidate[]> {
+    // Uncapped and flow-scoped, so a small flow is never starved by busier ones
+    // filling a global window. A (summary, flow) pair qualifies when ANY of its
+    // draftable gap rows sits outside the flow's active memberships.
+    const result = await this.pool.query<GapCandidateRow>(
+      gapCandidateSql({
+        gapFilter: `AND ${DRAFTABLE_GAP_CONDITION} AND coalesce(q.flow_id, '') = $1`,
+        groupFilter: "SELECT summary, flow_id FROM candidate_gaps WHERE NOT (gap_id = ANY($2::text[]))"
+      }),
+      [flowId ?? "", [...assignedGapIds]]
+    );
+    return result.rows.map(toGapCandidate);
+  }
+
+  async findGapCandidates(summaries: readonly string[], scope: GapCandidateScope): Promise<GapCandidate[]> {
+    if (summaries.length === 0) {
+      return [];
+    }
+    // Scoped to one flow unless the caller explicitly asked for every flow, so a
+    // flow-scoped draft can never pull another flow's gaps (or their questions).
+    const scoped = scope.kind === "flow";
+    const result = await this.pool.query<GapCandidateRow>(
+      gapCandidateSql({
+        gapFilter: `AND ${DRAFTABLE_GAP_CONDITION} AND qg.summary = ANY($1::text[])${
+          scoped ? " AND coalesce(q.flow_id, '') = $2" : ""
+        }`
+      }),
+      scoped ? [[...summaries], scope.flowId ?? ""] : [[...summaries]]
+    );
+    return result.rows.map(toGapCandidate);
+  }
+}
+
+// The candidacy conditions EVERY gap-candidate read shares (the candidate lists
+// and the gap-id resolvers), kept in one fragment so the queries can't drift.
+// Expects `question_gaps qg JOIN questions q`.
+//
+// Every unresolved, undismissed gap row is a candidate — candidacy keys on the gap
+// rows, NOT on the question's confidence. Gap rows are only written when something
+// was verifiably missing ('auto' rows only when the model declared a whole-question
+// gap; 'followup' rows only when a search observably came back empty; 'manual' rows
+// only when an admin flags), so a question-level confidence filter would wrongly
+// hide gaps raised alongside confident answers — exactly the gaps that should
+// cluster and draft.
+const CANDIDATE_GAP_CONDITIONS = `
+  qg.resolved_at IS NULL AND qg.dismissed_at IS NULL
+  -- Verification re-ask logs (#154) are synthetic; their gap signals are the
+  -- merged doc's shortfall, never a fresh candidate. Questionnaire item asks ARE
+  -- candidates — an unanswerable questionnaire question is a real gap
+  -- (docs/questionnaires.md).
+  AND q.purpose IN ('live', 'questionnaire')
+  -- A question with a live PARKED gap hit the verification retry cap: it awaits a
+  -- human, so park the WHOLE question (all its gap rows, including the sibling
+  -- auto/manual gap) out of candidacy so it never re-clusters, redrafts, or is
+  -- swept into a cluster an AI dismissal could discharge (#158). Gaps on OTHER
+  -- questions sharing the summary are unaffected.
+  AND qg.question_id NOT IN (
+    SELECT question_id FROM question_gaps
+    WHERE parked_at IS NOT NULL AND resolved_at IS NULL AND dismissed_at IS NULL
+  )
+`;
+
+// Added on top of CANDIDATE_GAP_CONDITIONS by the reads that drive unattended
+// clustering and drafting. Keyword-mode gaps rest on "no lexeme matched", not
+// "nothing close exists", so they never drive unattended proposal generation. NULL
+// (pre-existing, manual, or feedback gaps) stays a candidate.
+const DRAFTABLE_GAP_CONDITION = "qg.retrieval_mode IS DISTINCT FROM 'keyword'";
+
+// Builds a gap-candidate read: candidate gap rows (shared conditions plus
+// `gapFilter`), grouped by (summary, flow_id) — flow_id coalesced to '' so
+// un-routed gaps group together — with a question that carries both a 'manual' and
+// an 'auto' row for the same summary counted once. `groupFilter` (a subquery over
+// candidate_gaps yielding (summary, flow_id)) narrows which groups are returned
+// while each group still reports its full count. Ordered strongest first.
+function gapCandidateSql(parts: { gapFilter?: string; groupFilter?: string; tail?: string }): string {
+  return `
+    WITH candidate_gaps AS (
+      SELECT qg.id::text AS gap_id, qg.summary, coalesce(q.flow_id, '') AS flow_id, q.id AS question_id, q.asked_at
+      FROM question_gaps qg
+      JOIN questions q ON q.id = qg.question_id
+      WHERE ${CANDIDATE_GAP_CONDITIONS}
+        ${parts.gapFilter ?? ""}
+    )
+    SELECT
+      summary,
+      flow_id,
+      array_agg(question_id ORDER BY asked_at DESC) AS question_ids,
+      count(*)::int AS count,
+      max(asked_at) AS latest_asked_at
+    FROM (SELECT DISTINCT summary, flow_id, question_id, asked_at FROM candidate_gaps) AS distinct_gaps
+    ${parts.groupFilter ? `WHERE (summary, flow_id) IN (${parts.groupFilter})` : ""}
+    GROUP BY summary, flow_id
+    ORDER BY count DESC, latest_asked_at DESC, summary ASC
+    ${parts.tail ?? ""}
+  `;
+}
+
+function toGapCandidate(row: GapCandidateRow): GapCandidate {
+  return {
+    summary: row.summary,
+    questionIds: row.question_ids,
+    count: row.count,
+    latestAskedAt: row.latest_asked_at.toISOString(),
+    confidence: "low",
+    ...(row.flow_id ? { flowId: row.flow_id } : {})
+  };
 }
 
 // Inserts one gap row per gap in a single multi-row INSERT (instead of one

@@ -1236,6 +1236,33 @@ test("draftFromGaps always enqueues a catalog-valid draft_markdown_proposal job"
   assert.equal(input.openPullRequests?.[0]?.status, "pr-opened");
 });
 
+test("draftFromGaps resolves gap candidates only within the named flow", async () => {
+  const ctx = makeTestContext();
+  ctx.config = new RuntimeConfigHolder({ aiProvider: "openai-compatible" });
+  const sales = await ctx.stores.questionLogs.record({
+    question: "What does the enterprise tier cost?",
+    chatProvider: "openai-compatible",
+    retrievedSectionIds: [],
+    flowId: "sales"
+  });
+  await ctx.stores.questionLogs.recordManualGap(sales.id, "Enterprise pricing");
+
+  // A draft for another flow must not pull sales' gap or the question behind it.
+  const crossFlow = await proposals.draftFromGaps(ctx, ["Enterprise pricing"], { flowId: "support" });
+  assert.deepEqual(crossFlow, { ok: false, code: "gap_candidate_not_found" });
+  assert.equal((await ctx.jobs.list({ type: "draft_markdown_proposal" })).jobs.length, 0, "nothing enqueued");
+
+  const sameFlow = await proposals.draftFromGaps(ctx, ["Enterprise pricing"], { flowId: "sales" });
+  assert.ok(sameFlow.ok, "the gap resolves within its own flow");
+
+  // Only an unscoped call (a wildcard manager naming no flow) resolves across flows.
+  const unscoped = await proposals.draftFromGaps(ctx, ["Enterprise pricing"]);
+  assert.ok(unscoped.ok, "an unscoped call resolves across flows");
+  if (unscoped.ok) {
+    assert.deepEqual((unscoped.job.input as { triggeringQuestionIds: string[] }).triggeringQuestionIds, [sales.id]);
+  }
+});
+
 test("draftFromGaps projects the flow's configured sources into the enqueued input", async () => {
   const ctx = makeTestContext({
     knowledgeConfig: {
@@ -1253,7 +1280,8 @@ test("draftFromGaps projects the flow's configured sources into the enqueued inp
   const log = await ctx.stores.questionLogs.record({
     question: "How do I configure X?",
     chatProvider: "openai-compatible",
-    retrievedSectionIds: []
+    retrievedSectionIds: [],
+    flowId: "support"
   });
   await ctx.stores.questionLogs.recordManualGap(log.id, "How to configure X");
 

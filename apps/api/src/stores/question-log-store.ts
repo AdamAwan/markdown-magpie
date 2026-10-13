@@ -86,6 +86,11 @@ function gapSummaryFallback(log: { question: string; standaloneQuestion?: string
   return standalone && standalone.length > 0 ? standalone : log.question;
 }
 
+// Where findGapCandidates looks: one flow (flowId omitted = the un-routed/default
+// flow) or every flow. Only an unscoped caller (a wildcard manager naming no flow)
+// may resolve across flows — a flow-scoped draft must never pull another flow's gaps.
+export type GapCandidateScope = { kind: "flow"; flowId?: string } | { kind: "all" };
+
 export interface QuestionLogStore {
   record(input: QuestionLogInput): Promise<QuestionLog>;
   updateAnswer(id: string, input: QuestionLogUpdateInput): Promise<QuestionLog | undefined>;
@@ -164,7 +169,20 @@ export interface QuestionLogStore {
   // reports the same filtered set's total so list callers can page.
   list(limit: number, offset?: number, search?: string): Promise<QuestionLog[]>;
   count(search?: string): Promise<number>;
+  // A capped, DISPLAY-ONLY view of the strongest gap candidates across every flow
+  // (count desc, then most recent). Never drive clustering or drafting off it: a
+  // busy flow's candidates fill the window and starve smaller flows. Use
+  // listUnassignedGapCandidates / findGapCandidates for those.
   listGapCandidates(limit: number): Promise<GapCandidate[]>;
+  // Every gap candidate in ONE flow (uncapped) with at least one draftable gap row
+  // outside `assignedGapIds` (that flow's active cluster memberships), strongest
+  // first. The reconciler's phase-1 input, so no flow is starved by a busier one.
+  // flowId omitted reads the un-routed/default flow.
+  listUnassignedGapCandidates(flowId: string | undefined, assignedGapIds: ReadonlySet<string>): Promise<GapCandidate[]>;
+  // Resolves the draftable gap candidates for the given summaries directly
+  // (uncapped), either within one flow or across all flows, strongest first. The
+  // same summary in two flows yields two candidates under the "all" scope.
+  findGapCandidates(summaries: readonly string[], scope: GapCandidateScope): Promise<GapCandidate[]>;
   // Monotonic counter advanced whenever the unresolved candidate gaps change
   // (added, removed, or resolved). Tracked per flow so a gap change in one flow
   // doesn't force every flow to re-cluster; the reconciler compares its flow's
@@ -827,10 +845,36 @@ export class InMemoryQuestionLogStore implements QuestionLogStore {
   }
 
   async listGapCandidates(limit: number): Promise<GapCandidate[]> {
+    return this.gapCandidates(() => true).slice(0, limit);
+  }
+
+  async listUnassignedGapCandidates(
+    flowId: string | undefined,
+    assignedGapIds: ReadonlySet<string>
+  ): Promise<GapCandidate[]> {
+    return this.gapCandidates(
+      (log) => (log.flowId ?? "") === (flowId ?? ""),
+      (logs, summary) => logs.some((log) => !assignedGapIds.has(`${log.id}::${summary}`))
+    );
+  }
+
+  async findGapCandidates(summaries: readonly string[], scope: GapCandidateScope): Promise<GapCandidate[]> {
+    const wanted = new Set(summaries);
+    return this.gapCandidates(
+      (log, summary) => wanted.has(summary) && (scope.kind === "all" || (log.flowId ?? "") === (scope.flowId ?? ""))
+    );
+  }
+
+  // The one candidacy rule every gap-candidate read shares, so they can't drift
+  // (mirrors CANDIDATE_GAP_CONDITIONS in the Postgres store). `includeRow` narrows
+  // which (log, summary) rows count; `includeGroup` narrows the grouped
+  // candidates. Sorted strongest first: count desc, then most recent, then summary.
+  private gapCandidates(
+    includeRow: (log: QuestionLog, summary: string) => boolean,
+    includeGroup: (logs: QuestionLog[], summary: string) => boolean = () => true
+  ): GapCandidate[] {
     // Group by (flowId, summary) so the same gap surfaced under two flows yields
-    // two candidates — each clusters and drafts within its own flow. The flowId
-    // is folded into the key, space-separated (flow IDs are slugs with no spaces,
-    // so the key can't be ambiguous).
+    // two candidates — each clusters and drafts within its own flow.
     // Candidacy keys on unresolved gap rows, not question confidence: gap rows
     // are only written when something was verifiably missing, and a 'followup'
     // gap on a confident answer (an observed empty search) must still cluster.
@@ -850,7 +894,10 @@ export class InMemoryQuestionLogStore implements QuestionLogStore {
       }
       const summaries = new Set(active.map((gap) => gap.summary));
       for (const summary of summaries) {
-        const key = `${log.flowId ?? ""} ${summary}`;
+        if (!includeRow(log, summary)) {
+          continue;
+        }
+        const key = gapSummaryKey(summary, log.flowId);
         const group = groups.get(key) ?? { summary, flowId: log.flowId, logs: [] };
         group.logs.push(log);
         groups.set(key, group);
@@ -858,6 +905,7 @@ export class InMemoryQuestionLogStore implements QuestionLogStore {
     }
 
     return [...groups.values()]
+      .filter(({ summary, logs }) => includeGroup(logs, summary))
       .map(({ summary, flowId, logs }) => ({
         summary,
         questionIds: logs.map((log) => log.id),
@@ -870,7 +918,11 @@ export class InMemoryQuestionLogStore implements QuestionLogStore {
         confidence: "low" as const,
         ...(flowId ? { flowId } : {})
       }))
-      .sort((left, right) => right.count - left.count || right.latestAskedAt.localeCompare(left.latestAskedAt))
-      .slice(0, limit);
+      .sort(
+        (left, right) =>
+          right.count - left.count ||
+          right.latestAskedAt.localeCompare(left.latestAskedAt) ||
+          left.summary.localeCompare(right.summary)
+      );
   }
 }

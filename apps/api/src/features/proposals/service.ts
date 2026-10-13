@@ -36,6 +36,7 @@ import {
 import { PROPOSAL_STATUSES, TERMINAL_PROPOSAL_STATUSES, resolveProposalTargetPath } from "@magpie/core";
 import type { AppContext } from "../../context.js";
 import type { ProposalListOptions } from "../../stores/proposal-store.js";
+import type { GapCandidateScope } from "../../stores/question-log-store.js";
 import {
   defaultDestinationId,
   destinationSubpath,
@@ -1273,7 +1274,14 @@ export async function draftFromGaps(
   rawSummaries: string[],
   overrides: {
     targetPath?: string;
+    // The flow to draft into. When named, the gap candidates are resolved within
+    // that flow only (see candidateScope).
     flowId?: string;
+    // Where the requested summaries are resolved. Defaults to the named flowId
+    // when one is given, else every flow — an unscoped call that only a wildcard
+    // manager may make (the route's assertCan enforces that). The cluster path
+    // passes it explicitly so the un-routed/default flow stays scoped too.
+    candidateScope?: GapCandidateScope;
     sourceIds?: string[];
     destinationId?: string;
     // The flow's in-flight proposals / open PRs to make the drafter aware of.
@@ -1295,7 +1303,14 @@ export async function draftFromGaps(
     return { ok: false as const, code: "gap_summary_required" };
   }
 
-  const candidates = await ctx.stores.questionLogs.listGapCandidates(200);
+  // Resolve the requested summaries directly (uncapped — never the capped display
+  // window) and only within the requested scope, so a draft for one flow can never
+  // pull another flow's gaps or the questions that raised them. Candidates come
+  // back strongest first; under the "all" scope the strongest flow wins a summary
+  // raised in several.
+  const scope: GapCandidateScope =
+    overrides.candidateScope ?? (overrides.flowId ? { kind: "flow", flowId: overrides.flowId } : { kind: "all" });
+  const candidates = await ctx.stores.questionLogs.findGapCandidates(uniqueRequested, scope);
   const matched = uniqueRequested
     .map((summary) => candidates.find((candidate) => candidate.summary === summary))
     .filter((candidate): candidate is GapCandidate => Boolean(candidate));
