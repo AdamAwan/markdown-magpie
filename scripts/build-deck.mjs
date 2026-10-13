@@ -25,6 +25,73 @@ const frame = (src, { tall = false, auto = false, label = "localhost:3000 — Kn
     <div class="bf__view"><img src="${src}" alt="" style="object-position:center ${pos}"/></div>
   </div>`;
 
+/** The Claude starburst, as an inline SVG — ten tapered spokes around a small hub. */
+const claudeMark = (size = 18) => `
+  <svg class="cmark" width="${size}" height="${size}" viewBox="0 0 24 24" aria-hidden="true">
+    ${Array.from({ length: 10 }, (_, i) => {
+      const a = ((i * 36 - 90) * Math.PI) / 180;
+      const at = (r) => [(12 + Math.cos(a) * r).toFixed(2), (12 + Math.sin(a) * r).toFixed(2)];
+      const [x1, y1] = at(2.4);
+      const [x2, y2] = at(i % 2 ? 8.7 : 10.5);
+      return `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="currentColor" stroke-width="2.3" stroke-linecap="round"/>`;
+    }).join("")}
+  </svg>`;
+
+/** A mini area+line sparkline over a 120x40 viewBox, scaled to the series' own range. */
+const spark = (values, { down = false } = {}) => {
+  const max = Math.max(...values) * 1.08;
+  const min = Math.min(...values) * 0.9;
+  const pt = (v, i) => [
+    ((i / (values.length - 1)) * 120).toFixed(1),
+    (36 - ((v - min) / (max - min || 1)) * 30).toFixed(1)
+  ];
+  const line = values.map((v, i) => pt(v, i).join(",")).join(" ");
+  const col = down ? "var(--ok)" : "var(--accent)";
+  return `
+    <svg viewBox="0 0 120 40" preserveAspectRatio="none" aria-hidden="true">
+      <polygon points="0,40 ${line} 120,40" fill="${col}" opacity=".14"/>
+      <polyline points="${line}" fill="none" stroke="${col}" stroke-width="2" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>
+    </svg>`;
+};
+
+/** A mini histogram over a 120x40 viewBox. */
+const histogram = (values) => {
+  const max = Math.max(...values);
+  const w = 120 / values.length;
+  return `
+    <svg viewBox="0 0 120 40" preserveAspectRatio="none" aria-hidden="true">
+      ${values
+        .map((v, i) => {
+          const h = (v / max) * 34;
+          return `<rect x="${(i * w + 1).toFixed(1)}" y="${(38 - h).toFixed(1)}" width="${(w - 2).toFixed(1)}" height="${h.toFixed(1)}" rx="1" fill="var(--accent)" opacity="${0.35 + (v / max) * 0.55}"/>`;
+        })
+        .join("")}
+    </svg>`;
+};
+
+/** A donut showing one percentage of a whole. */
+const donut = (pct) => {
+  const c = 2 * Math.PI * 15.5;
+  return `
+    <svg viewBox="0 0 40 40" aria-hidden="true">
+      <circle cx="20" cy="20" r="15.5" fill="none" stroke="var(--line-2)" stroke-width="6"/>
+      <circle cx="20" cy="20" r="15.5" fill="none" stroke="var(--accent)" stroke-width="6" stroke-linecap="round"
+        stroke-dasharray="${((pct / 100) * c).toFixed(1)} ${c.toFixed(1)}" transform="rotate(-90 20 20)"/>
+    </svg>`;
+};
+
+/** Horizontal cost bars — the shape the console's CostBarChart uses. */
+const costBars = (rows) => {
+  const max = Math.max(...rows.map((r) => r.v));
+  return `<div class="cbars">${rows
+    .map(
+      (r) => `<div class="cbar"><span class="l">${r.l}</span>
+        <span class="t"><span style="width:${((r.v / max) * 100).toFixed(0)}%"></span></span>
+        <span class="v">$${r.v}</span></div>`
+    )
+    .join("")}</div>`;
+};
+
 const HTML = `<!doctype html>
 <html lang="en">
 <head>
@@ -89,9 +156,6 @@ const HTML = `<!doctype html>
   .chip{display:inline-block;margin-top:14px;font-size:12px;font-weight:600;color:var(--accent);
     background:var(--accent-soft);padding:4px 11px;border-radius:99px;}
   .ink .chip{color:var(--accent-2);background:rgba(74,163,189,.14);}
-  .recap{display:inline-flex;align-items:center;gap:8px;font-size:clamp(13px,1.45vw,16.5px);font-weight:600;
-    color:#eef2ec;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.14);border-radius:99px;padding:9px 17px;}
-  .recap b{color:#e8917f;font-weight:700;}
 
   /* circular loop diagram */
   .loop{position:relative;width:min(412px,43vh);aspect-ratio:1;margin:clamp(52px,8vh,78px) auto clamp(20px,4vh,40px);}
@@ -152,23 +216,9 @@ const HTML = `<!doctype html>
   table.matrix tr:last-child td{border-bottom:none;}
 
   /* steps */
-  .steps{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;margin-top:8px;}
-  .step{background:var(--paper);border:1px solid var(--line);border-radius:14px;padding:24px;}
-  .step .n{width:34px;height:34px;border-radius:9px;background:var(--ink);color:#fff;display:grid;place-items:center;font-weight:700;margin-bottom:14px;}
-  .step h3{margin:0 0 6px;font-size:20px;} .step p{margin:0;color:var(--muted);font-size:15px;line-height:1.5;}
   .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;background:#0f1714;color:#cfe6dd;
     padding:3px 7px;border-radius:6px;}
 
-  /* MCP / Claude transcript */
-  .chat{background:#0f1714;border:1px solid rgba(255,255,255,.12);border-radius:16px;padding:22px;max-width:760px;}
-  .chat .turn{margin-bottom:16px;} .chat .role{font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:#7f968c;margin-bottom:6px;}
-  .chat .you{color:#eef2ec;font-size:clamp(15px,1.7vw,19px);}
-  .chat .tool{display:inline-flex;align-items:center;gap:8px;background:rgba(74,163,189,.14);color:#9fd3e2;
-    border:1px solid rgba(74,163,189,.3);border-radius:9px;padding:7px 12px;font-family:ui-monospace,monospace;font-size:13px;}
-  .chat .ans{color:#dfe8e3;font-size:clamp(14px,1.55vw,18px);line-height:1.5;}
-  .chat .cites{margin-top:12px;display:grid;gap:7px;}
-  .chat .cite{display:flex;gap:8px;align-items:baseline;font-size:13px;color:#a9bcb3;}
-  .chat .cite .pth{font-family:ui-monospace,monospace;color:#9fd3e2;}
   .badge{display:inline-block;font-size:11px;font-weight:700;letter-spacing:.04em;padding:3px 9px;border-radius:99px;}
   .badge.hi{background:rgba(61,107,67,.25);color:#9fd9a6;}
   .badge.lo{background:rgba(154,58,45,.3);color:#e8917f;}
@@ -176,16 +226,74 @@ const HTML = `<!doctype html>
   .live .dot{width:9px;height:9px;border-radius:50%;background:#e8917f;animation:pulse 1.4s infinite;}
   @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
 
-  /* demo: MCP screenshot pair (slide 8) + payoff shot (slide 10) */
-  .mcpshots{display:grid;grid-template-columns:1fr 1fr;gap:clamp(16px,2vw,26px);margin-top:22px;align-items:start;}
-  .mcpshot{margin:0;}
-  .mcpshot img{width:100%;display:block;border-radius:10px;border:1px solid rgba(255,255,255,.14);
-    box-shadow:0 18px 36px -28px rgba(0,0,0,.6);}
-  .mcpshot figcaption{margin-top:11px;font-size:14px;line-height:1.45;color:#aebcb4;}
-  .mcpshot figcaption .badge{margin-right:7px;vertical-align:1px;}
-  .payoff{margin:0;}
-  .payoff img{width:100%;display:block;border-radius:12px;border:1px solid rgba(255,255,255,.14);
-    box-shadow:0 22px 44px -30px rgba(0,0,0,.7);}
+  /* Claude Desktop window (slides 10 & 13) */
+  .cwin{margin-top:clamp(14px,2vh,24px);border-radius:14px;overflow:hidden;background:#faf9f5;
+    border:1px solid rgba(255,255,255,.16);box-shadow:0 34px 64px -34px rgba(0,0,0,.8);}
+  .cwin__bar{display:flex;align-items:center;gap:8px;padding:9px 14px;background:#f0eee6;border-bottom:1px solid #e4e0d4;}
+  .cwin__bar .d{width:10px;height:10px;border-radius:50%;background:#d8d3c5;}
+  .cwin__bar .t{flex:1;text-align:center;margin-right:46px;font-size:12px;color:#8b8578;}
+  .cwin__body{display:grid;grid-template-columns:clamp(150px,15vw,196px) 1fr;}
+  .cwin__side{background:#f0eee6;border-right:1px solid #e4e0d4;padding:14px 12px;display:flex;flex-direction:column;gap:9px;}
+  .cwin__brand{display:flex;align-items:center;gap:8px;font-size:14px;font-weight:600;color:#2f2c26;margin-bottom:2px;}
+  .cwin__new{display:flex;align-items:center;gap:7px;font-size:12.5px;font-weight:600;color:#c2552d;}
+  .cwin__lbl{font-size:10.5px;text-transform:uppercase;letter-spacing:.09em;color:#9a9487;margin-top:6px;}
+  .cwin__side .it{font-size:12.5px;color:#57534a;padding:5px 8px;border-radius:7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .cwin__side .it.on{background:#e4e0d4;color:#2f2c26;font-weight:600;}
+  .cwin__conn{margin-top:auto;display:flex;align-items:center;gap:7px;font-family:ui-monospace,monospace;font-size:11px;
+    color:#6f6a5e;border-top:1px solid #e4e0d4;padding-top:10px;}
+  .cwin__conn .on{width:7px;height:7px;border-radius:50%;background:#3d8a52;flex:none;}
+  .cwin__chat{padding:clamp(16px,2vw,24px) clamp(18px,2.4vw,30px);display:flex;flex-direction:column;gap:clamp(10px,1.4vh,16px);}
+  .cmark{color:#d97757;flex:none;}
+  .cmsg.user{align-self:flex-end;max-width:82%;background:#f0eee6;border:1px solid #e4e0d4;border-radius:14px;
+    padding:9px 14px;color:#2f2c26;font-size:clamp(13px,1.45vw,17px);line-height:1.45;}
+  .cmsg.bot{display:grid;grid-template-columns:auto 1fr;gap:11px;align-items:start;}
+  .ctool{display:inline-flex;align-items:center;gap:9px;align-self:flex-start;background:#fff;border:1px solid #e4e0d4;
+    border-radius:9px;padding:6px 11px;font-family:ui-monospace,monospace;font-size:12px;color:#6f6a5e;margin-left:29px;}
+  .ctool .nm{color:#2f2c26;font-weight:600;}
+  .ctool .chev{color:#a8a294;}
+  .cans{color:#2f2c26;font-size:clamp(13px,1.45vw,17px);line-height:1.55;}
+  .cans .hd{display:flex;align-items:center;gap:9px;margin-bottom:5px;}
+  .cans .hd .who{font-size:12px;font-weight:700;letter-spacing:.03em;color:#8b8578;text-transform:uppercase;}
+  .ccites{margin-top:10px;display:grid;gap:6px;}
+  .ccite{display:flex;gap:8px;align-items:baseline;font-size:12.5px;color:#6f6a5e;}
+  .ccite .pth{font-family:ui-monospace,monospace;color:#285f74;}
+  .cwin .badge.hi{background:#dfeddd;color:#2e6b3a;}
+  .cwin .badge.lo{background:#f7e1da;color:#a5401f;}
+  .cwin .live{color:#a5401f;margin-top:9px;}
+  .cwin .live .dot{background:#a5401f;}
+  .ccomp{display:flex;align-items:center;gap:10px;margin-top:clamp(6px,1.2vh,14px);background:#fff;border:1px solid #e4e0d4;
+    border-radius:12px;padding:10px 12px;font-size:13px;color:#a8a294;}
+  .ccomp .send{margin-left:auto;width:24px;height:24px;border-radius:50%;background:#d97757;color:#fff;
+    display:grid;place-items:center;font-size:12px;line-height:1;}
+
+  /* the same window again, in a narrower column (slide 13) */
+  .cwin--slim{margin-top:0;}
+  .cwin--slim .cwin__body{grid-template-columns:clamp(112px,11vw,148px) 1fr;}
+  .cwin--slim .cwin__chat{padding:clamp(14px,1.6vw,20px) clamp(15px,1.8vw,22px);}
+  .cwin--slim .cmsg.user{max-width:90%;}
+  .ccite .new{margin-left:2px;padding:1px 7px;border-radius:99px;background:#dfeddd;color:#2e6b3a;
+    font-size:10.5px;font-weight:700;letter-spacing:.03em;}
+
+  /* insights (slide 14): the journey chart, unframed, over a row of small charts */
+  .dash{display:block;width:100%;max-height:clamp(240px,42vh,420px);object-fit:contain;margin:0 auto;}
+  .minis{display:grid;grid-template-columns:repeat(4,1fr);gap:clamp(10px,1.2vw,18px);margin-top:clamp(10px,1.6vh,18px);}
+  .mini{background:var(--paper);border:1px solid var(--line);border-radius:12px;padding:clamp(10px,1.1vw,15px);}
+  .mini .hd{display:flex;align-items:baseline;justify-content:space-between;gap:8px;}
+  .mini .hd b{font-size:clamp(11.5px,1.2vw,14.5px);letter-spacing:-.005em;}
+  .mini .hd .v{font-size:clamp(14px,1.5vw,19px);font-weight:700;color:var(--accent);white-space:nowrap;}
+  .mini .q{font-size:clamp(10px,1.05vw,12px);color:var(--muted);margin:3px 0 9px;line-height:1.35;}
+  .mini .ft{margin-top:7px;font-size:clamp(9.5px,1vw,11.5px);color:var(--muted);}
+  .mini svg{display:block;width:100%;height:clamp(32px,4.4vh,46px);}
+  .mini .ring{display:flex;align-items:center;gap:10px;}
+  .mini .ring svg{width:clamp(38px,4.4vw,52px);height:clamp(38px,4.4vw,52px);flex:none;}
+  .mini .ring .k{font-size:clamp(10px,1.05vw,12px);color:var(--muted);line-height:1.35;}
+  .cbars{display:grid;gap:5px;}
+  .cbar{display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:7px;
+    font-size:clamp(9px,.95vw,11px);color:var(--muted);}
+  .cbar .l{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;}
+  .cbar .t{height:7px;border-radius:99px;background:var(--wash);overflow:hidden;}
+  .cbar .t span{display:block;height:100%;border-radius:99px;background:var(--accent);}
+  .cbar .v{font-weight:600;color:var(--ink);}
 
   /* filmstrip */
   .strip{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;}
@@ -204,6 +312,18 @@ const HTML = `<!doctype html>
   .demoduo figcaption{display:flex;align-items:center;gap:9px;margin-bottom:13px;font-size:clamp(14px,1.5vw,16px);color:var(--muted);line-height:1.4;}
   .demoduo figcaption .n{flex:0 0 auto;width:24px;height:24px;border-radius:7px;background:var(--accent);color:#fff;font-size:12px;font-weight:700;display:grid;place-items:center;}
   .demoduo figcaption b{color:var(--ink);}
+  .demoduo--trio{grid-template-columns:1fr .8fr 1fr;gap:clamp(14px,1.9vw,28px);}
+
+  /* the sources that feed a draft (slide 11) */
+  .srcs{background:var(--paper);border:1px solid var(--line);border-radius:12px;padding:clamp(14px,1.5vw,20px);
+    display:grid;gap:clamp(9px,1.1vh,13px);box-shadow:0 30px 60px -40px rgba(23,33,29,.5);}
+  .src{display:grid;grid-template-columns:auto 1fr;gap:10px;align-items:start;}
+  .src .k{flex:none;width:62px;text-align:center;padding:3px 0;border-radius:6px;background:var(--accent-soft);
+    color:var(--accent);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:10.5px;font-weight:600;line-height:1.5;}
+  .src b{display:block;font-size:clamp(12.5px,1.25vw,14.5px);color:var(--ink);line-height:1.35;}
+  .src span.d{display:block;margin-top:2px;font-size:clamp(11px,1.1vw,12.5px);color:var(--muted);line-height:1.4;}
+  .srcs__out{border-top:1px dashed var(--line-2);padding-top:10px;font-size:clamp(11.5px,1.15vw,13px);
+    color:var(--accent);font-weight:600;line-height:1.4;}
 
   .pillars{display:grid;grid-template-columns:repeat(2,1fr);gap:18px;}
   .pillar{display:flex;gap:14px;background:var(--paper);border:1px solid var(--line);border-radius:14px;padding:22px;}
@@ -212,7 +332,6 @@ const HTML = `<!doctype html>
 
   .footnote{margin-top:22px;font-size:13px;color:var(--muted);}
   .ink .footnote{color:#8aa094;}
-  .big-quote{font-size:clamp(20px,2.4vw,30px);line-height:1.3;font-weight:500;letter-spacing:-.01em;}
 
   .overlay{position:fixed;inset:0;background:rgba(13,20,17,.96);z-index:80;display:none;padding:40px;overflow:auto;}
   .overlay.show{display:block;}
@@ -375,27 +494,44 @@ const HTML = `<!doctype html>
     <div class="wrap">
       <div class="kicker">Demo · part 1 — in Claude</div>
       <h2 style="margin:.1em 0 0">It meets people where they already work.</h2>
-      <div class="mcpshots">
-        <div class="chat">
-          <div class="turn"><div class="role">You · in Claude</div><div class="you">What guarantees does Markdown Magpie make about its answers?</div></div>
-          <div class="turn"><span class="tool">→ kb_ask · flow: magpie-sales</span></div>
-          <div class="turn">
-            <div class="role">Answer <span class="badge hi">HIGH</span></div>
-            <div class="ans">It grounds every response in indexed Markdown — citations to the exact file, heading &amp; commit, a scored confidence, and it flags a gap rather than guessing.</div>
-            <div class="cites">
-              <div class="cite"><span class="pth">…-internal-knowledge-base-obje.md</span> › Won't Lie (Grounded Answers)</div>
-              <div class="cite"><span class="pth">competitive-landscape-differentiation.md</span> › Summary</div>
+      <div class="cwin">
+        <div class="cwin__bar"><span class="d"></span><span class="d"></span><span class="d"></span><span class="t">Claude</span></div>
+        <div class="cwin__body">
+          <aside class="cwin__side">
+            <div class="cwin__brand">${claudeMark(17)} Claude</div>
+            <div class="cwin__new">＋ New chat</div>
+            <div class="cwin__lbl">Recents</div>
+            <div class="it on">Sales KB — answer guarantees</div>
+            <div class="it">Q3 security questionnaire</div>
+            <div class="it">Renewal deck notes</div>
+            <div class="cwin__conn"><span class="on"></span>markdown-magpie</div>
+          </aside>
+          <main class="cwin__chat">
+            <div class="cmsg user">What guarantees does Markdown Magpie make about its answers?</div>
+            <div class="ctool">${claudeMark(13)}<span class="nm">kb_ask</span>flow: magpie-sales<span class="chev">›</span></div>
+            <div class="cmsg bot">
+              ${claudeMark(19)}
+              <div class="cans">
+                <div class="hd"><span class="who">Claude</span><span class="badge hi">HIGH</span></div>
+                It grounds every response in indexed Markdown — citations to the exact file, heading &amp; commit, a scored confidence, and it flags a gap rather than guessing.
+                <div class="ccites">
+                  <div class="ccite"><span class="pth">…-internal-knowledge-base-obje.md</span> › Won't Lie (Grounded Answers)</div>
+                  <div class="ccite"><span class="pth">competitive-landscape-differentiation.md</span> › Summary</div>
+                </div>
+              </div>
             </div>
-          </div>
-        </div>
-        <div class="chat">
-          <div class="turn"><div class="role">You · in Claude</div><div class="you">Does Markdown Magpie support single sign-on (SSO / SAML)?</div></div>
-          <div class="turn"><span class="tool">→ kb_ask · flow: magpie-sales</span></div>
-          <div class="turn">
-            <div class="role">Answer <span class="badge lo">LOW</span></div>
-            <div class="ans">The knowledge base doesn't cover how sign-in or SSO works yet — so it abstains and logs a gap rather than guessing.</div>
-            <div class="live"><span class="dot"></span>knowledge gap logged</div>
-          </div>
+            <div class="cmsg user">Does Markdown Magpie support single sign-on (SSO / SAML)?</div>
+            <div class="ctool">${claudeMark(13)}<span class="nm">kb_ask</span>flow: magpie-sales<span class="chev">›</span></div>
+            <div class="cmsg bot">
+              ${claudeMark(19)}
+              <div class="cans">
+                <div class="hd"><span class="who">Claude</span><span class="badge lo">LOW</span></div>
+                The knowledge base doesn't cover how sign-in or SSO works yet — so it abstains and logs a gap rather than guessing.
+                <div class="live"><span class="dot"></span>knowledge gap logged</div>
+              </div>
+            </div>
+            <div class="ccomp">Reply to Claude…<span class="send">↑</span></div>
+          </main>
         </div>
       </div>
       <p class="footnote">Same engine, exposed as MCP tools (<span class="mono">kb_ask</span>, <span class="mono">kb_search</span>, <span class="mono">kb_citation</span>, <span class="mono">kb_changes</span>, <span class="mono">kb_flows</span>, <span class="mono">kb_questionnaire_*</span>) over a hosted OAuth endpoint — installable in Claude Code as a one-command plugin that ships the tools <i>and</i> the skills for using them. The knowledge shows up in Claude, Codex, or any agent, and every weak answer feeds back as a gap.</p>
@@ -407,17 +543,27 @@ const HTML = `<!doctype html>
     <div class="wrap">
       <div class="kicker">Demo · part 2 — backstage</div>
       <h2>That gap becomes a reviewed improvement.</h2>
-      <div class="demoduo">
+      <div class="demoduo demoduo--trio">
         <figure>
           <figcaption><span class="n">1</span><span><b>Cluster the gap</b> — the SSO questions group into one theme.</span></figcaption>
           ${frame(A("demo-cluster"), { auto: true, label: "localhost:3000 — Gaps · authentication cluster" })}
         </figure>
         <figure>
-          <figcaption><span class="n">2</span><span><b>Draft a fix</b> — a grounded SSO page, with a rationale.</span></figcaption>
+          <figcaption><span class="n">2</span><span><b>Read the sources</b> — the answer is assembled, not invented.</span></figcaption>
+          <div class="srcs">
+            <div class="src"><span class="k">git</span><div><b>magpie · src/auth</b><span class="d">The code itself — Auth0 wiring, the SAML callback routes.</span></div></div>
+            <div class="src"><span class="k">local</span><div><b>knowledge-bases/deployment</b><span class="d">An on-disk folder — tenancy &amp; console-access notes.</span></div></div>
+            <div class="src"><span class="k">internet</span><div><b>auth0.com/docs</b><span class="d">Fetched live — but only from allow-listed hosts.</span></div></div>
+            <div class="src"><span class="k">agent</span><div><b>The model's own knowledge</b><span class="d">How SAML &amp; SCIM work in general.</span></div></div>
+            <div class="srcs__out">↓ Every claim in the draft cites where it came from.</div>
+          </div>
+        </figure>
+        <figure>
+          <figcaption><span class="n">3</span><span><b>Draft a fix</b> — a grounded SSO page, with a rationale.</span></figcaption>
           ${frame(A("demo-draft"), { auto: true, label: "localhost:3000 — Proposals · drafted fix" })}
         </figure>
       </div>
-      <p class="footnote">It detects its own weak spots and drafts the fix — you never start from a blank page.</p>
+      <p class="footnote">Sources are read <b>at draft time</b> and never indexed as the answer corpus — the KB <i>describes</i> your systems, it isn't a copy of them. One gap can pull from a repo, a folder, an approved doc site and the model at once; you never start from a blank page.</p>
     </div>
   </section>
 
@@ -428,11 +574,11 @@ const HTML = `<!doctype html>
       <h2>Reviewed like code, then merged in.</h2>
       <div class="demoduo">
         <figure>
-          <figcaption><span class="n">3</span><span><b>Raise a PR</b> — the fix is a reviewable pull request.</span></figcaption>
+          <figcaption><span class="n">4</span><span><b>Raise a PR</b> — the fix is a reviewable pull request.</span></figcaption>
           ${frame(A("demo-pr"), { auto: true, label: "github.com — Pull request #142" })}
         </figure>
         <figure>
-          <figcaption><span class="n">4</span><span><b>Merge &amp; re-index</b> — approved, merged, gaps resolved.</span></figcaption>
+          <figcaption><span class="n">5</span><span><b>Merge &amp; re-index</b> — approved, merged, gaps resolved.</span></figcaption>
           ${frame(A("demo-merged"), { auto: true, label: "localhost:3000 — Proposals · merged & re-indexed" })}
         </figure>
       </div>
@@ -448,14 +594,39 @@ const HTML = `<!doctype html>
         <h2>Ask again — now it knows.</h2>
         <ul class="feat">
           <li><span class="b">✓</span><div><b>The same question that drew a blank</b> <span>now returns a complete, grounded answer.</span></div></li>
-          <li><span class="b">✓</span><div><b>No engineer wrote that page</b> <span>— the loop drafted it from real usage.</span></div></li>
+          <li><span class="b">✓</span><div><b>No one sat down and wrote that page</b> <span>— the loop drafted it from real usage.</span></div></li>
           <li><span class="b">✓</span><div><b>It still went through review</b> <span>before it ever shipped to a user.</span></div></li>
         </ul>
         <p class="footnote">One thread, end to end — the SSO gap from part 1, filled by the loop and reviewed before it shipped.</p>
       </div>
-      <figure class="payoff">
-        <img src="${A("demo-payoff")}" alt="kb_ask now answering the SSO question with high confidence, cited to the newly-merged authentication page"/>
-      </figure>
+      <div class="cwin cwin--slim">
+        <div class="cwin__bar"><span class="d"></span><span class="d"></span><span class="d"></span><span class="t">Claude</span></div>
+        <div class="cwin__body">
+          <aside class="cwin__side">
+            <div class="cwin__brand">${claudeMark(17)} Claude</div>
+            <div class="cwin__new">＋ New chat</div>
+            <div class="cwin__lbl">Recents</div>
+            <div class="it on">Sales KB — answer guarantees</div>
+            <div class="it">Q3 security questionnaire</div>
+            <div class="cwin__conn"><span class="on"></span>markdown-magpie</div>
+          </aside>
+          <main class="cwin__chat">
+            <div class="cmsg user">Does Markdown Magpie support single sign-on (SSO / SAML)?</div>
+            <div class="ctool">${claudeMark(13)}<span class="nm">kb_ask</span>flow: magpie-sales<span class="chev">›</span></div>
+            <div class="cmsg bot">
+              ${claudeMark(19)}
+              <div class="cans">
+                <div class="hd"><span class="who">Claude</span><span class="badge hi">HIGH</span></div>
+                <b>Yes.</b> Magpie signs in through Auth0, so it works with any OIDC provider — Google, Microsoft Entra, Okta and more — and <b>SAML single sign-on</b> with SCIM provisioning is supported. Console access can be locked to your own identity provider.
+                <div class="ccites">
+                  <div class="ccite"><span class="pth">magpie-sales/authentication-and-sso.md</span> › Sign-in <span class="new">NEW</span></div>
+                </div>
+              </div>
+            </div>
+            <div class="ccomp">Reply to Claude…<span class="send">↑</span></div>
+          </main>
+        </div>
+      </div>
     </div>
   </section>
 
@@ -463,98 +634,57 @@ const HTML = `<!doctype html>
   <section class="slide light" data-title="Insights">
     <div class="wrap">
       <div class="kicker">Insights · prove it's working</div>
-      <h2 style="margin:0 0 .5em">Watch the whole pipeline — and what it costs.</h2>
-      ${frame(A("insights"), { tall: true, label: "localhost:3000 — Insights · pipeline health" })}
-      <p class="footnote">Every question's journey — where the volume flows and where it leaks — plus the verified-close rate and the AI spend behind it. You don't take the loop on faith; you watch it work.</p>
-    </div>
-  </section>
-
-  <!-- 15 WIDE APPLICATIONS -->
-  <section class="slide light" data-title="Applications">
-    <div class="wrap">
-      <div class="kicker">Wide applications</div>
-      <h2>One engine. Point it at any pile of source material.</h2>
-      <table class="matrix" style="margin-top:18px">
-        <thead><tr><th>Source material</th><th></th><th>Becomes a knowledge base for…</th></tr></thead>
-        <tbody>
-          <tr><td class="src">Product Code</td><td><span class="ar">→</span></td><td>Internal product questions, answered with citations into the code.</td></tr>
-          <tr><td class="src">Product Code + Azure Docs + Company Policies</td><td><span class="ar">→</span></td><td>Security questionnaires — grounded, consistent, defensible.</td></tr>
-          <tr><td class="src">Product Code + Customer Knowledge Base</td><td><span class="ar">→</span></td><td>Front-line support, with every answer cited to the product itself.</td></tr>
-          <tr><td class="src">Employee Handbook + HR Policies</td><td><span class="ar">→</span></td><td>Employee onboarding — new joiners self-serve on policies, benefits and process instead of pinging HR.</td></tr>
-          <tr><td class="src">IT Runbooks + Known Issues</td><td><span class="ar">→</span></td><td>IT self-service — staff find known fixes themselves, with cited resolutions instead of raising a ticket.</td></tr>
-          <tr><td class="src">Product Docs + Pricing and Competitor Notes</td><td><span class="ar">→</span></td><td>Sales and pre-sales — consistent, cited answers to RFPs and prospect questions.</td></tr>
-          <tr><td class="src">Product Knowledge Base</td><td><span class="ar">→</span></td><td>Tames a large, messy knowledge base into a refined, de-duplicated, contradiction-free distillation.</td></tr>
-        </tbody>
-      </table>
-      <p class="footnote">Each gets its own curated layer and its own reviewer — same loop, different source. Next: one of these rows, in depth.</p>
-    </div>
-  </section>
-
-  <!-- 16 QUESTIONNAIRES -->
-  <section class="slide light" data-title="One application · questionnaires">
-    <div class="wrap split rev">
-      ${frame(A("questionnaires"), { tall: true, label: "localhost:3000 — Questionnaires · security review", pos: "top" })}
-      <div>
-        <div class="kicker">One application, in depth</div>
-        <h2>Take one row of that table: security questionnaires.</h2>
-        <ul class="feat">
-          <li><span class="b">1</span><div><b>Upload the actual file</b> <span>— drop in the vendor's XLSX or CSV; confirm which column is the question and which holds their answer.</span></div></li>
-          <li><span class="b">2</span><div><b>Reuse, and re-check</b> <span>— prior approved answers return instantly; when a cited source moved, it re-answers and says why.</span></div></li>
-          <li><span class="b">3</span><div><b>Audit what you sent last time</b> <span>— a completed questionnaire imports as <i>evidence</i>, graded against the KB: confirmed, contradicted or unsupported.</span></div></li>
-          <li><span class="b">✓</span><div><b>Approve &amp; export</b> <span>— sign answers into the reuse corpus, export to Markdown or CSV.</span></div></li>
-        </ul>
-        <p class="footnote">Nothing here is a second product: it's the same grounded, cited engine pointed at a whole worksheet instead of one question. (An imported answer is untrusted input — never cited, never allowed to change what Magpie says.)</p>
+      <h2 style="margin:0 0 .35em">Watch the whole pipeline — and what it costs.</h2>
+      <img class="dash" src="${A("insights")}" alt="Question journey Sankey — where question volume flows and leaks between confidence, answers, gaps, proposals and verified closures"/>
+      <div class="minis">
+        <div class="mini">
+          <div class="hd"><b>Open-gap backlog</b><span class="v">34</span></div>
+          <div class="q">Is knowledge debt growing or shrinking?</div>
+          ${spark([58, 55, 57, 50, 47, 48, 41, 38, 36, 34], { down: true })}
+          <div class="ft">▼ 41% over 30 days</div>
+        </div>
+        <div class="mini">
+          <div class="hd"><b>Verification</b><span class="v">64%</span></div>
+          <div class="q">Do merged fixes actually close the gap?</div>
+          <div class="ring">${donut(64)}<span class="k">Re-asked after merge and answered with confidence.</span></div>
+          <div class="ft">40 of 63 merged proposals</div>
+        </div>
+        <div class="mini">
+          <div class="hd"><b>Answer latency</b><span class="v">4.2s</span></div>
+          <div class="q">How long does an answer take, end to end?</div>
+          ${histogram([3, 9, 17, 12, 6, 3, 1])}
+          <div class="ft">median · p95 11.8s</div>
+        </div>
+        <div class="mini">
+          <div class="hd"><b>AI spend · 30d</b><span class="v">$38</span></div>
+          <div class="q">What is each job type costing?</div>
+          ${costBars([
+            { l: "answer", v: 18 },
+            { l: "draft", v: 13 },
+            { l: "patrol", v: 7 }
+          ])}
+          <div class="ft">$0.03 per answered question</div>
+        </div>
       </div>
+      <p class="footnote">Eleven charts, each answering one operator question — is the backlog growing, is the queue keeping up, what's breaking, how stale is the KB, what's it costing. You don't take the loop on faith; you watch it work.</p>
     </div>
   </section>
 
-  <!-- 17 EASY SETUP -->
-  <section class="slide light" data-title="Easy setup">
+  <!-- 15 HOW TO GET RUNNING -->
+  <section class="slide ink" data-title="How to get running">
     <div class="wrap">
-      <div class="kicker">Easy to set up</div>
-      <h2>Point it at a repo. That's the setup.</h2>
-      <div class="steps" style="margin-top:8px">
-        <div class="step"><div class="n">1</div><h3>Name a source</h3><p>Give it a Git repo (or several) of source material to learn from.</p></div>
-        <div class="step"><div class="n">2</div><h3>Name a destination</h3><p>A repo where the curated knowledge base lives and PRs are raised.</p></div>
-        <div class="step"><div class="n">3</div><h3>Let the loop run</h3><p>It indexes, answers, finds gaps, drafts fixes — you review. That's it.</p></div>
-      </div>
-      <p class="footnote">No bespoke pipeline per use case — the same loop you just saw, configured in a few lines.</p>
-    </div>
-  </section>
-
-  <!-- 18 ON YOUR TERMS -->
-  <section class="slide ink" data-title="On your terms">
-    <div class="wrap">
-      <div class="kicker">Cheap &amp; yours</div>
-      <h2>No lock-in, anywhere in the stack.</h2>
+      <div class="kicker">How to get running · and how to leave</div>
+      <h2>Point it at your data. Keep the files.</h2>
       <div class="cards" style="margin-top:26px">
-        <div class="card"><div class="ic">\ud83c\udfe0</div><h3>Runs where you do</h3><p>Self-hosted on your own infrastructure \u2014 API, watcher and Postgres, up with one Compose file. Nothing leaves your network unless you send it.</p><span class="chip">self-hosted</span></div>
-        <div class="card"><div class="ic">\ud83d\udd0c</div><h3>Bring your own model</h3><p>Chat providers are configuration, not architecture \u2014 swap them per flow, with rate limits, admission control and per-job spend priced on Insights.</p><span class="chip">any provider \u00b7 metered</span></div>
-        <div class="card"><div class="ic">\ud83d\udcc4</div><h3>The knowledge is just Markdown</h3><p>Plain files in your Git repo, with the full history. If you switch off Magpie tomorrow, you keep everything it wrote.</p><span class="chip">nothing to migrate</span></div>
+        <div class="card"><div class="ic">🎯</div><h3>Point it at the data</h3><p>Name a source — the repos, folders or allow-listed doc sites to learn from — and a destination repo for the curated knowledge base. That's the setup.</p><span class="chip">two repos, a few lines</span></div>
+        <div class="card"><div class="ic">🌱</div><h3>It populates a KB</h3><p>No questions yet, no topic needed: Seed explores the sources and proposes a plan — a charter plus a page per topic. You approve it, every page is drafted as a PR, and the loop takes over.</p><span class="chip">you approve the plan</span></div>
+        <div class="card"><div class="ic">📄</div><h3>You're left with files</h3><p>Plain Markdown in your own Git repo, with the full history. Switch Magpie off tomorrow and you keep everything it wrote — there's nothing to migrate out of.</p><span class="chip">nothing to migrate</span></div>
       </div>
-      <p class="footnote">Embeddings are optional, too: keyword-only retrieval is a first-class mode, so Magpie runs with no embedding provider at all \u2014 or with a local one in a sidecar, if the corpus can't leave the building.</p>
+      <p class="footnote">No lock-in anywhere else either: self-hosted on your own infrastructure (API, watcher and Postgres, up with one Compose file — nothing leaves your network unless you send it), chat providers swappable per flow, and embeddings optional — keyword-only retrieval is a first-class mode.</p>
     </div>
   </section>
 
-  <!-- 19 SEED -->
-  <section class="slide light" data-title="Seed">
-    <div class="wrap split rev">
-      ${frame(A("seed-plan"), { tall: true, label: "localhost:3000 — Seed · proposed plan", pos: "top" })}
-      <div>
-        <div class="kicker">Cold start</div>
-        <h2>No questions yet? Seed the whole KB.</h2>
-        <ul class="feat">
-          <li><span class="b">1</span><div><b>Point Seed at a flow</b> <span>— it explores your source repositories, no topic needed.</span></div></li>
-          <li><span class="b">2</span><div><b>It proposes a full plan</b> <span>— a charter plus a page for every topic it finds in the sources.</span></div></li>
-          <li><span class="b">3</span><div><b>Review &amp; edit</b> <span>— trim, rename or reshape the plan before a word is written.</span></div></li>
-          <li><span class="b">✓</span><div><b>Approve → drafts as PRs</b> <span>— every page is drafted and raised for review, just like the loop.</span></div></li>
-        </ul>
-        <p class="footnote">A grounded starter knowledge base in one pass — before anyone's asked a thing.</p>
-      </div>
-    </div>
-  </section>
-
-  <!-- 20 THE LOOP -->
+  <!-- 16 THE LOOP -->
   <section class="slide ink" data-title="The loop">
     <div class="wrap" style="text-align:center">
       <div class="kicker">The whole thing, in one loop</div>
@@ -578,27 +708,50 @@ const HTML = `<!doctype html>
     </div>
   </section>
 
-  <!-- 21 CTA -->
-  <section class="slide ink" data-title="Call to action">
+  <!-- 17 WIDE APPLICATIONS -->
+  <section class="slide light" data-title="Applications">
     <div class="wrap">
-      <div class="brand"><img src="${A("icon")}" alt=""/><span class="nm">Markdown Magpie</span></div>
-      <div class="kicker">The ask</div>
-      <h1 style="max-width:16ch">Start with security questionnaires.</h1>
-      <p class="big-quote" style="max-width:40ch;color:#cfe6dd">The product is the knowledge base and the loop that keeps it healthy. Questionnaires are just its clearest first application — the SIGs and vendor security reviews we fill in by hand today.</p>
-      <div style="display:flex;gap:12px;flex-wrap:wrap;margin:30px 0 2px">
-        <span class="recap">⚖️ Won't <b>lie</b></span>
-        <span class="recap">🛡️ Won't <b>leak</b></span>
-        <span class="recap">♻️ Won't <b>rot</b></span>
-        <span class="recap">🔌 No lock-in</span>
-      </div>
-      <p class="footnote" style="margin-top:26px">Point Magpie at the product code, security docs &amp; policies; let Seed draft the answer library; and review the first PRs. Every answer cited, reused across questionnaires, and defensible — we can stand it up this quarter.</p>
+      <div class="kicker">Wide applications</div>
+      <h2>One engine. Point it at any pile of source material.</h2>
+      <table class="matrix" style="margin-top:18px">
+        <thead><tr><th>Source material</th><th></th><th>Becomes a knowledge base for…</th></tr></thead>
+        <tbody>
+          <tr><td class="src">Product Code</td><td><span class="ar">→</span></td><td>Internal product questions, answered with citations into the code.</td></tr>
+          <tr><td class="src">Product Code + Azure Docs + Company Policies</td><td><span class="ar">→</span></td><td>Security questionnaires — grounded, consistent, defensible.</td></tr>
+          <tr><td class="src">Product Code + Customer Knowledge Base</td><td><span class="ar">→</span></td><td>Front-line support, with every answer cited to the product itself.</td></tr>
+          <tr><td class="src">Employee Handbook + HR Policies</td><td><span class="ar">→</span></td><td>Employee onboarding — new joiners self-serve on policies, benefits and process instead of pinging HR.</td></tr>
+          <tr><td class="src">IT Runbooks + Known Issues</td><td><span class="ar">→</span></td><td>IT self-service — staff find known fixes themselves, with cited resolutions instead of raising a ticket.</td></tr>
+          <tr><td class="src">Product Docs + Pricing and Competitor Notes</td><td><span class="ar">→</span></td><td>Sales and pre-sales — consistent, cited answers to RFPs and prospect questions.</td></tr>
+          <tr><td class="src">Product Knowledge Base</td><td><span class="ar">→</span></td><td>Tames a large, messy knowledge base into a refined, de-duplicated, contradiction-free distillation.</td></tr>
+        </tbody>
+      </table>
+      <p class="footnote">Each gets its own curated layer and its own reviewer — same loop, different source. Next: one of these rows, in depth.</p>
     </div>
   </section>
+
+  <!-- 18 QUESTIONNAIRES -->
+  <section class="slide light" data-title="One application · questionnaires">
+    <div class="wrap split rev">
+      ${frame(A("questionnaires"), { tall: true, label: "localhost:3000 — Questionnaires · security review", pos: "top" })}
+      <div>
+        <div class="kicker">One application, in depth</div>
+        <h2>Take one row of that table: security questionnaires.</h2>
+        <ul class="feat">
+          <li><span class="b">1</span><div><b>Upload the actual file</b> <span>— drop in the vendor's XLSX or CSV; confirm which column is the question and which holds their answer.</span></div></li>
+          <li><span class="b">2</span><div><b>Reuse, and re-check</b> <span>— prior approved answers return instantly; when a cited source moved, it re-answers and says why.</span></div></li>
+          <li><span class="b">3</span><div><b>Audit what you sent last time</b> <span>— a completed questionnaire imports as <i>evidence</i>, graded against the KB: confirmed, contradicted or unsupported.</span></div></li>
+          <li><span class="b">✓</span><div><b>Approve &amp; export</b> <span>— sign answers into the reuse corpus, export to Markdown or CSV.</span></div></li>
+        </ul>
+        <p class="footnote">Nothing here is a second product: it's the same grounded, cited engine pointed at a whole worksheet instead of one question. (An imported answer is untrusted input — never cited, never allowed to change what Magpie says.)</p>
+      </div>
+    </div>
+  </section>
+
 
 </div>
 
 <a class="exit" href="/">Back to login</a>
-<div class="hud"><span id="counter">1 / 21</span> · <b id="hud-title">Title</b></div>
+<div class="hud"><span id="counter">1 / 18</span> · <b id="hud-title">Title</b></div>
 <div class="hint">← → navigate &nbsp;·&nbsp; <b>O</b> overview &nbsp;·&nbsp; <b>F</b> fullscreen</div>
 
 <div class="overlay" id="overlay"><div class="grid" id="grid"></div></div>

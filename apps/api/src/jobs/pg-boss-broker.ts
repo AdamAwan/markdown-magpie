@@ -13,7 +13,7 @@ import {
 import { CronExpressionParser } from "cron-parser";
 import { injectTraceContext, type TraceCarrier } from "@magpie/telemetry";
 import type pg from "pg";
-import { PgBoss, type ConstructorOptions, type JobWithMetadata, type UpdateQueueOptions } from "pg-boss";
+import { PgBoss, type ConstructorOptions, type JobWithMetadata, type Queue } from "pg-boss";
 import type {
   AdmissionResult,
   DesiredSchedule,
@@ -46,8 +46,13 @@ export interface PgBossJobBrokerOptions {
   scheduleTimezone?: string;
 }
 
+// Options accepted by both createQueue and updateQueue. pg-boss's own
+// UpdateQueueOptions widens some fields to `null` (to clear them), which
+// createQueue does not accept, so the create-side shape is the common one.
+type QueueConfig = Omit<Queue, "name">;
+
 export type PgBossQueuePolicyOverrides = Partial<
-  Pick<UpdateQueueOptions, "retryLimit" | "retryDelay" | "retryBackoff" | "retryDelayMax">
+  Pick<QueueConfig, "retryLimit" | "retryDelay" | "retryBackoff" | "retryDelayMax">
 >;
 
 const queueDefinitions = allQueueDefinitions();
@@ -539,8 +544,8 @@ export class PgBossJobBroker implements JobBroker {
 export function pgBossQueueOptions(
   policy: Readonly<NonNullable<QueueDefinition["policy"]>>,
   overrides: PgBossQueuePolicyOverrides = {}
-): UpdateQueueOptions {
-  const options: UpdateQueueOptions = {
+): QueueConfig {
+  const options: QueueConfig = {
     retryLimit: policy.retryLimit,
     retryDelay: policy.retryDelay,
     retryBackoff: policy.retryBackoff,

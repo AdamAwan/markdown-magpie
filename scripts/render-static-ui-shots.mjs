@@ -74,7 +74,7 @@ function page(eyebrow, body) {
   .row{display:flex;align-items:center;gap:10px;}
   .between{display:flex;align-items:center;justify-content:space-between;gap:14px;}
 </style></head><body>
-  <div class="eyebrow">${eyebrow}</div>
+  ${eyebrow ? `<div class="eyebrow">${eyebrow}</div>` : ""}
   ${body}
 </body></html>`;
 }
@@ -433,14 +433,11 @@ const sankeySvg = (() => {
   return `<svg viewBox="0 0 1400 372" width="100%" style="display:block">${ribbons}${rects}${labels}</svg>`;
 })();
 
-// Insights (slide 13): the pipeline-health dashboard — the question-journey
-// Sankey, KPI + cost tiles, the open-gap backlog trend and the verification gauge.
-// Numbers are illustrative.
+// Insights (slide 14): the question-journey Sankey on its own. The deck slide
+// surrounds it with its own KPI strip and the smaller charts, so this shot is
+// just the one chart the deck can't draw itself. Numbers are illustrative.
 const insightsBody = `
 <section class="surface">
-  <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:18px">
-    ${stat("1,240", "Questions asked")}${stat("82%", "High confidence")}${stat("$38", "AI spend · 30d")}${stat("$0.03", "Cost / answer")}${stat("64%", "Verified closed")}
-  </div>
   <div style="border:1px solid ${T.border};border-radius:12px;padding:16px 20px 20px">
     <div style="font-size:15px;font-weight:600">Question journey</div>
     <div style="font-size:12.5px;color:${T.muted};margin-bottom:6px">Where volume flows — and leaks — at each branch · last 30 days</div>
@@ -518,15 +515,23 @@ const pages = {
   "demo-merged": [page("Proposals · merged & re-indexed", demoMergedBody), 760, 340],
   "demo-payoff": [page("Ask · now answered", demoPayoffBody), 900, 480],
   "seed-plan": [page("Seed · proposed plan", seedPlanBody), 900, 720],
-  insights: [page("Insights · pipeline health", insightsBody), 1400, 600],
+  insights: [page("", insightsBody), 1400, 436],
   changes: [page("Knowledge · recent changes", changesBody), 1000, 500],
   conflicts: [page("Knowledge · source conflicts", conflictsBody), 900, 500]
 };
 
+// Shots pick up whatever the rendering machine has for Inter, so re-rendering
+// everything on a different box subtly restyles the committed PNGs. Name one or
+// more shots on the command line to re-render just those.
+const only = process.argv.slice(2);
+const unknown = only.filter((n) => !(n in pages));
+if (unknown.length) throw new Error(`unknown shot(s): ${unknown.join(", ")} — known: ${Object.keys(pages).join(", ")}`);
+const selected = Object.entries(pages).filter(([name]) => only.length === 0 || only.includes(name));
+
 await mkdir(TMP, { recursive: true });
 await mkdir(OUT, { recursive: true });
 
-for (const [name, [html, w, h]] of Object.entries(pages)) {
+for (const [name, [html, w, h]] of selected) {
   const file = join(TMP, `${name}.html`);
   const shot = join(OUT, `${name}.png`);
   await writeFile(file, html);
