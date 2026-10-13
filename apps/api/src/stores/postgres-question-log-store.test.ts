@@ -785,6 +785,123 @@ describe("PostgresQuestionLogStore", { skip: databaseUrl ? false : "DATABASE_URL
     assert.deepEqual(afterDismiss?.gaps ?? [], [], "dismiss no-op");
   });
 
+  // Seeds one flow with a candidate of every shape the drafting reads must include
+  // or exclude, plus the same strong summary in a second flow. Unique flow ids keep
+  // other suites' rows out of the flow-scoped assertions.
+  async function seedDraftingFlow() {
+    const uniqueId = randomUUID();
+    const flowId = `flow-${uniqueId}`;
+    const otherFlowId = `other-${uniqueId}`;
+    const s = {
+      strong: `strong ${uniqueId}`,
+      partial: `partial ${uniqueId}`,
+      weak: `weak ${uniqueId}`,
+      assigned: `assigned ${uniqueId}`,
+      keyword: `keyword ${uniqueId}`,
+      parked: `parked ${uniqueId}`,
+      verification: `verification ${uniqueId}`
+    };
+    const ask = async (summary: string, flow: string) => {
+      const log = await store.record({
+        question: `q ${summary}`,
+        chatProvider: "codex",
+        retrievedSectionIds: [],
+        flowId: flow
+      });
+      await store.recordManualGap(log.id, summary);
+      return log;
+    };
+    for (let i = 0; i < 3; i += 1) {
+      await ask(s.strong, flowId);
+    }
+    await ask(s.partial, flowId);
+    await ask(s.partial, flowId);
+    await ask(s.weak, flowId);
+    await ask(s.assigned, flowId);
+    await ask(s.strong, otherFlowId);
+    // Keyword-mode retrieval gap: visible for display, never drafted.
+    await store.record({
+      question: `q ${s.keyword}`,
+      chatProvider: "codex",
+      retrievedSectionIds: [],
+      flowId,
+      retrievalMode: "keyword",
+      answer: {
+        answer: "no match",
+        confidence: "low",
+        citations: [],
+        gaps: [{ summary: s.keyword, question: "q", confidence: "low", citedSectionIds: [], source: "auto" }]
+      }
+    });
+    const parked = await ask(s.parked, flowId);
+    await store.recordVerificationGap(parked.id, { summary: s.parked, note: "cap hit", parked: true });
+    const reask = await store.record({
+      question: `q ${s.verification}`,
+      chatProvider: "codex",
+      retrievedSectionIds: [],
+      flowId,
+      purpose: "verification"
+    });
+    await store.recordManualGap(reask.id, s.verification);
+
+    const partialIds = await store.gapIdsForSummary(s.partial, flowId);
+    const assignedGapIds = new Set([...(await store.gapIdsForSummary(s.assigned, flowId)), partialIds[0]]);
+    return { flowId, otherFlowId, s, assignedGapIds };
+  }
+
+  it("listUnassignedGapCandidates returns one flow's unassigned draftable candidates, uncapped, strongest first", async () => {
+    const { flowId, s, assignedGapIds } = await seedDraftingFlow();
+
+    const candidates = await store.listUnassignedGapCandidates(flowId, assignedGapIds);
+
+    // Fully-assigned, keyword, parked, verification and other-flow rows are all
+    // excluded; a partially-assigned pair still qualifies and reports its full count.
+    assert.deepEqual(
+      candidates.map((c) => [c.summary, c.count]),
+      [
+        [s.strong, 3],
+        [s.partial, 2],
+        [s.weak, 1]
+      ]
+    );
+    assert.ok(
+      candidates.every((c) => c.flowId === flowId),
+      "one row per summary, all in the requested flow"
+    );
+    assert.ok(
+      (await store.listGapCandidates(100000)).some((c) => c.summary === s.keyword),
+      "the display view still shows keyword-mode gaps"
+    );
+  });
+
+  it("findGapCandidates resolves summaries within one flow, or across flows strongest first", async () => {
+    const { flowId, otherFlowId, s } = await seedDraftingFlow();
+    const requested = [s.strong, s.weak, s.keyword, s.parked, s.verification, "never raised"];
+
+    const scoped = await store.findGapCandidates(requested, { kind: "flow", flowId });
+    assert.deepEqual(
+      scoped.map((c) => [c.summary, c.flowId, c.count]),
+      [
+        [s.strong, flowId, 3],
+        [s.weak, flowId, 1]
+      ],
+      "keyword, parked, verification and other-flow rows are excluded"
+    );
+
+    const otherFlow = await store.findGapCandidates([s.weak], { kind: "flow", flowId: otherFlowId });
+    assert.deepEqual(otherFlow, [], "another flow's gaps never resolve under a flow scope");
+
+    const everywhere = await store.findGapCandidates([s.strong], { kind: "all" });
+    assert.deepEqual(
+      everywhere.map((c) => [c.flowId, c.count]),
+      [
+        [flowId, 3],
+        [otherFlowId, 1]
+      ],
+      "the all-flows scope returns one candidate per flow, strongest first"
+    );
+  });
+
   it("listGapCandidates includes low-confidence auto-detected gaps", async () => {
     const uniqueId = randomUUID();
     await store.record({

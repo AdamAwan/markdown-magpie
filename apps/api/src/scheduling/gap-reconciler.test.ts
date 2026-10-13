@@ -688,6 +688,116 @@ describe("reconcileGaps autonomous drafting", () => {
   });
 });
 
+describe("reconcileGaps candidate selection and draft cap accounting", () => {
+  const deps = {
+    fetchPullRequestStatus: async () => undefined,
+    publishProposal: async () => {},
+    supersedeProposal: async () => {}
+  };
+
+  async function raiseGap(ctx: AppContext, summary: string, flowId?: string): Promise<void> {
+    const log = await ctx.stores.questionLogs.record({
+      question: `${summary}?`,
+      chatProvider: "openai-compatible",
+      retrievedSectionIds: [],
+      ...(flowId ? { flowId } : {})
+    });
+    await ctx.stores.questionLogs.recordManualGap(log.id, summary);
+  }
+
+  it("clusters and drafts a small flow's gap even when 200+ stronger candidates in another flow outrank it", async () => {
+    const jobs = new ReshapingJobBroker(() => ({ merges: [], splits: [], dismissals: [] }));
+    const ctx = makeTestContext({ jobs, config: new RuntimeConfigHolder({ aiProvider: "openai-compatible" }) });
+    // 201 busy-flow candidates, each raised twice, fill the global top-200 window
+    // ahead of the small flow's single-question candidate.
+    for (let i = 0; i < 201; i += 1) {
+      await raiseGap(ctx, `Busy topic ${i}`, "busy");
+      await raiseGap(ctx, `Busy topic ${i}`, "busy");
+    }
+    await raiseGap(ctx, "Small flow topic", "small");
+    assert.ok(
+      !(await ctx.stores.questionLogs.listGapCandidates(200)).some((c) => c.flowId === "small"),
+      "precondition: the small flow's candidate is outside the global display window"
+    );
+
+    await reconcileGaps(ctx, "small", deps);
+
+    const clusters = await ctx.stores.gapClusters.listActiveClustersForFlow("small");
+    assert.equal(clusters.length, 1, "the small flow's gap was clustered");
+    const drafts = (await ctx.jobs.list({ type: "draft_markdown_proposal" })).jobs;
+    assert.equal(drafts.length, 1, "and drafted (no gap_candidate_not_found)");
+    assert.deepEqual((drafts[0].input as { gapSummaries: string[] }).gapSummaries, ["Small flow topic"]);
+  });
+
+  it("does not spend the per-tick cap on clusters that fail to draft, and still defers past the cap", async () => {
+    const jobs = new ReshapingJobBroker(() => ({ merges: [], splits: [], dismissals: [] }));
+    const ctx = makeTestContext({ jobs, config: new RuntimeConfigHolder({ aiProvider: "openai-compatible" }) });
+    // 5 clusters that can never draft sort to the head of the list (each raised
+    // twice, so they cluster first), followed by 12 that can.
+    for (let i = 0; i < 5; i += 1) {
+      await raiseGap(ctx, `Broken topic ${i}`);
+      await raiseGap(ctx, `Broken topic ${i}`);
+    }
+    for (let i = 0; i < 12; i += 1) {
+      await raiseGap(ctx, `Good topic ${i}`);
+    }
+    // A non-transient refusal: the broken clusters' summaries never resolve, so
+    // their drafts fail with gap_candidate_not_found on every tick.
+    const questionLogs = ctx.stores.questionLogs;
+    const findGapCandidates = questionLogs.findGapCandidates.bind(questionLogs);
+    questionLogs.findGapCandidates = async (summaries, scope) =>
+      summaries.some((summary) => summary.startsWith("Broken")) ? [] : findGapCandidates(summaries, scope);
+
+    // Tick 1: the failures are skipped without spending a slot, so the full cap of
+    // 10 good clusters drafts; the remaining 2 are deferred and the revision held.
+    await reconcileGaps(ctx, undefined, deps);
+    assert.equal(
+      (await ctx.jobs.list({ type: "draft_markdown_proposal" })).jobs.length,
+      10,
+      "failing clusters at the head of the list do not starve the rest"
+    );
+    const catalogRevision = await ctx.stores.questionLogs.getGapCatalogRevision(undefined);
+    assert.notEqual(
+      await ctx.stores.gapClusters.getProcessedRevision(undefined),
+      catalogRevision,
+      "the cap still defers the overflow and holds the processed revision"
+    );
+
+    // Tick 2: the 2 deferred clusters drain; the skipped failures do not hold the
+    // revision, so the gate closes.
+    await reconcileGaps(ctx, undefined, deps);
+    assert.equal((await ctx.jobs.list({ type: "draft_markdown_proposal" })).jobs.length, 12);
+    assert.equal(
+      await ctx.stores.gapClusters.getProcessedRevision(undefined),
+      catalogRevision,
+      "non-transient failures are skipped, not deferred forever"
+    );
+  });
+
+  it("defers a cluster whose draft fails transiently, so a later tick retries it", async () => {
+    const jobs = new ReshapingJobBroker(() => ({ merges: [], splits: [], dismissals: [] }));
+    const ctx = makeTestContext({ jobs, config: new RuntimeConfigHolder({ aiProvider: "openai-compatible" }) });
+    await raiseGap(ctx, "Flaky topic");
+    const questionLogs = ctx.stores.questionLogs;
+    const findGapCandidates = questionLogs.findGapCandidates.bind(questionLogs);
+    questionLogs.findGapCandidates = async () => {
+      throw new Error("connection reset");
+    };
+
+    await reconcileGaps(ctx, undefined, deps);
+    const catalogRevision = await ctx.stores.questionLogs.getGapCatalogRevision(undefined);
+    assert.notEqual(
+      await ctx.stores.gapClusters.getProcessedRevision(undefined),
+      catalogRevision,
+      "a transient failure holds the processed revision"
+    );
+
+    questionLogs.findGapCandidates = findGapCandidates;
+    await reconcileGaps(ctx, undefined, deps);
+    assert.equal((await ctx.jobs.list({ type: "draft_markdown_proposal" })).jobs.length, 1, "the retry drafts it");
+  });
+});
+
 describe("reconcileGaps in-flight draft coverage", () => {
   // Drafting is enqueue-only: the proposal row lands only when the
   // draft_markdown_proposal job completes. Between enqueue and completion no

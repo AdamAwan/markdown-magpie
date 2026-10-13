@@ -26,7 +26,13 @@ watcher jobs.
   confidence, or `medium` for a substantive partial.
 - **G2** — Gap state is **column-modeled**, not an enum. A gap is a live candidate when
   `resolved_at IS NULL AND dismissed_at IS NULL` and its question has no live `parked_at`
-  row. `listGapCandidates` groups candidates by `(summary, flow_id)`.
+  row. Candidates group by `(summary, flow_id)`. These candidacy conditions live in **one
+  shared fragment** (`CANDIDATE_GAP_CONDITIONS` in Postgres, `gapCandidates` in memory)
+  that every candidate read uses, so the reads cannot drift. The reads that drive
+  unattended clustering/drafting (`listUnassignedGapCandidates`, `findGapCandidates`,
+  `gapIdsForSummary/Summaries`) additionally exclude `keyword`-mode retrieval gaps.
+  `listGapCandidates(limit)` is a capped, global, **display-only** view (count desc, then
+  most recent) and MUST NOT drive clustering or drafting.
 - **G3** — On re-answer, a question's `auto`/`followup` gap rows are deleted and
   rewritten; `manual`, `verification` and `import` rows are preserved (an `import` gap
   records a human assertion, not a model judgement, so a later re-ask must not erase it). The empty-KB fallback
@@ -51,6 +57,11 @@ watcher jobs.
   (the sanctioned inline exception) and compared, **within its flow only**, against each
   active cluster's stored representative embedding (the L2-normalised centroid of the
   cluster's distinct member summaries).
+- **G8a** — Phase-1 input is **flow-scoped and uncapped**:
+  `listUnassignedGapCandidates(flowId, assignedGapIds)` returns every candidate in the
+  flow with at least one draftable gap row outside that flow's active cluster memberships,
+  strongest first. It MUST NOT read the global display window, where a busier flow's
+  candidates would starve a smaller flow out of clustering.
 - **G9** — A gap joins the nearest cluster at or above `GAP_CLUSTER_ASSIGN_THRESHOLD`
   (**default 0.84**, tuned by `scripts/eval-gap-threshold.ts`). Unmatched gaps form
   connected components (pairwise cosine ≥ threshold), each seeding one new cluster titled
@@ -101,6 +112,18 @@ Entry: `reconcileGaps` (`POST /api/gaps/reconcile`), driven by the
   batch, warns, and holds the processed revision so a later tick drains the rest. An
   in-flight `draft_markdown_proposal` job counts as **covering** its cluster, so an
   overlap never enqueues a duplicate full generation.
+- **G19a** — Only an **enqueued** draft spends a cap slot. A non-transient refusal
+  (`cluster_not_found`, `gap_summary_required`, `gap_candidate_not_found`) is logged and
+  skipped without using a slot or holding the revision, so failing clusters at the head of
+  the list never starve the rest. A transient failure (a throw) defers that cluster, and a
+  capacity shed defers it and every remaining one; both hold the processed revision.
+- **G19b** — Drafting resolves its gap summaries with `findGapCandidates(summaries,
+  scope)` — directly and uncapped — **within one flow** whenever a flow is known: the
+  cluster path scopes to the cluster's flow (including the un-routed default flow), and
+  `POST /api/proposals/from-gap(s)` scopes to the named `flowId` (on which the caller holds
+  `manage`). Only an unscoped call — a wildcard manager naming no flow — resolves across
+  flows, where the strongest flow wins a summary raised in several. A flow-scoped draft
+  MUST NOT pull another flow's gaps or the questions that raised them.
 
 ## Merge cascade & gap-closure verification
 
@@ -211,7 +234,7 @@ for gap sources and the parked-question workflow.
 
 | Concern | Code |
 | --- | --- |
-| Gap store & lifecycle | `apps/api/src/stores/postgres-question-log-store.ts`, `apps/api/src/features/questions/` |
+| Gap store & lifecycle | `apps/api/src/stores/{question-log-store,postgres-question-log-store}.ts`, `apps/api/src/features/questions/` |
 | Clustering (pure geometry) | `apps/api/src/scheduling/gap-assignment.ts`, `apps/api/src/stores/gap-cluster-store.ts` |
 | Reconciler | `apps/api/src/scheduling/gap-reconciler.ts`, `apps/api/src/features/gaps/` |
 | Advisory lock | `apps/api/src/scheduling/run-lock.ts` |

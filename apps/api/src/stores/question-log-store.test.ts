@@ -1244,3 +1244,38 @@ test("recordImportGap is idempotent on the same summary", async () => {
   const read = await store.get(log.id);
   assert.equal((read?.gaps ?? []).filter((gap) => gap.source === "import").length, 1);
 });
+
+test("listUnassignedGapCandidates and findGapCandidates stay within the requested flow and skip assigned gaps", async () => {
+  const store = new InMemoryQuestionLogStore();
+  const ask = async (summary: string, flowId: string) => {
+    const log = await store.record({ question: `${summary}?`, chatProvider: "codex", retrievedSectionIds: [], flowId });
+    await store.recordManualGap(log.id, summary);
+  };
+  await ask("Strong", "a");
+  await ask("Strong", "a");
+  await ask("Weak", "a");
+  await ask("Assigned", "a");
+  await ask("Strong", "b");
+  const assigned = new Set(await store.gapIdsForSummary("Assigned", "a"));
+
+  const unassigned = await store.listUnassignedGapCandidates("a", assigned);
+  assert.deepEqual(
+    unassigned.map((c) => [c.summary, c.flowId, c.count]),
+    [
+      ["Strong", "a", 2],
+      ["Weak", "a", 1]
+    ]
+  );
+
+  const scoped = await store.findGapCandidates(["Strong", "Assigned"], { kind: "flow", flowId: "b" });
+  assert.deepEqual(
+    scoped.map((c) => [c.summary, c.flowId]),
+    [["Strong", "b"]]
+  );
+  const everywhere = await store.findGapCandidates(["Strong"], { kind: "all" });
+  assert.deepEqual(
+    everywhere.map((c) => c.flowId),
+    ["a", "b"],
+    "strongest first across flows"
+  );
+});
