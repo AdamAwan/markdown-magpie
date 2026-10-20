@@ -1,4 +1,5 @@
 import { serve } from "@hono/node-server";
+import { hydrateGithubTokenFromGhCli } from "@magpie/git";
 import { installCrashHandlers } from "@magpie/logger";
 import { initTelemetry, type TelemetryHandle } from "@magpie/telemetry";
 import { createAppContext } from "./context.js";
@@ -16,6 +17,10 @@ import { logger } from "./logger.js";
 installCrashHandlers(logger);
 
 async function start(): Promise<void> {
+  // Borrow the GitHub CLI's login when GITHUB_TOKEN is unset, before config (and
+  // every git/PR call) reads it.
+  const githubTokenSource = await hydrateGithubTokenFromGhCli();
+  logger.info({ githubTokenSource }, "GitHub token source");
   // Validate the environment first: a bad/missing required var aborts startup
   // here (caught below) before the broker connects or the server listens.
   const config = loadConfig();
