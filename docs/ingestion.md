@@ -52,7 +52,8 @@ zero embedding calls. It owns everything up to and including a populated, embedd
   agent — keep the list strict (see [threat-model.md](./threat-model.md)).
 
 - **IN5** — **Per-repository PAT overrides.** By default every HTTPS git operation
-  authenticates with the host-matched default token (`GITHUB_TOKEN` for github.com,
+  authenticates with the host-matched default token (`GITHUB_TOKEN` for github.com — or,
+  when that is unset, the GitHub CLI's `gh auth token` read at startup —
   `AZURE_DEVOPS_PAT` for Azure DevOps). A `git` source or destination MAY override that
   default with its own PAT via a `tokenEnv` field — the **name** of an environment
   variable holding the token. Only the env var **name** is stored in config and carried

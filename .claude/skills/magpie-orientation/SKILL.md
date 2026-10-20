@@ -85,7 +85,7 @@ Implications you must design around:
 - **Provider-neutral.** `AI_PROVIDER` selects `openai-compatible | azure-openai | codex |
   claude`. A watcher advertises a **capability** only when its readiness gate passes
   (`apps/watcher/src/capabilities.ts` — env presence per provider; `github` requires
-  `GITHUB_TOKEN` + git author config and also satisfies `local-git`; `maintenance` is
+  `GITHUB_TOKEN` (or a `gh auth login`, read at startup when it's unset) + git author config and also satisfies `local-git`; `maintenance` is
   always ready), and the API only routes a job to a capability a running watcher offers.
   `runners/index.ts` consults the same gates, so advertisement ⇔ runner exists.
 - **Job type vs. queue name.** The job *type* string names the Schedules UI row, the

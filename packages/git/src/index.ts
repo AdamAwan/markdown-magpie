@@ -21,6 +21,7 @@ import { withGitRetry } from "./git-retry.js";
 import { resolvePrimaryBranch } from "./primary-branch.js";
 
 export { resolvePrimaryBranch };
+export { hydrateGithubTokenFromGhCli, type GithubTokenSource } from "./gh-cli-token.js";
 
 const execFileAsync = promisify(execFile);
 

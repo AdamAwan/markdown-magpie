@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { createApiTokenProvider } from "@magpie/auth";
+import { hydrateGithubTokenFromGhCli } from "@magpie/git";
 import { installCrashHandlers } from "@magpie/logger";
 import { initTelemetry, type TelemetryHandle } from "@magpie/telemetry";
 import type { JobCapability } from "@magpie/jobs";
@@ -31,6 +32,10 @@ installCrashHandlers(logger);
 // so a misconfigured watcher fails fast with an aggregated error instead of
 // silently falling back to localhost defaults or 401ing every claim.
 const config = loadWatcherConfig(process.env);
+
+// Borrow the GitHub CLI's login when GITHUB_TOKEN is unset, before the runners and
+// the `github` capability gate read it below.
+const githubTokenSource = await hydrateGithubTokenFromGhCli();
 
 // Start telemetry before the first API call so undici auto-instrumentation can
 // patch fetch. A no-op (and never throws) when telemetry is disabled.
@@ -77,7 +82,7 @@ const runners = createConfiguredRunners(process.env, api, capabilityRuntime);
 // fails it safely (see WorkerLoop.execute's "no runner supports" branch).
 const capabilities = deriveCapabilities(process.env, capabilityRuntime);
 
-logger.info({ watcherName, apiBaseUrl, pollIntervalMs }, "watcher starting");
+logger.info({ watcherName, apiBaseUrl, pollIntervalMs, githubTokenSource }, "watcher starting");
 logCapabilityReadiness(process.env, capabilityRuntime);
 logger.info({ capabilities }, "advertised capabilities");
 

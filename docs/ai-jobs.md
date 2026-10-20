@@ -134,6 +134,11 @@ spec owns the **contract** they all share.
 | `github` | `GITHUB_TOKEN`, `MAGPIE_GIT_AUTHOR_NAME`, `MAGPIE_GIT_AUTHOR_EMAIL` (git on `PATH`) |
 | `maintenance` | (none) |
 
+`GITHUB_TOKEN` may come from the GitHub CLI: when it is unset, the watcher (and API) run
+`gh auth token` at startup and use the result (`hydrateGithubTokenFromGhCli` in
+`packages/git/src/gh-cli-token.ts`). An explicit `GITHUB_TOKEN` wins;
+`MAGPIE_GH_CLI_AUTH=false` disables the fallback.
+
 - **J13** — The API MUST route a job only to a capability a running watcher actually offers,
   so a job stays queued until a capable watcher exists. The console's coverage banner is
   driven from `jobTypesWithoutCapabilities` (a type is covered if **any** of its
