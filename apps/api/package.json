@@ -12,7 +12,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@hono/node-server": "^2.1.4",
+    "@hono/node-server": "^2.1.5",
     "@hono/zod-validator": "^0.9.1",
     "@magpie/auth": "file:../../packages/auth",
     "@magpie/core": "file:../../packages/core",
@@ -29,9 +29,9 @@
     "fflate": "^0.8.3",
     "hono": "^4.13.13",
     "pg": "^8.23.1",
-    "pg-boss": "^12.37.1",
+    "pg-boss": "^12.38.0",
     "tsx": "^4.23.15",
-    "zod": "^4.6.6"
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@types/node": "^26.6.5",
