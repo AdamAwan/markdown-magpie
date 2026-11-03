@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { context, propagation, SpanStatusCode, trace } from "@opentelemetry/api";
 import { AsyncLocalStorageContextManager } from "@opentelemetry/context-async-hooks";
 import { W3CTraceContextPropagator } from "@opentelemetry/core";
-import { BasicTracerProvider, InMemorySpanExporter, SimpleSpanProcessor } from "@opentelemetry/sdk-trace-base";
+import { TracerProvider, InMemorySpanExporter, SimpleSpanProcessor } from "@opentelemetry/sdk-trace";
 import { injectTraceContext, recordException, runJobSpan } from "./tracing.js";
 import { loggerTraceMixin } from "./logging.js";
 
@@ -13,7 +13,7 @@ import { loggerTraceMixin } from "./logging.js";
 // propagator itself; the tracer/propagator without a context manager cannot
 // propagate the active span, so it must be set up here too.
 const spanExporter = new InMemorySpanExporter();
-const tracerProvider = new BasicTracerProvider({ spanProcessors: [new SimpleSpanProcessor(spanExporter)] });
+const tracerProvider = new TracerProvider({ spanProcessors: [new SimpleSpanProcessor({ exporter: spanExporter })] });
 trace.setGlobalTracerProvider(tracerProvider);
 context.setGlobalContextManager(new AsyncLocalStorageContextManager().enable());
 propagation.setGlobalPropagator(new W3CTraceContextPropagator());

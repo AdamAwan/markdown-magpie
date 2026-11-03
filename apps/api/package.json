@@ -12,7 +12,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@hono/node-server": "^2.1.5",
+    "@hono/node-server": "^2.1.6",
     "@hono/zod-validator": "^0.9.1",
     "@magpie/auth": "file:../../packages/auth",
     "@magpie/core": "file:../../packages/core",
@@ -24,18 +24,18 @@
     "@magpie/retrieval": "file:../../packages/retrieval",
     "@magpie/telemetry": "file:../../packages/telemetry",
     "@types/pg": "^8.23.1",
-    "cron-parser": "^5.10.2",
-    "fast-xml-parser": "^5.11.2",
+    "cron-parser": "^5.10.3",
+    "fast-xml-parser": "^5.12.0",
     "fflate": "^0.8.3",
-    "hono": "^4.13.13",
+    "hono": "^4.13.16",
     "pg": "^8.23.1",
     "pg-boss": "^12.38.0",
     "tsx": "^4.23.15",
     "zod": "^4.6.7"
   },
   "devDependencies": {
-    "@types/node": "^26.6.5",
-    "jose": "^6.2.12",
+    "@types/node": "^26.6.6",
+    "jose": "^6.2.15",
     "typescript": "^6.0.3"
   }
 }

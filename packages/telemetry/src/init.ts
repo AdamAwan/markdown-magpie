@@ -54,7 +54,7 @@ export async function initTelemetry(config: TelemetryConfig, logger: Logger): Pr
       resource: resourceFromAttributes({ [ATTR_SERVICE_NAME]: config.serviceName }),
       // Exporters read their endpoint/headers from the standard OTEL_* env.
       traceExporter: new OTLPTraceExporter(),
-      metricReader: new PeriodicExportingMetricReader({ exporter: new OTLPMetricExporter() }),
+      metricReaders: [new PeriodicExportingMetricReader({ exporter: new OTLPMetricExporter() })],
       instrumentations: [new HttpInstrumentation(), new UndiciInstrumentation(), new PgInstrumentation()]
     });
     sdk.start();
