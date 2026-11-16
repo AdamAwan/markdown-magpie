@@ -53,7 +53,7 @@ exists and what has to be true before it can be dropped.
 | --- | --- | --- | --- |
 | `postcss: ^8.5.18` | GHSA-qx2v-qp2m-jg93, GHSA-6g55-p6wh-862q, GHSA-r28c-9q8g-f849 | `next` pins `postcss` to an exact `8.4.31`. | `next` ships with `postcss >= 8.5.18`. |
 | `sharp: ^0.35.0` | GHSA-f88m-g3jw-g9cj (libvips CVEs) | `next` declares `sharp: ^0.34.5`, and the fix is in the next minor. | `next` widens its `sharp` range to `>= 0.35.0`. |
-| `@hono/node-server: ^2.0.11` | GHSA-frvp-7c67-39w9 | `@modelcontextprotocol/node` declares `^1.19.9`, and the path-traversal fix only exists in 2.x. It only imports `getRequestListener`, whose signature is identical in 1.x and 2.x, and `apps/api` already runs 2.x directly. | `@modelcontextprotocol/node` moves to `@hono/node-server` 2.x. |
+| `@hono/node-server: ^2.1.8` | GHSA-frvp-7c67-39w9, GHSA-qv5m-9pm6-hqp3, GHSA-jpvv-r467-5p4w | `@modelcontextprotocol/node` declares `^1.19.9`, and the path-traversal fix only exists in 2.x. It only imports `getRequestListener`, whose signature is identical in 1.x and 2.x, and `apps/api` already runs 2.x directly. | `@modelcontextprotocol/node` moves to `@hono/node-server` 2.x. |
 | `minimatch: ^10.0.3` | GHSA-mh99-v99m-4gvg (via `brace-expansion`) | `archiver` (from `testcontainers`) reaches `brace-expansion` 2.x through `glob@10` and `readdir-glob@1`; only `brace-expansion >= 5.0.8` is patched, and its named-export shape is incompatible with `minimatch` 5/9, so the fix has to come from `minimatch` 10. | `testcontainers` ships an `archiver` whose glob chain uses `minimatch >= 10.0.3`. |
 
 npm will not re-resolve an already-satisfied lockfile entry just because an
@@ -63,7 +63,9 @@ entry from `package-lock.json` and re-run `npm install` so it resolves afresh.
 
 Overrides on a package we also depend on directly must use the *same* spec as the
 direct dependency, otherwise npm ignores the override silently — that is why
-`apps/api` declares `@hono/node-server: ^2.0.11` rather than a looser range.
+`apps/api` declares `@hono/node-server: ^2.1.8`, matching the override. Bump both
+together: when they drift apart the override stops applying and the transitive
+copy under `@modelcontextprotocol/node` can stay on a vulnerable version.
 
 ## Maintaining this
 

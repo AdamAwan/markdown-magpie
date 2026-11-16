@@ -12,7 +12,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@hono/node-server": "^2.1.6",
+    "@hono/node-server": "^2.1.8",
     "@hono/zod-validator": "^0.9.1",
     "@magpie/auth": "file:../../packages/auth",
     "@magpie/core": "file:../../packages/core",
