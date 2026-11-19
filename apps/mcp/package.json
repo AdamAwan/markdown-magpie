@@ -25,7 +25,7 @@
     "@types/express": "^5.0.6",
     "@types/node": "^26.6.6",
     "@types/supertest": "^7.2.1",
-    "jose": "^6.2.16",
+    "jose": "^6.2.18",
     "supertest": "^7.3.2",
     "typescript": "^6.0.3"
   }
