@@ -12,6 +12,7 @@ function principal(roles: string[] | undefined): Principal {
     subject: "auth0|tester",
     scopes: ["read:knowledge", "manage:knowledge"],
     roles,
+    isService: false,
     payload: {}
   };
 }

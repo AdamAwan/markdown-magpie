@@ -13,6 +13,7 @@ import {
   hasScopes,
   parseBearerToken,
   type ApiTokenProvider,
+  type AuthProvider,
   type AuthSettings,
   type Principal
 } from "@magpie/auth";
@@ -65,13 +66,13 @@ const TOOL_SCOPES: Record<string, string> = {
 // Resolves the auth settings the HTTP MCP server validates inbound tokens with.
 //
 // Critically, the MCP server has its OWN audience, distinct from the web API
-// audience (AUTH0_AUDIENCE). MCP clients (Claude, Cursor, MCP Inspector) request
+// audience (AUTH_AUDIENCE / legacy AUTH0_AUDIENCE). MCP clients (Claude, Cursor, MCP Inspector) request
 // a token using the RFC 8707 `resource` parameter set to the /mcp URL, so Auth0
-// stamps `aud` = the /mcp URL. Validating those tokens against AUTH0_AUDIENCE (the
+// stamps `aud` = the /mcp URL. Validating those tokens against AUTH_AUDIENCE (the
 // web API identifier) would reject every correctly-issued MCP token with a 401.
 // The audience therefore comes from MCP_AUDIENCE, defaulting to the public /mcp
 // resource URL. The web API (apps/api) is unchanged and still validates against
-// AUTH0_AUDIENCE.
+// AUTH_AUDIENCE (legacy AUTH0_AUDIENCE).
 export function mcpAuthSettingsFromEnv(env: NodeJS.ProcessEnv, resourceUrl: string): AuthSettings {
   return { ...authSettingsFromEnv(env), audience: env.MCP_AUDIENCE ?? resourceUrl };
 }
@@ -92,6 +93,10 @@ export interface HttpMcpOptions {
   apiClientSecret?: string;
   apiTokenUrl?: string;
   apiAudience?: string;
+  // Identity provider + (Entra only) API Application ID URI, which together
+  // determine the client-credentials request shape (see @magpie/auth).
+  apiAuthProvider?: AuthProvider;
+  apiIdUri?: string;
 }
 
 // Carries the current request's verified user principal into the MCP tool handlers
@@ -112,8 +117,10 @@ export function createHttpMcpApp(options: HttpMcpOptions): Express {
     staticToken: options.apiToken,
     clientId: options.apiClientId,
     clientSecret: options.apiClientSecret,
+    provider: options.apiAuthProvider,
     tokenUrl: options.apiTokenUrl,
-    audience: options.apiAudience
+    audience: options.apiAudience,
+    apiIdUri: options.apiIdUri
   });
   // The downstream API is called with the MCP's own service token; when the
   // request carries a verified user, forward that user's identity so the API
@@ -561,11 +568,13 @@ async function main(): Promise<void> {
   const apiToken = process.env.MCP_API_AUTH_TOKEN;
   const apiClientId = process.env.MCP_API_CLIENT_ID;
   const apiClientSecret = process.env.MCP_API_CLIENT_SECRET;
-  // Downstream API calls target the WEB API audience (AUTH0_AUDIENCE), which is
-  // distinct from this server's own MCP audience. The token endpoint lives on
-  // the Auth0 issuer (which already carries a trailing slash).
-  const apiAudience = authSettingsFromEnv().audience;
-  const apiTokenUrl = `${auth.issuer}oauth/token`;
+  // Downstream API calls target the WEB API audience (AUTH_AUDIENCE, legacy
+  // AUTH0_AUDIENCE), which is distinct from this server's own MCP audience. The
+  // provider, token endpoint (AUTH_TOKEN_URL or the provider default) and — for
+  // Entra — the API ID URI come from the same settings the API validates against.
+  const apiSettings = authSettingsFromEnv();
+  const apiAudience = apiSettings.audience;
+  const apiTokenUrl = apiSettings.tokenUrl;
   const hasClientCredentials = Boolean(apiClientId && apiClientSecret);
 
   // When auth is required this server acts as an OAuth protected resource and
@@ -591,7 +600,9 @@ async function main(): Promise<void> {
     apiClientId,
     apiClientSecret,
     apiTokenUrl,
-    apiAudience
+    apiAudience,
+    apiAuthProvider: apiSettings.provider,
+    apiIdUri: apiSettings.apiIdUri
   });
 
   app.listen(port, host, () => {

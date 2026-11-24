@@ -2,8 +2,9 @@
 
 > **Status:** living spec (as-built). Source of truth for how Markdown Magpie
 > authenticates callers, gates actions by global scope, and layers per-flow
-> capabilities on top — including service (machine-to-machine) identity and the
-> MCP on-behalf-of delegation path. Follows the [spec conventions](./README.md#conventions).
+> capabilities on top — including service (machine-to-machine) identity, the
+> MCP on-behalf-of delegation path, and the two supported identity providers (Auth0
+> and Microsoft Entra ID). Follows the [spec conventions](./README.md#conventions).
 
 ## Purpose
 
@@ -30,7 +31,8 @@ additionally gated by a **flow-scoped capability**. A caller MUST satisfy both �
 route's scope **and** the required capability on the resource's flow.
 
 - **AZ2** — **Global scopes** are coarse capabilities carried in the JWT `scope` claim
-  and checked by `requireScopes` (`apps/api/src/auth/middleware.ts`). They gate *what
+  (Entra: `scp` on user tokens, `roles` on app tokens — see AZ26) and checked by
+  `requireScopes` (`apps/api/src/auth/middleware.ts`). They gate *what
   kind* of action a principal may perform. The scopes in use are `read:knowledge`,
   `ask:knowledge`, `manage:knowledge`, `manage:jobs`, `manage:admin`, and
   `feedback:questions`.
@@ -85,14 +87,15 @@ After deploying the Action **into the Login flow**, a decoded access token carri
 "https://magpie.wastedcake.com/roles": ["kb-hr-curators"]
 ```
 
-- **AZ7** — Clients MUST request a token for the API **audience** (`AUTH0_AUDIENCE`)
+- **AZ7** — Clients MUST request a token for the API **audience** (`AUTH_AUDIENCE`,
+  legacy `AUTH0_AUDIENCE`)
   or the custom claim is absent. Joiner/leaver management stays entirely in the IdP:
   assigning a role makes it appear and disabling a user evaporates all access, with no
   product change or redeploy.
 - **AZ8** — The verifier reads role names via `rolesFromPayload` from the claim key
-  `rolesClaim`, configurable through `AUTH_ROLES_CLAIM` and defaulting to
-  `DEFAULT_ROLES_CLAIM` = `https://magpie.wastedcake.com/roles`
-  (`packages/auth/src/index.ts`). String entries only; anything non-string is dropped.
+  `rolesClaim`, configurable through `AUTH_ROLES_CLAIM` and defaulting per provider:
+  Auth0 `DEFAULT_ROLES_CLAIM` = `https://magpie.wastedcake.com/roles`, Entra `roles`
+  (`packages/auth/src/provider.ts`). String entries only; anything non-string is dropped.
 - **AZ9** — A **present** roles claim (even the empty array `[]`) makes a principal
   **role-aware**; an **absent** claim leaves `Principal.roles` `undefined`. This
   distinction is load-bearing (see AZ13–AZ15): a present claim fully determines flow
@@ -125,12 +128,14 @@ in three deliberately-permissive cases.
 - **AZ12** — **No principal**: auth is disabled (local dev) and the scope layer
   already handled the request.
 - **AZ13** — **A genuine service / machine-to-machine token**, identified by a
-  **positive** signal: the OAuth grant-type claim `gty: "client-credentials"` that
-  Auth0 stamps on every client-credentials access token, detected by
-  `isClientCredentialsToken` (`packages/auth/src/index.ts`). Auth0's post-login Action
-  only runs on interactive logins, so these tokens (the watcher, the MCP server) never
-  carry the roles claim; they fall back to scope-only authorization rather than being
-  locked out of the callbacks the system depends on.
+  **positive** signal computed once at verify time as `Principal.isService`
+  (`packages/auth/src/provider.ts`): on Auth0 the OAuth grant-type claim
+  `gty: "client-credentials"` stamped on every client-credentials access token
+  (`isClientCredentialsToken`); on Entra the `idtyp: "app"` optional claim (AZ26).
+  These tokens (the watcher, the MCP server) never carry user roles — Auth0's
+  post-login Action only runs on interactive logins, and an Entra app token's `roles`
+  are application permissions, mapped to scopes — so they fall back to scope-only
+  authorization rather than being locked out of the callbacks the system depends on.
 - **AZ14** — Only a **role-aware** principal (roles claim present, even if `[]`) is
   held to the per-flow grants. A role-aware principal with no matching grant MUST be
   **denied** (a `[]`-roles user sees no flow content). A grant matches when one of the
@@ -138,28 +143,29 @@ in three deliberately-permissive cases.
   wildcard, which also is the only way to match a **flow-less** resource); multiple
   roles union their grants, and unknown roles are ignored.
 - **AZ15** — The service carve-out (AZ13) MUST be a **positive** signal, **not** "the
-  roles claim is absent." A token with **no roles claim and no client-credentials
-  marker** is a human token whose claim went missing (e.g. the Auth0 Action was
+  roles claim is absent." A token with **no roles claim and no service marker**
+  (`isService` false) is a human token whose claim went missing (e.g. the Auth0 Action was
   removed, disabled, or dropped a non-URL-namespaced claim) and MUST be **denied**
   flow-scoped access — never reclassified as an all-flows service principal, which
   would fail flow-scoping **open**. The event SHOULD be surfaced: `can()` logs a
   warning via `isRolelessHumanToken` — true when grants are configured and the
-  principal has **no roles claim and no client-credentials marker** — so the IdP
+  principal has **no roles claim and is not a service** — so the IdP
   misconfiguration is visible rather than silent. (Such a token necessarily already
   cleared the route's scope gate, hence the warning message's "user-facing scopes"
-  framing; the predicate itself tests grants + absent-roles + not-client-credentials,
-  not scopes.)
+  framing; the predicate itself tests grants + absent-roles + not-service, not
+  scopes.)
 
 > **Fail closed, not open.** An earlier design inferred M2M purely from a missing
 > roles claim; if the post-login Action was removed or silently dropped the claim, a
 > **human** token would arrive with no roles claim, be misclassified as a service
 > principal, and be granted access to **every** flow with flow-scoping effectively
-> disabled. AZ15 replaces that with the positive client-credentials marker.
+> disabled. AZ15 replaces that with the positive service marker.
 
 > **Turning it on.** When you configure `KNOWLEDGE_ROLE_GRANTS`, grant every human
 > role its flows, and ensure any service identity keeps working via carve-out AZ13 —
-> i.e. service tokens must be client-credentials tokens (`gty: "client-credentials"`).
-> Do **not** attach roles to M2M tokens.
+> i.e. service tokens must be client-credentials tokens (Auth0
+> `gty: "client-credentials"`; Entra `idtyp: "app"`). Do **not** attach roles to
+> Auth0 M2M tokens.
 
 - **AZ16** — Enforcement is exposed to routes as `can(ctx, c, capability, flowId)`
   (boolean) and `assertCan(...)` (throws **403 `forbidden`**), matching
@@ -208,8 +214,12 @@ in three deliberately-permissive cases.
   token is supported only as a legacy fallback; because Auth0 access tokens expire
   (default 24h), a pasted static token silently breaks every call a day after deploy.
   Runtime acquisition is enabled only when all of `clientId`, `clientSecret`,
-  `tokenUrl`, and `audience` are supplied; concurrent refreshes are collapsed into one
-  fetch, and the token is refreshed `EXPIRY_SKEW_SECONDS = 60` before its stated expiry.
+  `tokenUrl`, and `audience` are supplied (plus `apiIdUri` on Entra); concurrent
+  refreshes are collapsed into one fetch, and the token is refreshed
+  `EXPIRY_SKEW_SECONDS = 60` before its stated expiry. The token endpoint is
+  `AUTH_TOKEN_URL`, defaulting per provider (AZ25), and the request shape is
+  provider-specific: Auth0 gets a JSON body naming the API `audience`; Entra gets a
+  form-encoded body requesting the `${AUTH_API_ID_URI}/.default` scope.
 
 ### MCP: acting as the end user (on-behalf-of delegation)
 
@@ -242,13 +252,117 @@ MCP gateway; that gateway asserts a user identity it independently verified. Thi
 the "trusted subsystem" / BFF pattern — no IdP token-exchange machinery, and the API
 stays the single source of authorization truth.
 
-> **Setup (one Auth0 permission, no new machinery).** Define an `act:on-behalf-of`
-> permission on the API (`AUTH0_AUDIENCE`) and grant it to the MCP's M2M application
+> **Setup (one IdP permission, no new machinery).** Define an `act:on-behalf-of`
+> permission on the API (`AUTH_AUDIENCE`; on Entra, an application-type app role — see
+> AZ26) and grant it to the MCP's M2M application
 > (Applications → APIs → Machine to Machine Applications). That is the only IdP change.
 > Keep the MCP→API channel on a trusted network / TLS, since the headers are trusted
 > once the caller is authenticated. If the scope is *not* granted, MCP calls fall back
 > to the service-identity bypass (AZ13) — so, like the rest of this model, per-user
 > enforcement on MCP is opt-in.
+
+## Identity providers
+
+The verifier, the startup checks, and the service-token client are provider-neutral;
+everything that differs between providers is computed in one profile per provider in
+`packages/auth/src/provider.ts`, so the apps never branch on the provider.
+
+- **AZ25** — `AUTH_PROVIDER` selects `auth0` (default) or `entra`; any other value is a
+  startup error (`authEnvIssues`, checked by the API and watcher config loaders). The
+  generic env names win over the legacy Auth0 names, which remain as fallbacks so an
+  existing Auth0 deployment needs **no** env changes (`authSettingsFromEnv`,
+  `packages/auth/src/index.ts`):
+
+  | Var | Legacy fallback | auth0 default | entra default |
+  | --- | --- | --- | --- |
+  | `AUTH_ISSUER` | `AUTH0_ISSUER_BASE_URL`, then `https://${AUTH0_DOMAIN}` | — (normalised to one trailing slash) | — (used **verbatim**, e.g. `https://login.microsoftonline.com/<tenant-id>/v2.0`) |
+  | `AUTH_AUDIENCE` | `AUTH0_AUDIENCE` | — | — (the API app's client-ID GUID) |
+  | `AUTH_JWKS_URI` | `AUTH0_JWKS_URI` | `<issuer>.well-known/jwks.json` | `<authority>/discovery/v2.0/keys` |
+  | `AUTH_TOKEN_URL` | — | `<issuer>oauth/token` | `<authority>/oauth2/v2.0/token` |
+  | `AUTH_API_ID_URI` | — | unused | `api://<AUTH_AUDIENCE>` |
+  | `AUTH_ROLES_CLAIM` | — | `https://magpie.wastedcake.com/roles` | `roles` |
+
+  (`<authority>` is the Entra issuer with its trailing `/v2.0` removed.) When auth is
+  required, the API and watcher refuse to start without an audience (new **or** legacy
+  name, never the `.env.example` placeholder) and an issuer.
+- **AZ26** — Claim mapping. The verifier returns the same `Principal` for both
+  providers:
+
+  | | auth0 | entra |
+  | --- | --- | --- |
+  | `subject` | `sub` | `oid` (fallback `sub`) — Entra's `sub` is pairwise per app |
+  | `scopes` (user token) | `scope`, space-split | `scp`, space-split |
+  | `scopes` (service token) | `scope` | the `roles` array (application permissions) |
+  | `roles` (user token) | `rolesClaim` | `rolesClaim` (`roles`: the user's app-role assignments) |
+  | `roles` (service token) | `rolesClaim` (normally absent) | always `undefined` — app-token `roles` are permissions, **never** user roles |
+  | `isService` | `gty === "client-credentials"` | `idtyp === "app"` |
+
+  An Entra app token **without** the `idtyp` optional claim is not recognised as a
+  service and gets no scopes (it has no `scp`), so it fails closed with 403s.
+
+### Using Microsoft Entra ID
+
+Single-tenant only: the issuer is validated exactly, so tokens from any other tenant
+(and v1 tokens, whose `iss` is `https://sts.windows.net/<tenant-id>/`) are rejected.
+
+**App registrations**
+
+1. **API app** (the resource the API, watcher and MCP validate against):
+   - In the manifest set `"requestedAccessTokenVersion": 2` (v2 tokens: `aud` = the
+     client-ID GUID, `iss` = `https://login.microsoftonline.com/<tenant-id>/v2.0`).
+   - **Expose an API** → set the Application ID URI (default `api://<client-id>`; if you
+     choose another, set `AUTH_API_ID_URI`) and add **delegated scopes** named after
+     the global scopes (`read:knowledge`, `ask:knowledge`, `manage:knowledge`,
+     `manage:jobs`, `manage:admin`, `feedback:questions`).
+   - **App roles**: add *Users/Groups* roles for the role names your
+     `KNOWLEDGE_ROLE_GRANTS` uses (e.g. `kb-hr-curators`) and assign users/groups to
+     them under Enterprise applications; add *Applications* roles for the service
+     permissions (`read:knowledge`, `ask:knowledge`, `manage:knowledge`,
+     `manage:jobs`, and `act:on-behalf-of` for MCP).
+   - **Token configuration** → add the `idtyp` optional claim to the **access** token.
+     Without it no service token is recognised (AZ26).
+2. **Watcher M2M app**: a client secret, plus **application permissions** on the API
+   app for `manage:jobs`, `ask:knowledge`, `read:knowledge`, `manage:knowledge` —
+   admin-consented.
+3. **MCP M2M app**: as above for the scopes its tools use, plus `act:on-behalf-of`
+   (AZ23).
+4. **Web SPA app**: see the web console's settings in `.env.example` (`AUTH_CLIENT_ID`,
+   `AUTH_REDIRECT_URI`, `NEXT_PUBLIC_AUTH_*`).
+
+**Server env**
+
+```bash
+AUTH_PROVIDER=entra
+AUTH_ISSUER=https://login.microsoftonline.com/<tenant-id>/v2.0
+AUTH_AUDIENCE=<api-app-client-id>
+# AUTH_API_ID_URI=api://<api-app-client-id>   # only if you changed the Application ID URI
+WATCHER_API_CLIENT_ID=<watcher-app-client-id>
+WATCHER_API_CLIENT_SECRET=<secret>
+MCP_API_CLIENT_ID=<mcp-app-client-id>
+MCP_API_CLIENT_SECRET=<secret>
+```
+
+JWKS and token endpoints, the roles claim, and the client-credentials scope
+(`<AUTH_API_ID_URI>/.default`) are derived automatically (AZ25).
+
+**Known caveats**
+
+- **Scope / app-role values.** The product's names use `verb:noun` (with a colon).
+  Whether the Entra portal and Graph accept a colon in delegated-scope and app-role
+  `value`s is **not yet verified** against a live tenant; if they are rejected, Entra
+  support needs a name-mapping layer before it can be used.
+- **Delegated scopes are not per-user.** Auth0 RBAC can restrict which scopes a user
+  receives; Entra grants every consented delegated scope the client requests to every
+  user who can sign in. Gate who can sign in (*Assignment required* on the enterprise
+  app) and rely on flow-scoped grants (`KNOWLEDGE_ROLE_GRANTS`) for per-user limits.
+- **Multi-tenant is not supported** (single issuer, validated exactly).
+- **Switching an existing deployment changes subjects.** Entra subjects are `oid`s,
+  not Auth0 `sub`s, so everything keyed on the subject (per-principal rate-limit
+  buckets, the subject in logs and on-behalf-of headers) refers to new identities,
+  and role assignments must be recreated as Entra app-role assignments.
+- **MCP inbound login** (protected-resource metadata, MCP client sign-in) is still
+  Auth0-oriented; Entra support there is a later phase. The MCP's downstream
+  service token already follows `AUTH_PROVIDER`.
 
 ## Considered and rejected
 
@@ -274,7 +388,8 @@ stays the single source of authorization truth.
 
 | Concern | Code |
 | --- | --- |
-| Token verification, scopes, roles claim, service-token marker | `packages/auth/src/index.ts` |
+| Token verification, env resolution (`authSettingsFromEnv`, `authEnvIssues`) | `packages/auth/src/index.ts` |
+| Per-provider profiles: issuer/JWKS/token URL defaults, claim mapping, `isService`, client-credentials request shape | `packages/auth/src/provider.ts` |
 | Runtime M2M service-token acquisition (client-credentials) | `packages/auth/src/api-token.ts` |
 | On-behalf-of delegation (headers, scope, resolver) | `packages/auth/src/on-behalf-of.ts` |
 | `requireAuth` / `requireScopes` + delegation wiring | `apps/api/src/auth/middleware.ts` |
@@ -284,7 +399,9 @@ stays the single source of authorization truth.
 
 ## Tests (behavioural contract)
 
-`packages/auth/src/{index,api-token,on-behalf-of}.test.ts`,
+`packages/auth/src/{index,api-token,on-behalf-of}.test.ts` (incl. Entra issuer,
+endpoint defaults, claim mapping, form-encoded client-credentials, legacy-env
+fallbacks), `apps/api/src/platform/config.test.ts`, `apps/watcher/src/config.test.ts`,
 `apps/api/src/auth/{capabilities,middleware,middleware.delegation}.test.ts`,
 `apps/api/src/features/{retrieve,route}/routes.flow-scope.test.ts`.
 

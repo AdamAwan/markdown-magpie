@@ -16,7 +16,7 @@ services:
       context: .
     image: markdown-magpie:latest
     command: npm run start -w @magpie/watcher
-    # Pull every WATCHER_*, API_BASE_URL, AUTH0_* and provider credential
+    # Pull every WATCHER_*, API_BASE_URL, AUTH_* (or legacy AUTH0_*) and provider credential
     # straight from your .env.
     env_file:
       - .env

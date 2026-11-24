@@ -1,17 +1,16 @@
 "use client";
 
-import { Fragment, ReactNode, useEffect, useMemo, useState } from "react";
+import { Fragment, ReactNode, useMemo, useState } from "react";
 import Image from "next/image";
 import styled from "@emotion/styled";
 import { usePathname } from "next/navigation";
-import { useAuth0 } from "@auth0/auth0-react";
 import { ConsoleSection } from "../lib/types";
 import { extractModelInfo } from "../lib/config";
 import { isActiveJob, sectionSubtitle, sectionTitle } from "../lib/console";
 import { SECTION_NAV, sectionFromPath } from "../lib/sections";
 import { NavButton } from "./common";
 import { useConsole } from "./ConsoleProvider";
-import { authConfiguredFromWindow } from "./AuthProvider";
+import { useConsoleAuth } from "./AuthProvider";
 import { StatusPill } from "./StatusPill";
 import { ToastStack } from "./ToastStack";
 import { Button } from "./ui";
@@ -184,25 +183,27 @@ const RefreshTime = styled.span(({ theme }) => ({
   fontWeight: theme.font.weight.medium
 }));
 
-// Login/logout controls. This is only rendered when Auth0 is configured, since
-// useAuth0 throws without an Auth0Provider ancestor (AuthProvider omits the
-// provider entirely when auth is disabled).
+// Login/logout controls, shown only when auth is configured (useConsoleAuth is
+// safe to call either way — it reports enabled: false when auth is disabled).
 function AuthActions() {
-  const { isAuthenticated, isLoading, user, loginWithRedirect, logout } = useAuth0();
+  const { enabled, isAuthenticated, isLoading, userLabel, login, logout } = useConsoleAuth();
+  if (!enabled) {
+    return null;
+  }
   if (isLoading) {
     return <RefreshTime>Checking session</RefreshTime>;
   }
   if (!isAuthenticated) {
     return (
-      <Button variant="secondary" onClick={() => void loginWithRedirect()}>
+      <Button variant="secondary" onClick={login}>
         Log in
       </Button>
     );
   }
   return (
     <>
-      <RefreshTime>{user?.email ?? user?.name ?? "Signed in"}</RefreshTime>
-      <Button variant="secondary" onClick={() => logout({ logoutParams: { returnTo: window.location.origin } })}>
+      <RefreshTime>{userLabel ?? "Signed in"}</RefreshTime>
+      <Button variant="secondary" onClick={logout}>
         Log out
       </Button>
     </>
@@ -244,15 +245,6 @@ export function AppShell({ children }: { children: ReactNode }) {
   // URL parsing/host detection; memoised so it doesn't re-run on every render
   // (the provider re-renders on each 4s poll).
   const modelInfo = useMemo(() => extractModelInfo(config), [config]);
-
-  // Whether to show the auth controls. Resolved after mount so the server and
-  // initial client render match (the runtime config lives on window only), and
-  // so AuthActions (which calls useAuth0) mounts only when an Auth0Provider is
-  // present, i.e. when auth is configured.
-  const [authEnabled, setAuthEnabled] = useState(false);
-  useEffect(() => {
-    setAuthEnabled(authConfiguredFromWindow());
-  }, []);
 
   // Every count and attention notice is derived from the single `refresh()` that
   // populates the whole console, so until it first completes the defaults (empty
@@ -361,7 +353,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             <Button variant="secondary" disabled={refreshing} onClick={() => void refresh()}>
               {refreshing ? "Refreshing" : "Refresh"}
             </Button>
-            {authEnabled ? <AuthActions /> : null}
+            <AuthActions />
           </TopActions>
         </Topbar>
 

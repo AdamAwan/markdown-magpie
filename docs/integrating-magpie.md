@@ -230,8 +230,10 @@ model's context, and build your own citations from each section's `path`/`headin
   integration). See [authorization.md](./authorization.md).
 - **I7** — A backend integration authenticates to the **HTTP API** with its own **machine-to-
   machine (M2M) credential**, obtained via the OAuth **client-credentials** grant against your
-  Auth0 tenant for the API audience (`AUTH0_AUDIENCE`). Acquire the token at runtime and cache
-  it until shortly before expiry — Auth0 access tokens expire (default ~24h), so a pasted static
+  identity provider for the API audience (`AUTH_AUDIENCE` / legacy `AUTH0_AUDIENCE`; on Entra,
+  the `<AUTH_API_ID_URI>/.default` scope — see [authorization.md](./authorization.md#using-microsoft-entra-id)).
+  Acquire the token at runtime and cache
+  it until shortly before expiry — access tokens expire (Auth0 default ~24h), so a pasted static
   token silently breaks a day after deploy (`packages/auth/src/api-token.ts`, AZ21). Present it
   as `Authorization: Bearer <token>` on every call.
 - **I8** — The token MUST carry the **scope** each call requires — `read:knowledge` for

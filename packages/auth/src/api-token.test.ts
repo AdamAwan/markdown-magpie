@@ -108,3 +108,38 @@ test("throws when the token endpoint omits access_token", async () => {
     fetchStub.restore();
   }
 });
+
+test("entra: sends a form-encoded client-credentials request for the API's .default scope", async () => {
+  let capturedContentType: string | undefined;
+  let capturedBody: string | undefined;
+  const fetchStub = stubFetch((init) => {
+    capturedContentType = new Headers(init?.headers).get("content-type") ?? undefined;
+    capturedBody = typeof init?.body === "string" ? init.body : undefined;
+    return tokenResponse("entra-token", 3600);
+  });
+  try {
+    const provider = createApiTokenProvider({
+      provider: "entra",
+      clientId: "svc-client",
+      clientSecret: "svc secret&=",
+      tokenUrl: "https://login.microsoftonline.com/tenant-id/oauth2/v2.0/token",
+      audience: "api-client-guid",
+      apiIdUri: "api://api-client-guid"
+    });
+    assert.equal(await provider(), "entra-token");
+    assert.equal(capturedContentType, "application/x-www-form-urlencoded");
+    const params = new URLSearchParams(capturedBody);
+    assert.equal(params.get("grant_type"), "client_credentials");
+    assert.equal(params.get("client_id"), "svc-client");
+    assert.equal(params.get("client_secret"), "svc secret&=");
+    assert.equal(params.get("scope"), "api://api-client-guid/.default");
+    assert.equal(params.has("audience"), false);
+  } finally {
+    fetchStub.restore();
+  }
+});
+
+test("entra: without an API ID URI it falls back to the static token", async () => {
+  const provider = createApiTokenProvider({ ...fullConfig, provider: "entra", staticToken: "static-token" });
+  assert.equal(await provider(), "static-token");
+});

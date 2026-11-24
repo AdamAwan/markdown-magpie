@@ -15,7 +15,13 @@ import { proposalRoutes } from "./routes.js";
 // double-count a still-open verdict against CLOSURE_RETRY_CAP.
 
 function principal(): Principal {
-  return { subject: "auth0|tester", scopes: ["read:knowledge", "manage:knowledge"], roles: undefined, payload: {} };
+  return {
+    subject: "auth0|tester",
+    scopes: ["read:knowledge", "manage:knowledge"],
+    roles: undefined,
+    isService: false,
+    payload: {}
+  };
 }
 
 function appFor(ctx: AppContext): Hono {

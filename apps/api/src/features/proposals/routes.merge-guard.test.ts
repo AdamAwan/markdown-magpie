@@ -17,7 +17,13 @@ import { proposalRoutes } from "./routes.js";
 function serviceP(): Principal {
   // A service/M2M principal (no roles claim) passes the flow-scope carve-out, so
   // these tests exercise the merge guard rather than authorization.
-  return { subject: "auth0|tester", scopes: ["read:knowledge", "manage:knowledge"], roles: undefined, payload: {} };
+  return {
+    subject: "auth0|tester",
+    scopes: ["read:knowledge", "manage:knowledge"],
+    roles: undefined,
+    isService: false,
+    payload: {}
+  };
 }
 
 function appFor(ctx: AppContext): Hono {

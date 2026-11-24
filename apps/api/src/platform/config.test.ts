@@ -248,6 +248,24 @@ describe("loadConfig — valid configs", () => {
     assert.equal(config.auth.issuer, "https://tenant.eu.auth0.com/");
   });
 
+  it("accepts the generic AUTH_* names for an Entra deployment", () => {
+    const config = loadConfig({
+      ...minimalEnv,
+      AUTH_REQUIRED: "true",
+      AUTH_PROVIDER: "entra",
+      AUTH_ISSUER: "https://login.microsoftonline.com/tenant-id/v2.0",
+      AUTH_AUDIENCE: "api-client-guid"
+    });
+    assert.equal(config.auth.provider, "entra");
+    assert.equal(config.auth.issuer, "https://login.microsoftonline.com/tenant-id/v2.0");
+    assert.equal(config.auth.audience, "api-client-guid");
+    assert.equal(config.auth.jwksUri, "https://login.microsoftonline.com/tenant-id/discovery/v2.0/keys");
+  });
+
+  it("rejects an unrecognised AUTH_PROVIDER", () => {
+    assertThrowsNaming({ ...minimalEnv, AUTH_PROVIDER: "okta" }, "AUTH_PROVIDER");
+  });
+
   it("applies the documented database pool defaults", () => {
     const config = loadConfig(minimalEnv);
     assert.equal(config.database.poolMax, 10);

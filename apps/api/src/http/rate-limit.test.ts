@@ -7,7 +7,7 @@ import { makeTestContext } from "../test-support/context.js";
 import { logger } from "../logger.js";
 import type { AppContext } from "../context.js";
 
-const PRINCIPAL: Principal = { subject: "user-1", scopes: [], payload: {} };
+const PRINCIPAL: Principal = { subject: "user-1", scopes: [], isService: false, payload: {} };
 
 // Builds a minimal app that stamps the request logger (normally set by
 // requestLogging) and, optionally, an authenticated principal, then applies the
@@ -50,8 +50,8 @@ describe("rateLimit middleware", () => {
     const ctx = makeTestContext();
     ctx.settings.rateLimit.askPerWindow = 1;
 
-    const appA = appWith(ctx, "ask", { subject: "a", scopes: [], payload: {} });
-    const appB = appWith(ctx, "ask", { subject: "b", scopes: [], payload: {} });
+    const appA = appWith(ctx, "ask", { subject: "a", scopes: [], isService: false, payload: {} });
+    const appB = appWith(ctx, "ask", { subject: "b", scopes: [], isService: false, payload: {} });
 
     assert.equal((await appA.request("/x", { method: "POST" })).status, 200);
     assert.equal((await appA.request("/x", { method: "POST" })).status, 429);

@@ -309,14 +309,18 @@ test("DELETE /api/questions/:id requires the manage:admin scope", async () => {
     subject: "auth0|t",
     scopes: ["read:knowledge"],
     roles: undefined,
+    isService: false,
     payload: {}
   }).request(`/questions/${log.id}`, { method: "DELETE" });
   assert.equal(forbidden.status, 403, "read:knowledge is not enough to purge a question");
   assert.ok(await ctx.stores.questionLogs.get(log.id), "the question survives a forbidden request");
 
-  const allowed = await appFor({ subject: "auth0|t", scopes: ["manage:admin"], roles: undefined, payload: {} }).request(
-    `/questions/${log.id}`,
-    { method: "DELETE" }
-  );
+  const allowed = await appFor({
+    subject: "auth0|t",
+    scopes: ["manage:admin"],
+    roles: undefined,
+    isService: false,
+    payload: {}
+  }).request(`/questions/${log.id}`, { method: "DELETE" });
   assert.equal(allowed.status, 200, "manage:admin may purge");
 });

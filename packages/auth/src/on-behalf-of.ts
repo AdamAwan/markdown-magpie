@@ -53,7 +53,9 @@ export function parseOnBehalfRoles(value: string | undefined): string[] | undefi
 // (holds ON_BEHALF_OF_SCOPE) AND a roles header is present. The delegated principal
 // keeps the CALLER's scopes (the transport identity's global capabilities) but
 // swaps in the forwarded user's subject and roles, so the API's flow-scoped checks
-// evaluate as the end user. Any other request returns the principal unchanged.
+// evaluate as the end user — and is no longer a service principal (`isService`
+// false), since it now stands for that user. Any other request returns the
+// principal unchanged.
 export function resolveEffectivePrincipal(
   principal: Principal,
   headers: { subject: string | undefined; roles: string | undefined }
@@ -68,6 +70,7 @@ export function resolveEffectivePrincipal(
   return {
     ...principal,
     subject: headers.subject ?? principal.subject,
-    roles
+    roles,
+    isService: false
   };
 }

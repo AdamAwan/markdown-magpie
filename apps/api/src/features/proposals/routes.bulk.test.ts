@@ -21,7 +21,13 @@ const execFileAsync = promisify(execFile);
 // envelope, the per-id guards, and cascade idempotency.
 
 function principal(roles?: string[]): Principal {
-  return { subject: "auth0|tester", scopes: ["read:knowledge", "manage:knowledge"], roles, payload: {} };
+  return {
+    subject: "auth0|tester",
+    scopes: ["read:knowledge", "manage:knowledge"],
+    roles,
+    isService: false,
+    payload: {}
+  };
 }
 
 function appFor(ctx: AppContext, who: Principal = principal()): Hono {

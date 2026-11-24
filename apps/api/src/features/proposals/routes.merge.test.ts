@@ -8,7 +8,13 @@ import { onError } from "../../http/errors.js";
 import { proposalRoutes } from "./routes.js";
 
 function principal(): Principal {
-  return { subject: "auth0|tester", scopes: ["read:knowledge", "manage:knowledge"], roles: undefined, payload: {} };
+  return {
+    subject: "auth0|tester",
+    scopes: ["read:knowledge", "manage:knowledge"],
+    roles: undefined,
+    isService: false,
+    payload: {}
+  };
 }
 
 function appFor(ctx: AppContext): Hono {

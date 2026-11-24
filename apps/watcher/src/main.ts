@@ -52,16 +52,19 @@ const pollIntervalMs = config.pollIntervalMs;
 // Authenticate to the API with the watcher's OWN machine-to-machine credential.
 // Prefer client-credentials (WATCHER_API_CLIENT_ID/SECRET) so the token is
 // fetched and refreshed at runtime — a static API_TOKEN expires (~24h on Auth0)
-// and silently 401s every claim afterwards. The downstream audience and token
-// endpoint come from the same Auth0 settings the API validates against. When
+// and silently 401s every claim afterwards. The provider, downstream audience
+// (Entra: API ID URI) and token endpoint come from the same auth settings the API
+// validates against. When
 // none of these are set (local dev with AUTH_REQUIRED=false) the provider yields
 // undefined and no Authorization header is sent.
 const tokenProvider = createApiTokenProvider({
   staticToken: config.auth.staticToken,
   clientId: config.auth.clientId,
   clientSecret: config.auth.clientSecret,
+  provider: config.auth.provider,
   tokenUrl: config.auth.tokenUrl,
-  audience: config.auth.audience
+  audience: config.auth.audience,
+  apiIdUri: config.auth.apiIdUri
 });
 
 const api = new HttpWatcherApi({
