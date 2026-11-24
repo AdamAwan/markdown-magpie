@@ -81,21 +81,78 @@ Claude artifacts can already cover most of this:
 | Audit trail | Append-only log rows |
 | Export | Download button |
 
-Limits:
+#### How it would flow
 
-1. **Audit isn't tamper-proof.** The artifact owner or an editor can later change the
-   rules or code and quietly edit history. Fine for internal accountability; weak as
-   evidence for an external auditor.
-2. **No chasing on its own.** A page can't send reminders. A Claude scheduled task could
-   check daily and email people, but that's extra work.
-3. **Everyone filling needs the Magpie connector set up**, since answers come from
-   whoever runs the fill.
+1. **Upload.** User A uploads the questionnaire. The original file is visible to
+   artifact editors only (by default). The parsed questions/answers go into the shared
+   database, visible to whoever the artifact is shared with — rules can narrow that,
+   down to "each owner sees only their own rows".
+2. **Fill.** Runs **in the page, in User A's browser**, through User A's Magpie
+   connector. Magpie is queue-based, so answers drip in; Magpie keeps the questionnaire,
+   so if A closes the page it picks up where it left off on the next open.
+3. **Assign.** Also **in the page** — no separate agent. An **owner map** (topic →
+   person, plus their email) lives in the shared database. The page asks Claude (running
+   as User A) to tag each row with a topic, then looks up the owner. **User A reviews and
+   fixes the assignments before they go out** — a bad assignment is how rows get ignored.
+4. **Sign off.** Each owner opens the page, sees their rows, and signs off / edits /
+   reassigns with a reason. Final sign-off unlocks when every row is done.
+5. **Chase + back up.** A **daily Claude scheduled task** (outside the page):
+   - reads the shared data, emails/Slacks owners of unsigned or overdue rows, and
+     escalates the late ones;
+   - commits a snapshot of the data and audit log to a **Git repo**.
+
+   Messages and commits come from the account of whoever set up the task. The task needs
+   owners' emails, so they live in the owner map (the page itself only stores opaque user
+   ids).
+
+#### Where the data lives
+
+| What | Where | Who can see it |
+|---|---|---|
+| The page | Claude, as artifact versions | Anyone it's shared with |
+| Rows, owners, sign-offs, audit log | Claude's per-artifact database (survives page updates) | Per the rules |
+| Uploaded files | Claude's per-artifact file store (≤20 MB each; some overall quota — size unknown) | Editors by default |
+| Per-person settings | The viewer's browser | Only them |
+| Snapshots / audit history | Our Git repo, via the scheduled task | Repo access |
+
+So apart from the Git snapshots, everything sits on Anthropic's side, scoped to that
+artifact in our Claude org. Magpie's data stays in Magpie; the artifact holds copies of
+answers. **Check before using:** security questionnaires describe our security posture,
+so confirm storing them in Claude fits our policies (region, retention, encryption —
+see Anthropic's trust/privacy docs or our Claude admin).
+
+#### Limits
+
+1. **Database rules aren't encryption.** The artifact owner or an editor can later loosen
+   the rules or change the code, then read or edit anything, and nobody is told. The Git
+   snapshots soften this: a later quiet edit shows up as a diff in the next snapshot.
+   They won't catch a change made and reverted between snapshots.
+2. **Git proves *when*, not *who*.** Snapshot commits come from the task owner's account;
+   *who* signed still rests on Claude's identity check.
+3. **Whoever fills needs the Magpie connector set up.**
 4. **Org-only.** Outside guests get limited access.
 
 ### Option B — a hosted app
 
-A small separate service calling Magpie's API. Gives a proper tamper-evident audit log,
-reminders/escalation, and outside reviewers — at the cost of building and running it.
+A small separate service calling Magpie's API.
 
-**Suggestion:** start with the artifact on one real questionnaire and see whether people
-actually sign off. Build the hosted version only if it sticks.
+| | Artifact | Hosted app |
+|---|---|---|
+| Time to first version | Days | Weeks |
+| Running cost / upkeep | Near zero | Hosting, auth, DB, updates |
+| Who can use it | Our org's Claude users | Anyone, incl. outside reviewers |
+| Login | Free, via Claude | Build or plug in SSO |
+| Trustworthy audit | Weak (Git snapshots help) | Strong — we control it, can make it immutable |
+| Reminders / escalation | Via a daily Claude scheduled task | Built in |
+| Magpie access | Each filler needs the connector | One service account |
+| Where data lives | Claude (+ our Git) | Wherever we choose |
+
+### Suggestion
+
+1. Try the artifact on one or two real questionnaires.
+2. If people use it, add the daily scheduled task (reminders + Git snapshots).
+3. Go hosted only if outside reviewers or formal, customer-facing audit become a real
+   need.
+
+**Deciding question:** is the sign-off record only for us internally, or will we ever
+show it to a customer or auditor? Internal → artifact. External → hosted.
