@@ -23,6 +23,10 @@ the end state. They are excellent for **"why was this built this way"** and usel
 **"how does the system behave now"**. Treat them as an append-only archive; cite them
 from a living spec as provenance, never the reverse.
 
+`docs/ideas/` holds **unbuilt ideas** — short write-ups of things we might build, often
+outside Magpie itself (e.g. [Hot Potato](./ideas/hot-potato.md)). Not specs; nothing there is a
+claim about current behaviour.
+
 ## Conventions
 
 Every spec in this set follows the same shape so a change to one clause maps cleanly to
