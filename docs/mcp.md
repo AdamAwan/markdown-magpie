@@ -73,8 +73,12 @@ no generative or embedding work of its own, and proxies every request to the API
   the per-provider forms). Every request to `/mcp` requires `Authorization: Bearer
   <token>` when `AUTH_REQUIRED=true`; a missing or invalid token returns **401** with a
   `WWW-Authenticate: Bearer resource_metadata="...", scope="..."` header pointing at the
-  metadata document and listing the advertised scopes (space-separated, the same form as
-  `scopes_supported`). Methods other than `tools/call` (`initialize`, `tools/list`,
+  metadata document and listing the scopes to sign in with (space-separated, the same form
+  as `scopes_supported`). Auth0 lists every supported scope (per-user RBAC filters them).
+  Entra lists only the user-level scopes (`read:knowledge`, `ask:knowledge`,
+  `feedback:questions`): its delegated scopes are not per-user, and an admin-consent-only
+  `manage:*` scope would otherwise block the whole sign-in. Elevated scopes are requested
+  through the 403 step-up challenge when a tool needs them. Methods other than `tools/call` (`initialize`, `tools/list`,
   `ping`, …) need only a valid token.
 - **M11** — **Per-tool scope.** `tools/call` additionally enforces the required scope for
   the named tool (table below); insufficient scope returns **403** with an RFC 6750

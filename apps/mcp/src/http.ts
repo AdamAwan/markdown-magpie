@@ -49,6 +49,10 @@ const SCOPES_SUPPORTED = [
   "manage:knowledge"
 ] as const;
 
+// The user-level subset of SCOPES_SUPPORTED. Providers whose scopes are not per-user
+// (Entra) ask clients to sign in with only these; see mcpSignInScopes.
+const BASIC_SCOPES = ["read:knowledge", "ask:knowledge", "feedback:questions"] as const;
+
 // Per-tool scope requirements enforced at the MCP boundary, mirroring the API
 // route scopes. tools/list and other methods need only a valid token.
 const TOOL_SCOPES: Record<string, string> = {
@@ -484,6 +488,8 @@ export function createHttpMcpApp(options: HttpMcpOptions): Express {
 
   // The discovery URL is derived from the resource origin so we never hardcode
   // the production host (RFC 9728 §3.1 anchors it at the resource's origin).
+  const signInScopes = advertisedScopes(profile.mcpSignInScopes({ all: SCOPES_SUPPORTED, basic: BASIC_SCOPES }));
+
   const metadataUrl = `${new URL(options.resourceUrl).origin}/.well-known/oauth-protected-resource`;
 
   const serveMetadata = (_req: Request, res: Response): void => {
@@ -500,10 +506,7 @@ export function createHttpMcpApp(options: HttpMcpOptions): Express {
   function challenge(res: Response): void {
     res
       .status(401)
-      .set(
-        "WWW-Authenticate",
-        `Bearer resource_metadata="${metadataUrl}", scope="${metadata.scopes_supported.join(" ")}"`
-      )
+      .set("WWW-Authenticate", `Bearer resource_metadata="${metadataUrl}", scope="${signInScopes.join(" ")}"`)
       .json({ error: "unauthorized" });
   }
 

@@ -613,6 +613,8 @@ const qualifiedScopes = [
   "https://mcp.contoso.com/mcp/manage:jobs",
   "https://mcp.contoso.com/mcp/manage:knowledge"
 ];
+// Entra's 401 asks for the user-level scopes only (manage:* come via step-up).
+const qualifiedSignInScopes = qualifiedScopes.slice(0, 3);
 
 // A v2 Entra user token: iss = the v2.0 issuer, aud = the MCP app's client-ID GUID,
 // scopes in `scp` by their SHORT name.
@@ -752,7 +754,7 @@ test("entra challenges name the qualified scopes", async () => {
   assert.equal(unauthenticated.status, 401);
   assert.equal(
     unauthenticated.header["www-authenticate"],
-    `Bearer resource_metadata="https://mcp.contoso.com/.well-known/oauth-protected-resource", scope="${qualifiedScopes.join(" ")}"`
+    `Bearer resource_metadata="https://mcp.contoso.com/.well-known/oauth-protected-resource", scope="${qualifiedSignInScopes.join(" ")}"`
   );
 
   const forbidden = await request(app)

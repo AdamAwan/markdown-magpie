@@ -121,6 +121,10 @@ interface ProviderProfile {
   // server's own Application ID URI (Entra). Inbound tokens still carry the SHORT
   // scope name, so verification never uses this form.
   advertisedMcpScope(scope: string, resourceIdUri: string): string;
+  // The scopes the MCP 401 challenge asks a client to sign in with (short names).
+  // `basic` is the user-level subset; elevated scopes are then requested by step-up
+  // (the 403 insufficient_scope challenge) only when a tool needs them.
+  mcpSignInScopes(scopes: { all: readonly string[]; basic: readonly string[] }): readonly string[];
   // Provider-specific MCP configuration problems that must stop the HTTP MCP
   // server from starting (auth required). Each entry is a complete message.
   mcpResourceIssues(config: McpResourceConfig): string[];
@@ -152,6 +156,9 @@ const auth0Profile: ProviderProfile = {
   defaultMcpAuthorizationServer: (issuer) => issuer,
   // Auth0 scopes are plain names; the MCP audience is chosen via RFC 8707 `resource`.
   advertisedMcpScope: (scope) => scope,
+  // Auth0 filters requested scopes by per-user RBAC, so asking for all of them is
+  // safe and keeps clients without step-up support working.
+  mcpSignInScopes: ({ all }) => all,
   mcpResourceIssues: () => []
 };
 
@@ -202,6 +209,10 @@ const entraProfile: ProviderProfile = {
   defaultMcpAuthorizationServer: (issuer) => `${entraAuthorityBase(issuer)}/${ENTRA_MCP_AUTHORIZATION_SERVER_VERSION}`,
   // Entra scopes are requested fully qualified: `<Application ID URI>/<scope>`.
   advertisedMcpScope: (scope, resourceIdUri) => `${resourceIdUri}/${scope}`,
+  // Entra delegated scopes are not per-user, and an elevated scope that needs admin
+  // consent would block the WHOLE sign-in for users who can't consent. Sign in with
+  // the user-level scopes only; elevated ones are requested via step-up.
+  mcpSignInScopes: ({ basic }) => basic,
   mcpResourceIssues: ({ resourceUrl, resourceIdUri, audienceConfigured, issuerConfigured }) => {
     const issues: string[] = [];
     if (!issuerConfigured) {
