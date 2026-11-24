@@ -1104,8 +1104,8 @@ function useConsoleController() {
   }
 
   // Download a worksheet export. Goes through apiDownload so the request carries
-  // the bearer token — a plain <a href> navigation would omit it and 401 under
-  // Auth0.
+  // the bearer token — a plain <a href> navigation would omit it and 401 when
+  // auth is enabled.
   async function exportQuestionnaire(id: string, format: "md" | "csv"): Promise<void> {
     try {
       await apiDownload(`/questionnaires/${encodeURIComponent(id)}/export?format=${format}`, `${id}.${format}`);

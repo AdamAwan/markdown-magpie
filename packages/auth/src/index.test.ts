@@ -3,6 +3,7 @@ import { test } from "node:test";
 import { exportJWK, generateKeyPair, SignJWT } from "jose";
 import type { JSONWebKeySet } from "jose";
 import {
+  authEnvIssues,
   authSettingsFromEnv,
   CLIENT_CREDENTIALS_GRANT_TYPE,
   createRemoteAuthVerifier,
@@ -10,6 +11,7 @@ import {
   hasScopes,
   isAuthRequired,
   isClientCredentialsToken,
+  parseAuthProvider,
   parseBearerToken,
   rolesFromPayload
 } from "./index.js";
@@ -19,16 +21,22 @@ const audience = "https://markdown-magpie.local/api";
 
 async function signedToken(
   scope: string,
-  options: { audience?: string; claims?: Record<string, unknown>; expiresIn?: string | false } = {}
+  options: {
+    audience?: string;
+    issuer?: string;
+    subject?: string;
+    claims?: Record<string, unknown>;
+    expiresIn?: string | false;
+  } = {}
 ): Promise<{ token: string; jwks: JSONWebKeySet }> {
   const { publicKey, privateKey } = await generateKeyPair("RS256");
   const jwk = await exportJWK(publicKey);
   const kid = "test-key";
-  const jwt = new SignJWT({ scope, ...options.claims })
+  const jwt = new SignJWT({ ...(scope ? { scope } : {}), ...options.claims })
     .setProtectedHeader({ alg: "RS256", kid })
-    .setIssuer(issuer)
+    .setIssuer(options.issuer ?? issuer)
     .setAudience(options.audience ?? audience)
-    .setSubject("auth0|user")
+    .setSubject(options.subject ?? "auth0|user")
     .setIssuedAt();
   if (options.expiresIn !== false) {
     jwt.setExpirationTime(options.expiresIn ?? "5m");
@@ -173,4 +181,198 @@ test("createRemoteAuthVerifier rejects tokens missing exp", async () => {
   });
 
   await assert.rejects(() => verifier.verify(token), /invalid_token/);
+});
+
+test("authSettingsFromEnv keeps today's Auth0 behaviour from the legacy env names alone", () => {
+  const settings = authSettingsFromEnv({
+    AUTH0_DOMAIN: "tenant.eu.auth0.com",
+    AUTH0_AUDIENCE: "https://magpie.example/api"
+  });
+  assert.equal(settings.provider, "auth0");
+  assert.equal(settings.issuer, "https://tenant.eu.auth0.com/");
+  assert.equal(settings.audience, "https://magpie.example/api");
+  assert.equal(settings.jwksUri, "https://tenant.eu.auth0.com/.well-known/jwks.json");
+  assert.equal(settings.tokenUrl, "https://tenant.eu.auth0.com/oauth/token");
+  assert.equal(settings.rolesClaim, DEFAULT_ROLES_CLAIM);
+  assert.equal(settings.apiIdUri, undefined);
+
+  // AUTH0_ISSUER_BASE_URL wins over AUTH0_DOMAIN and is normalised to one trailing slash.
+  const viaIssuer = authSettingsFromEnv({
+    AUTH0_ISSUER_BASE_URL: "https://custom.example.com//",
+    AUTH0_DOMAIN: "ignored.auth0.com",
+    AUTH0_JWKS_URI: "https://keys.example.com/jwks.json"
+  });
+  assert.equal(viaIssuer.issuer, "https://custom.example.com/");
+  assert.equal(viaIssuer.jwksUri, "https://keys.example.com/jwks.json");
+});
+
+test("authSettingsFromEnv prefers the generic AUTH_* names over the legacy ones", () => {
+  const settings = authSettingsFromEnv({
+    AUTH_ISSUER: "https://new.example.com",
+    AUTH0_ISSUER_BASE_URL: "https://old.example.com",
+    AUTH_AUDIENCE: "https://new.example/api",
+    AUTH0_AUDIENCE: "https://old.example/api",
+    AUTH_JWKS_URI: "https://new.example.com/keys",
+    AUTH0_JWKS_URI: "https://old.example.com/keys",
+    AUTH_TOKEN_URL: "https://new.example.com/token"
+  });
+  assert.equal(settings.issuer, "https://new.example.com/");
+  assert.equal(settings.audience, "https://new.example/api");
+  assert.equal(settings.jwksUri, "https://new.example.com/keys");
+  assert.equal(settings.tokenUrl, "https://new.example.com/token");
+});
+
+test("authSettingsFromEnv for entra keeps the issuer verbatim and derives Entra endpoints", () => {
+  const tenantIssuer = "https://login.microsoftonline.com/tenant-id/v2.0";
+  const settings = authSettingsFromEnv({
+    AUTH_PROVIDER: "entra",
+    AUTH_ISSUER: tenantIssuer,
+    AUTH_AUDIENCE: "api-client-guid"
+  });
+  assert.equal(settings.provider, "entra");
+  assert.equal(settings.issuer, tenantIssuer, "no trailing slash may be added to an Entra issuer");
+  assert.equal(settings.jwksUri, "https://login.microsoftonline.com/tenant-id/discovery/v2.0/keys");
+  assert.equal(settings.tokenUrl, "https://login.microsoftonline.com/tenant-id/oauth2/v2.0/token");
+  assert.equal(settings.rolesClaim, "roles");
+  assert.equal(settings.apiIdUri, "api://api-client-guid");
+
+  const overridden = authSettingsFromEnv({
+    AUTH_PROVIDER: "Entra",
+    AUTH_ISSUER: tenantIssuer,
+    AUTH_AUDIENCE: "api-client-guid",
+    AUTH_API_ID_URI: "api://magpie.example.com"
+  });
+  assert.equal(overridden.provider, "entra");
+  assert.equal(overridden.apiIdUri, "api://magpie.example.com");
+});
+
+test("an unrecognised AUTH_PROVIDER is a configuration error", () => {
+  assert.equal(parseAuthProvider(undefined), "auth0");
+  assert.equal(parseAuthProvider(" "), "auth0");
+  assert.equal(parseAuthProvider("ENTRA"), "entra");
+  assert.equal(parseAuthProvider("okta"), undefined);
+  assert.throws(() => authSettingsFromEnv({ AUTH_PROVIDER: "okta" }), /AUTH_PROVIDER/);
+  assert.deepEqual(
+    authEnvIssues({ AUTH_PROVIDER: "okta" }, { requireEndpoints: false, context: "x" }).map((i) => i.variable),
+    ["AUTH_PROVIDER"]
+  );
+});
+
+test("authEnvIssues accepts either the generic or the legacy names", () => {
+  const opts = { requireEndpoints: true, context: "when auth is enabled" };
+  assert.deepEqual(authEnvIssues({ AUTH0_DOMAIN: "t.auth0.com", AUTH0_AUDIENCE: "https://a/api" }, opts), []);
+  assert.deepEqual(
+    authEnvIssues({ AUTH_PROVIDER: "entra", AUTH_ISSUER: "https://i/v2.0", AUTH_AUDIENCE: "guid" }, opts),
+    []
+  );
+  const missing = authEnvIssues({}, opts);
+  assert.deepEqual(
+    missing.map((i) => i.variable),
+    ["AUTH_AUDIENCE", "AUTH_ISSUER"]
+  );
+  assert.match(missing[0]?.message ?? "", /AUTH0_AUDIENCE/);
+  assert.match(missing[1]?.message ?? "", /AUTH0_ISSUER_BASE_URL/);
+  const placeholder = authEnvIssues(
+    { AUTH_AUDIENCE: "https://markdown-magpie.local/api", AUTH_ISSUER: "https://i" },
+    opts
+  );
+  assert.match(placeholder[0]?.message ?? "", /placeholder/);
+  // Endpoint checks are skipped when not required.
+  assert.deepEqual(authEnvIssues({}, { requireEndpoints: false, context: "" }), []);
+});
+
+test("auth0 principals: isService only from the positive gty marker", async () => {
+  const human = await signedToken("read:knowledge");
+  const service = await signedToken("read:knowledge", { claims: { gty: CLIENT_CREDENTIALS_GRANT_TYPE } });
+  for (const [token, expected] of [
+    [human, false],
+    [service, true]
+  ] as const) {
+    const verifier = createRemoteAuthVerifier({ required: true, issuer, audience, jwks: async () => token.jwks });
+    assert.equal((await verifier.verify(token.token)).isService, expected);
+  }
+});
+
+const entraIssuer = "https://login.microsoftonline.com/tenant-id/v2.0";
+const entraAudience = "api-client-guid";
+
+function entraVerifier(jwks: JSONWebKeySet) {
+  return createRemoteAuthVerifier({
+    provider: "entra",
+    required: true,
+    issuer: entraIssuer,
+    audience: entraAudience,
+    rolesClaim: "roles",
+    jwks: async () => jwks
+  });
+}
+
+test("entra user token: scp scopes, oid subject, roles claim as user roles, not a service", async () => {
+  const { token, jwks } = await signedToken("", {
+    issuer: entraIssuer,
+    audience: entraAudience,
+    subject: "pairwise-sub",
+    claims: { scp: "read:knowledge ask:knowledge", oid: "user-oid", roles: ["kb-ops"], idtyp: "user" }
+  });
+
+  const principal = await entraVerifier(jwks).verify(token);
+
+  assert.equal(principal.subject, "user-oid");
+  assert.deepEqual(principal.scopes, ["read:knowledge", "ask:knowledge"]);
+  assert.deepEqual(principal.roles, ["kb-ops"]);
+  assert.equal(principal.isService, false);
+});
+
+test("entra user token without oid falls back to sub; no roles claim stays undefined", async () => {
+  const { token, jwks } = await signedToken("", {
+    issuer: entraIssuer,
+    audience: entraAudience,
+    subject: "pairwise-sub",
+    claims: { scp: "read:knowledge" }
+  });
+
+  const principal = await entraVerifier(jwks).verify(token);
+
+  assert.equal(principal.subject, "pairwise-sub");
+  assert.equal(principal.roles, undefined);
+  assert.equal(principal.isService, false);
+});
+
+test("entra app token: roles become scopes, NOT user roles, and idtyp=app marks a service", async () => {
+  const { token, jwks } = await signedToken("", {
+    issuer: entraIssuer,
+    audience: entraAudience,
+    subject: "sp-oid",
+    claims: { roles: ["read:knowledge", "act:on-behalf-of"], oid: "sp-oid", idtyp: "app" }
+  });
+
+  const principal = await entraVerifier(jwks).verify(token);
+
+  assert.equal(principal.subject, "sp-oid");
+  assert.deepEqual(principal.scopes, ["read:knowledge", "act:on-behalf-of"]);
+  assert.equal(principal.roles, undefined);
+  assert.equal(principal.isService, true);
+});
+
+test("entra app token WITHOUT the idtyp optional claim fails closed (no scopes, not a service)", async () => {
+  const { token, jwks } = await signedToken("", {
+    issuer: entraIssuer,
+    audience: entraAudience,
+    claims: { roles: ["read:knowledge"], oid: "sp-oid" }
+  });
+
+  const principal = await entraVerifier(jwks).verify(token);
+
+  assert.deepEqual(principal.scopes, []);
+  assert.equal(principal.isService, false);
+});
+
+test("entra issuer is validated exactly (a trailing slash does not match)", async () => {
+  const { token, jwks } = await signedToken("", {
+    issuer: `${entraIssuer}/`,
+    audience: entraAudience,
+    claims: { scp: "read:knowledge" }
+  });
+
+  await assert.rejects(() => entraVerifier(jwks).verify(token), /invalid_token/);
 });

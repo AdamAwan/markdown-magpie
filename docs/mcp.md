@@ -329,11 +329,14 @@ whenever auth is enabled (see [Authentication & authorization](#authentication--
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `AUTH_REQUIRED` | `true` (fails closed) | Set `false` to explicitly disable Auth0 bearer-token validation. Any other/unset value keeps auth required. |
-| `AUTH0_ISSUER_BASE_URL` | — | Full Auth0 issuer (e.g. `https://your-tenant.eu.auth0.com`). |
-| `AUTH0_DOMAIN` | — | Alternative to the issuer base; the issuer becomes `https://<domain>/`. |
-| `AUTH0_AUDIENCE` | `https://markdown-magpie.local/api` | API identifier the token must carry. |
-| `AUTH0_JWKS_URI` | `https://<domain>/.well-known/jwks.json` | Optional JWKS endpoint override (derived from the trailing-slash-normalised issuer when unset). |
+| `AUTH_REQUIRED` | `true` (fails closed) | Set `false` to explicitly disable bearer-token validation. Any other/unset value keeps auth required. |
+| `AUTH_PROVIDER` | `auth0` | `auth0` or `entra`. Selects the token claim mapping and the downstream client-credentials request shape (see [authorization.md](./authorization.md#identity-providers)). |
+| `AUTH_ISSUER` (legacy `AUTH0_ISSUER_BASE_URL`) | — | Full issuer (e.g. `https://your-tenant.eu.auth0.com`; Entra `https://login.microsoftonline.com/<tenant-id>/v2.0`). |
+| `AUTH0_DOMAIN` | — | Legacy alternative to the issuer; the issuer becomes `https://<domain>/`. |
+| `AUTH_AUDIENCE` (legacy `AUTH0_AUDIENCE`) | `https://markdown-magpie.local/api` | Web API identifier — the audience of the MCP's downstream service token. |
+| `AUTH_JWKS_URI` (legacy `AUTH0_JWKS_URI`) | provider default | Optional JWKS endpoint override (Auth0 `<issuer>.well-known/jwks.json`). |
+| `AUTH_TOKEN_URL` | provider default | Client-credentials endpoint for the downstream service token (Auth0 `<issuer>oauth/token`; Entra `.../oauth2/v2.0/token`). |
+| `AUTH_API_ID_URI` | `api://<AUTH_AUDIENCE>` | Entra only: the downstream token requests `<AUTH_API_ID_URI>/.default`. |
 | `MCP_AUTH_TOKEN` | — | stdio only: bearer token presented to the API. Required unless `AUTH_REQUIRED=false` (the stdio server fails fast at startup otherwise). |
 
 ## Requirements

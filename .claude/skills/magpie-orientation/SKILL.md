@@ -272,8 +272,11 @@ design in `maintenance-redesign.md`). When in doubt, trust the code.
     (`read`/`manage`/`ask` per flow) mapped from IdP role names via
     `KNOWLEDGE_ROLE_GRANTS`. Fail-closed with deliberate permissive carve-outs (auth off,
     no grants configured, genuine M2M tokens — identified by the POSITIVE
-    `gty: "client-credentials"` marker, not merely an absent roles claim, so a human
-    token whose roles claim went missing fails CLOSED). Cross-flow ids read as 404,
+    `Principal.isService` marker (Auth0 `gty: "client-credentials"`, Entra
+    `idtyp: "app"`), not merely an absent roles claim, so a human token whose roles
+    claim went missing fails CLOSED). Identity provider is `AUTH_PROVIDER` = `auth0`
+    (default) | `entra`; all per-provider differences live in
+    `packages/auth/src/provider.ts` (legacy `AUTH0_*` env names still work). Cross-flow ids read as 404,
     not 403 (`docs/authorization.md`).
 19. **MCP** (`apps/mcp`) — thin client over the HTTP API, stdio + Streamable-HTTP
     transports, **ten tools**: `kb_ask`, `kb_search`, `kb_citation`, `kb_feedback`,
@@ -377,7 +380,7 @@ apps/
              Only needed for MCP clients; skip for a normal run.
 packages/
   core/       Shared domain types + provider interfaces (incl. ProvenanceClaim).
-  auth/       Auth0 token validation + on-behalf-of helpers.
+  auth/       Auth0 / Entra token validation + on-behalf-of helpers.
   db/         SQL migrations (0001–0060; see the write-a-migration skill).
   git/        Git sync + PR adapters: ensureGitCheckout (blobless partial clones),
               PR status/mergeability polling, LocalGitProposalPublisher, checkout locks.

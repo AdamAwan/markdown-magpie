@@ -11,14 +11,15 @@ const GRANTS: KnowledgeRoleGrants = {
   "kb-super": { "*": ["read", "manage", "ask", "admin"] }
 };
 
-function principal(roles: string[] | undefined): Pick<Principal, "roles" | "payload"> {
-  return { roles, payload: {} };
+function principal(roles: string[] | undefined): Pick<Principal, "roles" | "isService"> {
+  return { roles, isService: false };
 }
 
 // A genuine machine-to-machine token: no roles claim, but carrying the POSITIVE
-// Auth0 client-credentials grant-type marker.
-function m2m(): Pick<Principal, "roles" | "payload"> {
-  return { roles: undefined, payload: { gty: "client-credentials" } };
+// service marker (Auth0 gty: "client-credentials" / Entra idtyp: "app"), which the
+// verifier surfaces as isService.
+function m2m(): Pick<Principal, "roles" | "isService"> {
+  return { roles: undefined, isService: true };
 }
 
 test("no grants configured -> feature inactive, everything allowed", () => {

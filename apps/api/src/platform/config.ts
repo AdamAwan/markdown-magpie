@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { AI_PROVIDERS, isAiProviderName, type AiProviderName } from "@magpie/jobs";
-import { authSettingsFromEnv, isAuthRequired } from "@magpie/auth";
+import { authEnvIssues, authSettingsFromEnv, isAuthRequired, type ResolvedAuthSettings } from "@magpie/auth";
 import { resolveTelemetryConfig, type TelemetryConfig } from "@magpie/telemetry";
 import { parseAiPricing, type AiPricingEntry } from "./ai-pricing.js";
 import {
@@ -54,12 +54,9 @@ export interface AppConfig {
     connectionTimeoutMs: number;
     statementTimeoutMs: number;
   };
-  auth: {
-    required: boolean;
-    issuer: string;
-    audience: string;
-    jwksUri?: string;
-  };
+  // Resolved by @magpie/auth (provider, issuer, audience, JWKS/token URLs, roles
+  // claim) from the generic AUTH_* names or their legacy AUTH0_* fallbacks.
+  auth: ResolvedAuthSettings;
   port: number;
   cors: {
     // The Access-Control-Allow-Origin policy. "*" (the default) allows any
@@ -406,6 +403,10 @@ const schema = z
     AZURE_DEVOPS_PAT: optionalString,
 
     AUTH_REQUIRED: optionalString,
+    AUTH_PROVIDER: optionalString,
+    AUTH_ISSUER: optionalString,
+    AUTH_AUDIENCE: optionalString,
+    // Legacy Auth0 names, still honoured as fallbacks for the generic ones above.
     AUTH0_DOMAIN: optionalString,
     AUTH0_ISSUER_BASE_URL: optionalString,
     AUTH0_AUDIENCE: optionalString,
@@ -424,42 +425,22 @@ const schema = z
   .superRefine((env, ctx) => {
     // Auth wiring lives in @magpie/auth; we only assert coherence here so a
     // misconfigured deployment fails at boot instead of on the first request.
+    // AUTH_PROVIDER is always validated; the audience/issuer (generic AUTH_* names
+    // or their legacy AUTH0_* fallbacks) only when auth is enabled.
     //
     // Auth fails CLOSED: it is required unless an operator EXPLICITLY opts out
     // with AUTH_REQUIRED=false. An unset/blank/typo'd value leaves auth on, so a
-    // misconfiguration can never silently expose the whole API.
-    if (!isAuthRequired(env.AUTH_REQUIRED)) {
-      return;
-    }
-    if (env.AUTH0_AUDIENCE === undefined) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["AUTH0_AUDIENCE"],
-        message: "is required when auth is enabled (set AUTH_REQUIRED=false to disable auth)"
-      });
-    } else if (env.AUTH0_AUDIENCE === PLACEHOLDER_AUDIENCE) {
-      // The committed example value is a stand-in, not a real Auth0 API
-      // identifier; booting with it would accept tokens for a non-existent
-      // audience, so reject it rather than start in an insecure state.
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["AUTH0_AUDIENCE"],
-        message: `must be a real Auth0 API identifier, not the placeholder ${PLACEHOLDER_AUDIENCE} (set AUTH_REQUIRED=false to disable auth)`
-      });
-    }
-    if (env.AUTH0_ISSUER_BASE_URL === undefined && env.AUTH0_DOMAIN === undefined) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["AUTH0_ISSUER_BASE_URL"],
-        message:
-          "AUTH0_ISSUER_BASE_URL or AUTH0_DOMAIN is required when auth is enabled (set AUTH_REQUIRED=false to disable auth)"
-      });
+    // misconfiguration can never silently expose the whole API. The placeholder
+    // audience from .env.example is rejected too: booting with it would accept
+    // tokens for a non-existent audience.
+    const issues = authEnvIssues(env, {
+      requireEndpoints: isAuthRequired(env.AUTH_REQUIRED),
+      context: "when auth is enabled (set AUTH_REQUIRED=false to disable auth)"
+    });
+    for (const issue of issues) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: [issue.variable], message: issue.message });
     }
   });
-
-// The committed placeholder audience from .env.example. Real deployments must
-// override it; it is rejected at boot when auth is enabled (see superRefine).
-const PLACEHOLDER_AUDIENCE = "https://markdown-magpie.local/api";
 
 // Parses CORS_ALLOWED_ORIGINS into the Access-Control-Allow-Origin policy.
 // Unset, blank, or a literal "*" means allow any origin (the backwards-compatible

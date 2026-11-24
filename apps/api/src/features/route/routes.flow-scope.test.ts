@@ -18,6 +18,7 @@ function principal(roles: string[] | undefined): Principal {
     subject: "auth0|tester",
     scopes: ["ask:knowledge"],
     roles,
+    isService: false,
     payload: {}
   };
 }
@@ -27,6 +28,7 @@ function m2m(): Principal {
     subject: "svc@clients",
     scopes: ["ask:knowledge"],
     roles: undefined,
+    isService: true,
     payload: { gty: "client-credentials" }
   };
 }

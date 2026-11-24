@@ -14,7 +14,7 @@ interface QuestionnaireDetailProps {
   onApproveItem: (questionnaireId: string, itemId: string, use?: ApproveUse) => Promise<boolean>;
   onApproveReused: (questionnaireId: string) => Promise<number | undefined>;
   // Downloads through the console's authed apiDownload (a plain <a href> omits
-  // the bearer token and 401s under Auth0 — see ConsoleProvider.exportQuestionnaire).
+  // the bearer token and 401s when auth is enabled — see ConsoleProvider.exportQuestionnaire).
   onExport: (id: string, format: "md" | "csv") => Promise<void>;
   // Live asserted-claim findings for this questionnaire's flow (questionnaire
   // ingestion). Absent for consoles that do not surface the register; the

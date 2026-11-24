@@ -206,7 +206,7 @@ describe("GET /api/knowledge/changes", () => {
 // evaluation itself is unit-tested in auth/capabilities.test.ts.
 describe("GET /api/knowledge/changes flow scoping", () => {
   function principal(roles: string[]): Principal {
-    return { subject: "auth0|tester", scopes: ["read:knowledge"], roles, payload: {} };
+    return { subject: "auth0|tester", scopes: ["read:knowledge"], roles, isService: false, payload: {} };
   }
 
   function appFor(ctx: AppContext, who: Principal): Hono {

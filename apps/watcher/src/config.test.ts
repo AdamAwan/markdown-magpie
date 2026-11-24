@@ -106,6 +106,34 @@ describe("loadWatcherConfig — production (auth enabled, fail-fast)", () => {
     assert.equal(config.auth.audience, "https://api.magpie.example/api");
   });
 
+  it("defaults to the auth0 provider with legacy env names", () => {
+    assert.equal(loadWatcherConfig(validProdEnv()).auth.provider, "auth0");
+  });
+
+  it("derives the Entra token endpoint and API ID URI from the generic names", () => {
+    const env = validProdEnv({
+      AUTH_PROVIDER: "entra",
+      AUTH_ISSUER: "https://login.microsoftonline.com/tenant-id/v2.0",
+      AUTH_AUDIENCE: "api-client-guid"
+    });
+    delete env.AUTH0_AUDIENCE;
+    delete env.AUTH0_ISSUER_BASE_URL;
+    const config = loadWatcherConfig(env);
+    assert.equal(config.auth.provider, "entra");
+    assert.equal(config.auth.tokenUrl, "https://login.microsoftonline.com/tenant-id/oauth2/v2.0/token");
+    assert.equal(config.auth.audience, "api-client-guid");
+    assert.equal(config.auth.apiIdUri, "api://api-client-guid");
+  });
+
+  it("honours an explicit AUTH_TOKEN_URL", () => {
+    const config = loadWatcherConfig(validProdEnv({ AUTH_TOKEN_URL: "https://idp.example/token" }));
+    assert.equal(config.auth.tokenUrl, "https://idp.example/token");
+  });
+
+  it("rejects an unrecognised AUTH_PROVIDER even when auth is disabled", () => {
+    assert.throws(() => loadWatcherConfig({ AUTH_REQUIRED: "false", AUTH_PROVIDER: "okta" }), /AUTH_PROVIDER/);
+  });
+
   it("defaults AUTH_REQUIRED to enabled (fails closed) when unset", () => {
     // No AUTH_REQUIRED at all → auth on → the prod gates apply.
     assert.throws(() => loadWatcherConfig({}), /API_BASE_URL/);

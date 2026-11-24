@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { authSettingsFromEnv, isAuthRequired } from "@magpie/auth";
+import { authEnvIssues, authSettingsFromEnv, isAuthRequired, type AuthProvider } from "@magpie/auth";
 import { resolveTelemetryConfig, type TelemetryConfig } from "@magpie/telemetry";
 
 // The validated, env-derived static configuration for the watcher. Read and
@@ -39,20 +39,18 @@ export interface WatcherConfig {
     // required together.
     clientId?: string;
     clientSecret?: string;
-    // Derived from the same Auth0 settings the API validates against.
+    // Derived from the same auth settings (provider, issuer, audience) the API
+    // validates against — see authSettingsFromEnv in @magpie/auth.
+    provider: AuthProvider;
     tokenUrl: string;
     audience: string;
+    // Entra only: the API's Application ID URI (client-credentials scope base).
+    apiIdUri?: string;
   };
   // OpenTelemetry export. Off unless an OTLP endpoint is configured; resolved via
   // a helper (not the zod schema) because the SDK reads the rest of its own OTEL_* env.
   telemetry: TelemetryConfig;
 }
-
-// The committed placeholder audience from .env.example. Real deployments must
-// override it; it is rejected at boot when auth is enabled and the M2M
-// client-credentials grant is in use (see superRefine), because fetching a token
-// for a non-existent audience would fail on the first claim.
-const PLACEHOLDER_AUDIENCE = "https://markdown-magpie.local/api";
 
 // An unset var and an explicitly-empty one (a blank `FOO=` line, common in .env
 // files) both mean "use the default", so collapse "" to undefined before any
@@ -84,6 +82,10 @@ const schema = z
     WATCHER_API_CLIENT_SECRET: optionalString,
 
     AUTH_REQUIRED: optionalString,
+    AUTH_PROVIDER: optionalString,
+    AUTH_ISSUER: optionalString,
+    AUTH_AUDIENCE: optionalString,
+    // Legacy Auth0 names, still honoured as fallbacks for the generic ones above.
     AUTH0_DOMAIN: optionalString,
     AUTH0_ISSUER_BASE_URL: optionalString,
     AUTH0_AUDIENCE: optionalString
@@ -105,7 +107,23 @@ const schema = z
     // Auth fails CLOSED (see isAuthRequired): required unless an operator
     // EXPLICITLY sets AUTH_REQUIRED=false. In that dev posture localhost defaults
     // and a missing credential are fine — the local API skips token validation.
-    if (!isAuthRequired(env.AUTH_REQUIRED)) {
+    // An unrecognised AUTH_PROVIDER is an error in every posture.
+    const authRequired = isAuthRequired(env.AUTH_REQUIRED);
+    const hasClientCreds = hasClientId && hasClientSecret;
+
+    // The client-credentials grant fetches a token for a specific audience from
+    // the provider's token endpoint; a placeholder/missing audience or issuer would
+    // fail that fetch on the first claim, so validate them (generic AUTH_* names or
+    // their legacy AUTH0_* fallbacks) when that path is used.
+    const authIssues = authEnvIssues(env, {
+      requireEndpoints: authRequired && hasClientCreds,
+      context: "for the watcher's client-credentials grant when auth is enabled"
+    });
+    for (const issue of authIssues) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: [issue.variable], message: issue.message });
+    }
+
+    if (!authRequired) {
       return;
     }
 
@@ -122,7 +140,6 @@ const schema = z
     // Without a credential the watcher sends no Authorization header and 401s
     // every claim against an auth-enabled API — silent forever. Fail fast unless
     // either the M2M client-credentials quad or the legacy static token is set.
-    const hasClientCreds = hasClientId && hasClientSecret;
     const hasStaticToken = env.API_TOKEN !== undefined;
     if (!hasClientCreds && !hasStaticToken) {
       ctx.addIssue({
@@ -131,33 +148,6 @@ const schema = z
         message:
           "the watcher needs a credential when auth is enabled: set WATCHER_API_CLIENT_ID + WATCHER_API_CLIENT_SECRET (preferred) or API_TOKEN (set AUTH_REQUIRED=false to disable auth for local dev)"
       });
-    }
-
-    // The client-credentials grant fetches a token for a specific audience from
-    // the tenant's token endpoint; a placeholder/missing audience or issuer would
-    // fail that fetch on the first claim, so validate them when that path is used.
-    if (hasClientCreds) {
-      if (env.AUTH0_AUDIENCE === undefined) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ["AUTH0_AUDIENCE"],
-          message: "is required for the watcher's client-credentials grant when auth is enabled"
-        });
-      } else if (env.AUTH0_AUDIENCE === PLACEHOLDER_AUDIENCE) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ["AUTH0_AUDIENCE"],
-          message: `must be a real Auth0 API identifier, not the placeholder ${PLACEHOLDER_AUDIENCE}`
-        });
-      }
-      if (env.AUTH0_ISSUER_BASE_URL === undefined && env.AUTH0_DOMAIN === undefined) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ["AUTH0_ISSUER_BASE_URL"],
-          message:
-            "AUTH0_ISSUER_BASE_URL or AUTH0_DOMAIN is required for the watcher's client-credentials grant when auth is enabled"
-        });
-      }
     }
   });
 
@@ -176,8 +166,8 @@ export function loadWatcherConfig(env: NodeJS.ProcessEnv = process.env): Watcher
   }
 
   const parsed = result.data;
-  // Resolve the token endpoint and audience from the same Auth0 settings the API
-  // validates against, so the watcher and API agree on both.
+  // Resolve the provider, token endpoint and audience from the same auth settings
+  // the API validates against, so the watcher and API agree on all of them.
   const authSettings = authSettingsFromEnv(env);
 
   return {
@@ -190,8 +180,10 @@ export function loadWatcherConfig(env: NodeJS.ProcessEnv = process.env): Watcher
       staticToken: parsed.API_TOKEN,
       clientId: parsed.WATCHER_API_CLIENT_ID,
       clientSecret: parsed.WATCHER_API_CLIENT_SECRET,
-      tokenUrl: `${authSettings.issuer}oauth/token`,
-      audience: authSettings.audience
+      provider: authSettings.provider,
+      tokenUrl: authSettings.tokenUrl,
+      audience: authSettings.audience,
+      apiIdUri: authSettings.apiIdUri
     },
     telemetry: resolveTelemetryConfig(env, "watcher")
   };

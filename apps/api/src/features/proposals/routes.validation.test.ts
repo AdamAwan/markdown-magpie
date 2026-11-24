@@ -13,7 +13,13 @@ import { proposalRoutes } from "./routes.js";
 // bounded only by the global 4 MB body cap and persisted downstream (#293).
 
 function principal(): Principal {
-  return { subject: "auth0|tester", scopes: ["read:knowledge", "manage:knowledge"], roles: ["*"], payload: {} };
+  return {
+    subject: "auth0|tester",
+    scopes: ["read:knowledge", "manage:knowledge"],
+    roles: ["*"],
+    isService: false,
+    payload: {}
+  };
 }
 
 function appFor(ctx: AppContext): Hono {

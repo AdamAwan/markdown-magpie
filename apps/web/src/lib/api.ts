@@ -1,20 +1,5 @@
 const configuredApiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL;
 
-declare global {
-  interface Window {
-    __MAGPIE_CONFIG__?: {
-      apiBaseUrl?: string;
-      mcpUrl?: string;
-      auth?: {
-        domain?: string;
-        clientId?: string;
-        audience?: string;
-        redirectUri?: string;
-      };
-    };
-  }
-}
-
 function resolveApiBaseUrl(): string {
   if (configuredApiBaseUrl) {
     return configuredApiBaseUrl.replace(/\/+$/, "").replace(/\/api$/, "");
@@ -42,8 +27,8 @@ export interface ApiRequestOptions {
   timeoutMs?: number;
 }
 
-// When Auth0 is configured the AuthProvider registers a provider that returns a
-// fresh access token. When auth is disabled no provider is set and requests go
+// When auth (Auth0 or Entra, via OIDC) is configured the AuthProvider registers
+// a provider that returns a fresh access token. When auth is disabled no provider is set and requests go
 // out without an Authorization header, exactly as before.
 let accessTokenProvider: (() => Promise<string>) | undefined;
 
@@ -113,7 +98,7 @@ export async function apiDelete<T>(path: string, options: ApiRequestOptions = {}
 }
 
 // Download a file from the API. Unlike an <a href> the browser would navigate to
-// directly (which carries no Authorization header and 401s under Auth0), this
+// directly (which carries no Authorization header and 401s when auth is enabled), this
 // fetches with the same bearer token as every other call, then saves the
 // response body via a temporary object-URL anchor. Prefers the filename the
 // server sets in Content-Disposition, falling back to `fallbackFilename`.

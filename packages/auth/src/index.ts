@@ -1,4 +1,5 @@
 import { createLocalJWKSet, createRemoteJWKSet, jwtVerify, type JSONWebKeySet, type JWTPayload } from "jose";
+import { AUTH_PROVIDERS, parseAuthProvider, providerProfile, type AuthProvider } from "./provider.js";
 
 export { createApiTokenProvider, type ApiTokenProvider, type ApiTokenProviderConfig } from "./api-token.js";
 export {
@@ -9,53 +10,64 @@ export {
   parseOnBehalfRoles,
   resolveEffectivePrincipal
 } from "./on-behalf-of.js";
+export {
+  AUTH_PROVIDERS,
+  CLIENT_CREDENTIALS_GRANT_TYPE,
+  DEFAULT_ROLES_CLAIM,
+  isClientCredentialsToken,
+  parseAuthProvider,
+  rolesFromPayload,
+  type AuthProvider
+} from "./provider.js";
 
 export interface AuthSettings {
+  // Which identity provider issues the tokens. Optional so existing settings
+  // literals need not change; absent means auth0 (the pre-Entra behaviour).
+  provider?: AuthProvider;
   required: boolean;
+  // The exact `iss` value tokens must carry (already normalised per provider).
   issuer: string;
   audience: string;
   jwksUri?: string;
-  // The full JWT claim key that carries the principal's role names, emitted by the
-  // Auth0 post-login Action (a namespaced custom claim, e.g.
-  // "https://magpie.wastedcake.com/roles"). Auth0 requires custom claims to be
-  // namespaced with a URL, so this is the whole key, not just the namespace.
+  // The full JWT claim key that carries the principal's role names. For Auth0 it is
+  // emitted by the post-login Action (a namespaced custom claim, e.g.
+  // "https://magpie.wastedcake.com/roles" — Auth0 requires custom claims to be
+  // namespaced with a URL, so this is the whole key); for Entra it is `roles`.
   // Optional so existing settings literals need not change; the verifier falls back
-  // to DEFAULT_ROLES_CLAIM when unset.
+  // to the provider's default when unset.
   rolesClaim?: string;
+  // The client-credentials token endpoint backend services (watcher, MCP) use to
+  // obtain their own machine-to-machine token.
+  tokenUrl?: string;
+  // Entra only: the API's Application ID URI, used to build scope strings
+  // (`${apiIdUri}/.default` for client-credentials).
+  apiIdUri?: string;
 }
 
-// The default roles claim key. Kept in sync with the Auth0 post-login Action that
-// emits it; overridable via AUTH_ROLES_CLAIM for other deployments/namespaces.
-export const DEFAULT_ROLES_CLAIM = "https://magpie.wastedcake.com/roles";
-
-// Auth0 stamps the OAuth grant used to mint an access token in the standard `gty`
-// claim. Machine-to-machine (client-credentials) tokens carry
-// `gty: "client-credentials"`. This is the POSITIVE service-identity signal — present
-// regardless of whether a post-login Action ran — as opposed to inferring "service"
-// from an ABSENT roles claim, which a misconfigured IdP can also produce for a human
-// token (dropping flow-scoped authorization open). See docs/authorization.md.
-export const CLIENT_CREDENTIALS_GRANT_TYPE = "client-credentials";
-
-// True when the verified token was minted via the client-credentials grant, i.e. it
-// belongs to a service / machine-to-machine identity (the watcher, the MCP gateway).
-export function isClientCredentialsToken(payload: JWTPayload): boolean {
-  return payload["gty"] === CLIENT_CREDENTIALS_GRANT_TYPE;
-}
+// Settings as resolved from the environment: every provider-derived field is filled
+// in (apiIdUri stays optional — it only exists for Entra).
+export type ResolvedAuthSettings = AuthSettings &
+  Required<Pick<AuthSettings, "provider" | "jwksUri" | "rolesClaim" | "tokenUrl">>;
 
 export interface Principal {
   subject: string;
   scopes: string[];
   // Role names carried by the token, or absent/`undefined` when the token has no
-  // roles claim at all. The distinction is load-bearing: interactive user logins run
-  // the Auth0 Action and carry the claim (possibly an empty array), whereas
-  // machine-to-machine (client-credentials) tokens never do. Downstream flow-scoped
-  // authorization treats a PRESENT claim as a role-aware principal whose flow access
-  // is fully determined by these roles. An ABSENT claim is NOT sufficient on its own
-  // to grant the service-identity bypass — that requires the POSITIVE
-  // client-credentials marker (`isClientCredentialsToken`), so a human token whose
-  // roles claim was dropped fails CLOSED rather than open (see
+  // roles claim at all. The distinction is load-bearing: interactive user logins
+  // carry the claim (possibly an empty array), whereas machine-to-machine
+  // (client-credentials) tokens never do — and for Entra app tokens the `roles`
+  // claim holds application PERMISSIONS, which the verifier maps to scopes, never
+  // to roles. Downstream flow-scoped authorization treats a PRESENT claim as a
+  // role-aware principal whose flow access is fully determined by these roles. An
+  // ABSENT claim is NOT sufficient on its own to grant the service-identity bypass
+  // — that requires the POSITIVE service marker (`isService`), so a human token
+  // whose roles claim was dropped fails CLOSED rather than open (see
   // apps/api/src/auth/capabilities.ts).
   roles?: string[];
+  // True only when the token carries the provider's POSITIVE service-identity
+  // marker: Auth0 `gty: "client-credentials"`, Entra `idtyp: "app"`. Computed once
+  // at verify time so callers never read provider-specific claims.
+  isService: boolean;
   payload: JWTPayload;
 }
 
@@ -78,17 +90,104 @@ export function isAuthRequired(value: string | undefined): boolean {
   return value?.trim().toLowerCase() !== "false";
 }
 
-export function authSettingsFromEnv(env: NodeJS.ProcessEnv = process.env): AuthSettings {
-  const issuerBase =
-    env.AUTH0_ISSUER_BASE_URL ?? (env.AUTH0_DOMAIN ? `https://${env.AUTH0_DOMAIN}` : "https://markdown-magpie.local");
-  const issuer = trimTrailingSlash(issuerBase) + "/";
+// The committed placeholder audience from .env.example. Real deployments must
+// override it; the API and watcher reject it at boot when auth is enabled.
+const PLACEHOLDER_AUDIENCE = "https://markdown-magpie.local/api";
+const PLACEHOLDER_ISSUER = "https://markdown-magpie.local";
+
+// The auth env vars the startup checks read: the new generic names alongside
+// their legacy Auth0 fallbacks.
+interface AuthEnv {
+  AUTH_PROVIDER?: string;
+  AUTH_ISSUER?: string;
+  AUTH_AUDIENCE?: string;
+  AUTH0_DOMAIN?: string;
+  AUTH0_ISSUER_BASE_URL?: string;
+  AUTH0_AUDIENCE?: string;
+}
+
+// First non-blank value: an explicitly-empty var (a blank `FOO=` line) means unset.
+function firstSet(...values: (string | undefined)[]): string | undefined {
+  return values.map((value) => value?.trim()).find((value) => value !== undefined && value !== "");
+}
+
+// AUTH_ISSUER, then the legacy AUTH0_ISSUER_BASE_URL, then `https://${AUTH0_DOMAIN}`.
+function configuredIssuer(env: AuthEnv): string | undefined {
+  const domain = firstSet(env.AUTH0_DOMAIN);
+  return firstSet(env.AUTH_ISSUER, env.AUTH0_ISSUER_BASE_URL) ?? (domain ? `https://${domain}` : undefined);
+}
+
+function configuredAudience(env: AuthEnv): string | undefined {
+  return firstSet(env.AUTH_AUDIENCE, env.AUTH0_AUDIENCE);
+}
+
+function invalidProviderMessage(value: string | undefined): string {
+  return `must be one of ${AUTH_PROVIDERS.join(", ")} (got "${value}")`;
+}
+
+export interface AuthEnvIssue {
+  variable: string;
+  message: string;
+}
+
+// Startup coherence checks shared by the API and watcher config loaders, so both
+// accept the new generic names OR their legacy Auth0 fallbacks identically.
+// AUTH_PROVIDER is always validated; the audience/issuer checks run only when
+// `requireEndpoints` (auth enabled, and — for the watcher — the client-credentials
+// grant in use). `context` completes each message ("is required <context>").
+export function authEnvIssues(env: AuthEnv, options: { requireEndpoints: boolean; context: string }): AuthEnvIssue[] {
+  const issues: AuthEnvIssue[] = [];
+  if (parseAuthProvider(env.AUTH_PROVIDER) === undefined) {
+    issues.push({ variable: "AUTH_PROVIDER", message: invalidProviderMessage(env.AUTH_PROVIDER) });
+  }
+  if (!options.requireEndpoints) {
+    return issues;
+  }
+  const audience = configuredAudience(env);
+  if (audience === undefined) {
+    issues.push({
+      variable: "AUTH_AUDIENCE",
+      message: `AUTH_AUDIENCE (or legacy AUTH0_AUDIENCE) is required ${options.context}`
+    });
+  } else if (audience === PLACEHOLDER_AUDIENCE) {
+    issues.push({
+      variable: "AUTH_AUDIENCE",
+      message: `AUTH_AUDIENCE (or legacy AUTH0_AUDIENCE) must be a real API identifier, not the placeholder ${PLACEHOLDER_AUDIENCE}, ${options.context}`
+    });
+  }
+  if (configuredIssuer(env) === undefined) {
+    issues.push({
+      variable: "AUTH_ISSUER",
+      message: `AUTH_ISSUER (or legacy AUTH0_ISSUER_BASE_URL / AUTH0_DOMAIN) is required ${options.context}`
+    });
+  }
+  return issues;
+}
+
+// Resolves the deployment's auth settings from the environment. The new generic
+// names (AUTH_*) win; the legacy Auth0 names remain as fallbacks so an existing
+// Auth0 deployment keeps working with no env changes. Provider-specific defaults
+// (issuer normalisation, JWKS/token URLs, roles claim, API ID URI) come from the
+// provider profile. Throws on an unrecognised AUTH_PROVIDER (the API and watcher
+// config loaders report it, with the rest of their config errors, first).
+export function authSettingsFromEnv(env: NodeJS.ProcessEnv = process.env): ResolvedAuthSettings {
+  const provider = parseAuthProvider(env.AUTH_PROVIDER);
+  if (provider === undefined) {
+    throw new Error(`AUTH_PROVIDER ${invalidProviderMessage(env.AUTH_PROVIDER)}`);
+  }
+  const profile = providerProfile(provider);
+  const issuer = profile.normaliseIssuer(configuredIssuer(env) ?? PLACEHOLDER_ISSUER);
+  const audience = configuredAudience(env) ?? PLACEHOLDER_AUDIENCE;
 
   return {
+    provider,
     required: isAuthRequired(env.AUTH_REQUIRED),
     issuer,
-    audience: env.AUTH0_AUDIENCE ?? "https://markdown-magpie.local/api",
-    jwksUri: env.AUTH0_JWKS_URI,
-    rolesClaim: env.AUTH_ROLES_CLAIM?.trim() || DEFAULT_ROLES_CLAIM
+    audience,
+    jwksUri: firstSet(env.AUTH_JWKS_URI, env.AUTH0_JWKS_URI) ?? profile.defaultJwksUri(issuer),
+    rolesClaim: firstSet(env.AUTH_ROLES_CLAIM) ?? profile.defaultRolesClaim,
+    tokenUrl: firstSet(env.AUTH_TOKEN_URL) ?? profile.defaultTokenUrl(issuer),
+    apiIdUri: firstSet(env.AUTH_API_ID_URI) ?? profile.defaultApiIdUri(audience)
   };
 }
 
@@ -101,22 +200,13 @@ export function hasScopes(principal: Principal, requiredScopes: readonly string[
   return requiredScopes.every((scope) => principal.scopes.includes(scope));
 }
 
-// Reads the role names from a verified token payload. Returns `undefined` when the
-// claim is absent (or not an array) — see Principal.roles for why that case is
-// distinct from an empty array. String entries only; anything non-string is dropped.
-export function rolesFromPayload(payload: JWTPayload, rolesClaim: string): string[] | undefined {
-  const claim = payload[rolesClaim];
-  if (!Array.isArray(claim)) {
-    return undefined;
-  }
-  return claim.filter((entry): entry is string => typeof entry === "string");
-}
-
 export function createRemoteAuthVerifier(options: AuthSettings & { jwks?: () => Promise<JSONWebKeySet> }) {
+  const profile = providerProfile(options.provider);
+  const rolesClaim = options.rolesClaim ?? profile.defaultRolesClaim;
   let remoteJwks: ReturnType<typeof createRemoteJWKSet> | undefined;
 
   function getRemoteJwks(): ReturnType<typeof createRemoteJWKSet> {
-    remoteJwks ??= createRemoteJWKSet(new URL(options.jwksUri ?? `${options.issuer}.well-known/jwks.json`));
+    remoteJwks ??= createRemoteJWKSet(new URL(options.jwksUri ?? profile.defaultJwksUri(options.issuer)));
     return remoteJwks;
   }
 
@@ -135,12 +225,7 @@ export function createRemoteAuthVerifier(options: AuthSettings & { jwks?: () => 
           requiredClaims: ["exp"]
         });
 
-        return {
-          subject: payload.sub ?? "",
-          scopes: typeof payload.scope === "string" ? payload.scope.split(/\s+/).filter(Boolean) : [],
-          roles: rolesFromPayload(payload, options.rolesClaim ?? DEFAULT_ROLES_CLAIM),
-          payload
-        };
+        return { ...profile.claims(payload, rolesClaim), payload };
       } catch (error) {
         if (error instanceof AuthError) {
           throw error;
@@ -149,8 +234,4 @@ export function createRemoteAuthVerifier(options: AuthSettings & { jwks?: () => 
       }
     }
   };
-}
-
-function trimTrailingSlash(value: string): string {
-  return value.replace(/\/+$/, "");
 }

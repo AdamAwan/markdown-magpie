@@ -11,13 +11,19 @@ import { adminRoutes } from "./routes.js";
 // manage:admin scope, so an ordinary admin can't wipe all data by scope alone.
 
 function principal(roles: string[] | undefined): Principal {
-  return { subject: "auth0|tester", scopes: ["manage:admin"], roles, payload: {} };
+  return { subject: "auth0|tester", scopes: ["manage:admin"], roles, isService: false, payload: {} };
 }
 
 // A genuine machine-to-machine token: no roles claim, but carrying the POSITIVE
 // Auth0 client-credentials marker (gty) that identifies a service identity.
 function m2m(): Principal {
-  return { subject: "svc@clients", scopes: ["manage:admin"], roles: undefined, payload: { gty: "client-credentials" } };
+  return {
+    subject: "svc@clients",
+    scopes: ["manage:admin"],
+    roles: undefined,
+    isService: true,
+    payload: { gty: "client-credentials" }
+  };
 }
 
 function appFor(ctx: AppContext, who: Principal): Hono {

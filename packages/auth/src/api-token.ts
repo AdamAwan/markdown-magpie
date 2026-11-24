@@ -7,17 +7,26 @@
 // (default 24h), so a static token silently breaks every call a day after deploy.
 // This module fetches the token at runtime via the OAuth client-credentials grant
 // and caches it until shortly before expiry, refreshing transparently.
+//
+// The request shape is provider-specific (see provider.ts): Auth0 takes a JSON body
+// naming the API `audience`; Entra takes a form-encoded body requesting the
+// `${apiIdUri}/.default` scope.
+
+import { providerProfile, type AuthProvider } from "./provider.js";
 
 export interface ApiTokenProviderConfig {
   // Legacy static token (e.g. MCP_API_AUTH_TOKEN / API_TOKEN). Used as a fallback
   // when no client-credentials config is supplied, preserving prior behaviour.
   staticToken?: string;
-  // Client-credentials configuration (preferred). All four are required to
-  // enable runtime token acquisition.
+  // Client-credentials configuration (preferred). clientId, clientSecret, tokenUrl
+  // and audience are required to enable runtime token acquisition — plus apiIdUri
+  // for Entra.
+  provider?: AuthProvider; // defaults to auth0
   clientId?: string;
   clientSecret?: string;
-  tokenUrl?: string; // e.g. https://<tenant>/oauth/token
+  tokenUrl?: string; // e.g. https://<tenant>/oauth/token (Auth0), .../oauth2/v2.0/token (Entra)
   audience?: string; // the downstream API audience (the web API identifier)
+  apiIdUri?: string; // Entra: the API's Application ID URI (scope = `${apiIdUri}/.default`)
 }
 
 interface TokenResponse {
@@ -32,27 +41,34 @@ const EXPIRY_SKEW_SECONDS = 60;
 export type ApiTokenProvider = () => Promise<string | undefined>;
 
 export function createApiTokenProvider(config: ApiTokenProviderConfig): ApiTokenProvider {
-  const canFetch = Boolean(config.clientId && config.clientSecret && config.tokenUrl && config.audience);
+  const { clientId, clientSecret, tokenUrl, audience } = config;
+  const request =
+    clientId && clientSecret && tokenUrl && audience
+      ? providerProfile(config.provider).clientCredentialsRequest({
+          clientId,
+          clientSecret,
+          audience,
+          apiIdUri: config.apiIdUri
+        })
+      : undefined;
 
-  if (!canFetch) {
+  if (!request || !tokenUrl) {
     // No M2M config: fall back to the static token (which may be undefined when
     // auth is disabled — callers then send no Authorization header).
     return async () => config.staticToken;
   }
 
+  // Captured after the guard so the hoisted fetchToken closure sees narrowed values.
+  const endpoint = tokenUrl;
+  const { contentType, body: requestBody } = request;
   let cached: { token: string; expiresAt: number } | undefined;
   let inflight: Promise<string> | undefined;
 
   async function fetchToken(): Promise<string> {
-    const response = await fetch(config.tokenUrl as string, {
+    const response = await fetch(endpoint, {
       method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        grant_type: "client_credentials",
-        client_id: config.clientId,
-        client_secret: config.clientSecret,
-        audience: config.audience
-      })
+      headers: { "content-type": contentType },
+      body: requestBody
     });
 
     const text = await response.text();

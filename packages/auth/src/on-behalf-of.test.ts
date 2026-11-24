@@ -9,7 +9,7 @@ import {
 } from "./on-behalf-of.js";
 
 function principal(scopes: string[], roles?: string[]): Principal {
-  return { subject: "svc@clients", scopes, roles, payload: {} };
+  return { subject: "svc@clients", scopes, roles, isService: true, payload: {} };
 }
 
 test("serialize/parse round-trips role names", () => {
@@ -52,6 +52,8 @@ test("a trusted caller with a roles header is re-scoped to the forwarded user", 
   // as the user. roles present (even []) flips the service bypass into enforcement.
   assert.equal(effective.subject, "auth0|user-1");
   assert.deepEqual(effective.roles, ["kb-hr-curators"]);
+  // The delegated principal stands for the user, not the gateway service.
+  assert.equal(effective.isService, false);
 });
 
 test("an empty forwarded roles list is fail-closed (role-aware with no flow access)", () => {
