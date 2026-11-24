@@ -1,10 +1,10 @@
-# Signy McSignface — forced, audited sign-off for questionnaires
+# Hot Potato — forced, audited sign-off for questionnaires
 
 > **Status:** idea (2026-11-24). Not built, not scheduled. A companion tool that *uses*
 > Magpie; it is deliberately **not** part of Magpie.
 >
-> **Name:** in the spirit of Boaty McBoatface. Hard to forget, and it says exactly what
-> it wants from you.
+> **Name:** a questionnaire review is a hot potato: nobody wants to hold it. Hot Potato
+> makes sure someone has to, and keeps a record of who did.
 
 ## The problem
 
@@ -24,7 +24,7 @@ dodged**.
 ## The idea
 
 1. A user uploads the questionnaire (Excel / Word / etc.).
-2. Signy uses Magpie to fill it in.
+2. Hot Potato uses Magpie to fill it in.
 3. **Every row is assigned a named owner**, who must sign it off.
 4. Once every row is signed off, **one person signs off the whole document**.
 5. Every action is recorded in an audit trail, so it's always clear who signed what, and
@@ -40,8 +40,8 @@ From [questionnaires.md](../questionnaires.md):
   corpus"*, not *"I'm accountable for this"*.
 - Export to `.md` / `.csv`.
 
-Signy adds the **people** layer: ownership, sign-off, chasing, final sign-off, audit.
-Keep *sign-off* (Signy) and *approval* (Magpie) separate; a signed-off row can then
+Hot Potato adds the **people** layer: ownership, sign-off, chasing, final sign-off, audit.
+Keep *sign-off* (Hot Potato) and *approval* (Magpie) separate; a signed-off row can then
 approve the answer in Magpie so it becomes reusable.
 
 ## Key design points

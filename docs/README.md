@@ -24,7 +24,7 @@ the end state. They are excellent for **"why was this built this way"** and usel
 from a living spec as provenance, never the reverse.
 
 `docs/ideas/` holds **unbuilt ideas** — short write-ups of things we might build, often
-outside Magpie itself (e.g. [Signy McSignface](./ideas/signy-mcsignface.md)). Not specs; nothing there is a
+outside Magpie itself (e.g. [Hot Potato](./ideas/hot-potato.md)). Not specs; nothing there is a
 claim about current behaviour.
 
 ## Conventions
