@@ -13,6 +13,7 @@ import {
   isClientCredentialsToken,
   parseAuthProvider,
   parseBearerToken,
+  providerProfile,
   rolesFromPayload
 } from "./index.js";
 
@@ -244,6 +245,64 @@ test("authSettingsFromEnv for entra keeps the issuer verbatim and derives Entra 
   });
   assert.equal(overridden.provider, "entra");
   assert.equal(overridden.apiIdUri, "api://magpie.example.com");
+});
+
+test("MCP authorization server default: auth0 advertises the issuer, entra the versioned oauth21 identifier", () => {
+  assert.equal(providerProfile("auth0").defaultMcpAuthorizationServer("https://t.auth0.com/"), "https://t.auth0.com/");
+  assert.equal(
+    providerProfile(undefined).defaultMcpAuthorizationServer("https://t.auth0.com/"),
+    "https://t.auth0.com/"
+  );
+  const entra = providerProfile("entra");
+  assert.equal(
+    entra.defaultMcpAuthorizationServer("https://login.microsoftonline.com/tenant-id/v2.0"),
+    "https://login.microsoftonline.com/tenant-id/oauth21/2026-08"
+  );
+  // Tolerates an issuer configured with a trailing slash.
+  assert.equal(
+    entra.defaultMcpAuthorizationServer("https://login.microsoftonline.com/tenant-id/v2.0/"),
+    "https://login.microsoftonline.com/tenant-id/oauth21/2026-08"
+  );
+});
+
+test("MCP advertised scopes: auth0 short names, entra qualified with the MCP Application ID URI", () => {
+  const idUri = "https://mcp.contoso.com/mcp";
+  assert.equal(providerProfile("auth0").advertisedMcpScope("read:knowledge", idUri), "read:knowledge");
+  assert.equal(
+    providerProfile("entra").advertisedMcpScope("read:knowledge", idUri),
+    "https://mcp.contoso.com/mcp/read:knowledge"
+  );
+});
+
+test("MCP resource issues: none for auth0; entra needs issuer, MCP_AUDIENCE and an Application-ID-URI-shaped URL", () => {
+  const url = "https://mcp.contoso.com/mcp";
+  const ok = { resourceUrl: url, resourceIdUri: url, audienceConfigured: true, issuerConfigured: true };
+  const localhost = "http://localhost:4001/mcp";
+  assert.deepEqual(
+    providerProfile("auth0").mcpResourceIssues({
+      resourceUrl: localhost,
+      resourceIdUri: localhost,
+      audienceConfigured: false,
+      issuerConfigured: false
+    }),
+    []
+  );
+  const entra = providerProfile("entra");
+  const first = (overrides: Partial<typeof ok>): string => entra.mcpResourceIssues({ ...ok, ...overrides })[0] ?? "";
+  assert.deepEqual(entra.mcpResourceIssues(ok), []);
+  assert.equal(entra.mcpResourceIssues({ ...ok, audienceConfigured: false }).length, 1);
+  assert.match(first({ audienceConfigured: false }), /MCP_AUDIENCE/);
+  assert.match(first({ issuerConfigured: false }), /AUTH_ISSUER/);
+  assert.match(first({ resourceUrl: localhost, resourceIdUri: localhost }), /https/);
+  assert.match(first({ resourceUrl: `${url}/`, resourceIdUri: `${url}/` }), /MCP_RESOURCE_URL .* trailing slash/);
+  assert.match(
+    first({ resourceUrl: "https://mcp.contoso.com/", resourceIdUri: "https://mcp.contoso.com/" }),
+    /non-empty path/
+  );
+  assert.match(first({ resourceUrl: "not a url", resourceIdUri: "not a url" }), /valid URL/);
+  assert.match(first({ resourceIdUri: "api://mcp/" }), /MCP_API_ID_URI .* trailing slash/);
+  assert.match(first({ resourceIdUri: 'api://m"cp' }), /MCP_API_ID_URI .* quotes/);
+  assert.match(first({ resourceIdUri: "api://m cp" }), /whitespace/);
 });
 
 test("an unrecognised AUTH_PROVIDER is a configuration error", () => {

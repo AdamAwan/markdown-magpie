@@ -16,6 +16,7 @@ export {
   DEFAULT_ROLES_CLAIM,
   isClientCredentialsToken,
   parseAuthProvider,
+  providerProfile,
   rolesFromPayload,
   type AuthProvider
 } from "./provider.js";
@@ -112,7 +113,8 @@ function firstSet(...values: (string | undefined)[]): string | undefined {
 }
 
 // AUTH_ISSUER, then the legacy AUTH0_ISSUER_BASE_URL, then `https://${AUTH0_DOMAIN}`.
-function configuredIssuer(env: AuthEnv): string | undefined {
+// Undefined when none is set (authSettingsFromEnv then falls back to a placeholder).
+export function configuredIssuer(env: AuthEnv): string | undefined {
   const domain = firstSet(env.AUTH0_DOMAIN);
   return firstSet(env.AUTH_ISSUER, env.AUTH0_ISSUER_BASE_URL) ?? (domain ? `https://${domain}` : undefined);
 }

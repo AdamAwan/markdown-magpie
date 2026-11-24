@@ -360,9 +360,12 @@ JWKS and token endpoints, the roles claim, and the client-credentials scope
   not Auth0 `sub`s, so everything keyed on the subject (per-principal rate-limit
   buckets, the subject in logs and on-behalf-of headers) refers to new identities,
   and role assignments must be recreated as Entra app-role assignments.
-- **MCP inbound login** (protected-resource metadata, MCP client sign-in) is still
-  Auth0-oriented; Entra support there is a later phase. The MCP's downstream
-  service token already follows `AUTH_PROVIDER`.
+- **MCP client sign-in** needs its own Entra app registration (Application ID URI =
+  the MCP URL, delegated scopes for the tools) and `MCP_AUDIENCE` set to that app's
+  client-ID GUID; the protected-resource metadata then advertises the versioned
+  `.../oauth21/2026-08` authorization server (CIMD clients need no pre-registration)
+  and fully qualified scopes. See [mcp.md](./mcp.md#entra-id-mcp-client-sign-in). The
+  MCP's downstream service token follows `AUTH_PROVIDER` as above.
 
 ## Considered and rejected
 
@@ -389,7 +392,7 @@ JWKS and token endpoints, the roles claim, and the client-credentials scope
 | Concern | Code |
 | --- | --- |
 | Token verification, env resolution (`authSettingsFromEnv`, `authEnvIssues`) | `packages/auth/src/index.ts` |
-| Per-provider profiles: issuer/JWKS/token URL defaults, claim mapping, `isService`, client-credentials request shape | `packages/auth/src/provider.ts` |
+| Per-provider profiles: issuer/JWKS/token URL defaults, claim mapping, `isService`, client-credentials request shape, MCP advertisement (authorization server, scope form, Entra resource checks) | `packages/auth/src/provider.ts` |
 | Runtime M2M service-token acquisition (client-credentials) | `packages/auth/src/api-token.ts` |
 | On-behalf-of delegation (headers, scope, resolver) | `packages/auth/src/on-behalf-of.ts` |
 | `requireAuth` / `requireScopes` + delegation wiring | `apps/api/src/auth/middleware.ts` |

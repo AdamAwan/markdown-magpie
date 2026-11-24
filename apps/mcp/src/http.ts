@@ -8,10 +8,12 @@ import type { Express, NextFunction, Request, Response } from "express";
 import {
   AuthError,
   authSettingsFromEnv,
+  configuredIssuer,
   createApiTokenProvider,
   createRemoteAuthVerifier,
   hasScopes,
   parseBearerToken,
+  providerProfile,
   type ApiTokenProvider,
   type AuthProvider,
   type AuthSettings,
@@ -73,12 +75,62 @@ const TOOL_SCOPES: Record<string, string> = {
 // The audience therefore comes from MCP_AUDIENCE, defaulting to the public /mcp
 // resource URL. The web API (apps/api) is unchanged and still validates against
 // AUTH_AUDIENCE (legacy AUTH0_AUDIENCE).
-export function mcpAuthSettingsFromEnv(env: NodeJS.ProcessEnv, resourceUrl: string): AuthSettings {
-  return { ...authSettingsFromEnv(env), audience: env.MCP_AUDIENCE ?? resourceUrl };
+//
+// Entra (AUTH_PROVIDER=entra) differs in three ways, all computed by the provider
+// profile in @magpie/auth: a v2 token's `aud` is the MCP app's client-ID GUID, so
+// MCP_AUDIENCE must be set explicitly (checked by mcpStartupIssues); the advertised
+// authorization server is the versioned `.../oauth21/2026-08` identifier rather
+// than the issuer; and advertised scopes are qualified with the MCP app's
+// Application ID URI (MCP_API_ID_URI, default the resource URL). See docs/mcp.md.
+export function mcpAuthSettingsFromEnv(env: NodeJS.ProcessEnv, resourceUrl: string): McpAuthSettings {
+  const settings = authSettingsFromEnv(env);
+  return {
+    ...settings,
+    audience: envValue(env.MCP_AUDIENCE) ?? resourceUrl,
+    authorizationServer:
+      envValue(env.MCP_AUTHORIZATION_SERVER) ??
+      providerProfile(settings.provider).defaultMcpAuthorizationServer(settings.issuer),
+    resourceIdUri: envValue(env.MCP_API_ID_URI) ?? resourceUrl
+  };
+}
+
+// Provider-specific configuration problems that must stop the HTTP MCP server from
+// starting. Only relevant when auth is required (with auth off nothing is verified
+// or advertised to a client that would use it). Auth0 has none; Entra requires an
+// explicit MCP_AUDIENCE and an Application-ID-URI-shaped MCP_RESOURCE_URL.
+export function mcpStartupIssues(env: NodeJS.ProcessEnv, auth: McpAuthSettings, resourceUrl: string): string[] {
+  if (!auth.required) {
+    return [];
+  }
+  return providerProfile(auth.provider).mcpResourceIssues({
+    resourceUrl,
+    resourceIdUri: auth.resourceIdUri ?? resourceUrl,
+    audienceConfigured: envValue(env.MCP_AUDIENCE) !== undefined,
+    issuerConfigured: configuredIssuer(env) !== undefined
+  });
+}
+
+// A blank `FOO=` line means unset.
+function envValue(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+// The MCP server's inbound auth settings: the shared verifier settings plus what
+// the protected-resource metadata advertises.
+export interface McpAuthSettings extends AuthSettings {
+  // The authorization server advertised in the protected-resource metadata
+  // (MCP_AUTHORIZATION_SERVER). Defaults to the provider profile's value derived
+  // from the issuer: the issuer itself for Auth0, `.../oauth21/2026-08` for Entra.
+  authorizationServer?: string;
+  // The MCP server's own Application ID URI (MCP_API_ID_URI), which Entra scopes
+  // are qualified with in `scopes_supported` and challenges. Defaults to the
+  // resource URL. Unused for Auth0.
+  resourceIdUri?: string;
 }
 
 export interface HttpMcpOptions {
-  auth: AuthSettings & { jwks?: () => Promise<JSONWebKeySet> };
+  auth: McpAuthSettings & { jwks?: () => Promise<JSONWebKeySet> };
   // The public URL of this protected resource (the /mcp endpoint). Used for the
   // protected-resource metadata document and the discovery challenge.
   resourceUrl: string;
@@ -415,11 +467,19 @@ export function createHttpMcpApp(options: HttpMcpOptions): Express {
   });
 
   // ── OAuth protected-resource metadata ─────────────────────────────────────
+  // Scopes are advertised in the provider's form (Entra: fully qualified with the
+  // MCP Application ID URI) while tokens are still checked against the short names.
+  const profile = providerProfile(options.auth.provider);
+  const resourceIdUri = options.auth.resourceIdUri ?? options.resourceUrl;
+  const advertisedScopes = (scopes: readonly string[]): string[] =>
+    scopes.map((scope) => profile.advertisedMcpScope(scope, resourceIdUri));
   const metadata = {
     resource: options.resourceUrl,
-    authorization_servers: [options.auth.issuer],
+    authorization_servers: [
+      options.auth.authorizationServer ?? profile.defaultMcpAuthorizationServer(options.auth.issuer)
+    ],
     bearer_methods_supported: ["header"],
-    scopes_supported: [...SCOPES_SUPPORTED]
+    scopes_supported: advertisedScopes(SCOPES_SUPPORTED)
   };
 
   // The discovery URL is derived from the resource origin so we never hardcode
@@ -434,11 +494,34 @@ export function createHttpMcpApp(options: HttpMcpOptions): Express {
 
   const verifier = options.auth.required ? createRemoteAuthVerifier(options.auth) : undefined;
 
+  // 401: point the client at the metadata and name the scopes to request (the
+  // same set and form as scopes_supported, so Auth0 clients that already fell back
+  // to scopes_supported request exactly what they did before).
   function challenge(res: Response): void {
     res
       .status(401)
-      .set("WWW-Authenticate", `Bearer resource_metadata="${metadataUrl}"`)
+      .set(
+        "WWW-Authenticate",
+        `Bearer resource_metadata="${metadataUrl}", scope="${metadata.scopes_supported.join(" ")}"`
+      )
       .json({ error: "unauthorized" });
+  }
+
+  // 403: RFC 6750 §3.1 insufficient_scope, so a client can step up its
+  // authorization. The `scope` names the scopes the token already holds PLUS the
+  // ones this request needs (in SCOPES_SUPPORTED order): a client re-authorizing
+  // with only the missing scope would lose the ones it had and ping-pong.
+  function insufficientScope(res: Response, principal: Principal, requiredScopes: readonly string[]): void {
+    const stepUpScopes = SCOPES_SUPPORTED.filter(
+      (scope) => principal.scopes.includes(scope) || requiredScopes.includes(scope)
+    );
+    res
+      .status(403)
+      .set(
+        "WWW-Authenticate",
+        `Bearer error="insufficient_scope", scope="${advertisedScopes(stepUpScopes).join(" ")}", resource_metadata="${metadataUrl}"`
+      )
+      .json({ error: "forbidden" });
   }
 
   // Validates the inbound token (when auth is required) and, for tools/call,
@@ -463,7 +546,7 @@ export function createHttpMcpApp(options: HttpMcpOptions): Express {
 
     const requiredScopes = requiredToolScopes(req.body);
     if (requiredScopes.length > 0 && !hasScopes(principal, requiredScopes)) {
-      res.status(403).json({ error: "forbidden" });
+      insufficientScope(res, principal, requiredScopes);
       return { ok: false };
     }
 
@@ -562,8 +645,13 @@ function toolScopeForMessage(message: unknown): string | undefined {
 // ── Main ───────────────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
-  const resourceUrl = process.env.MCP_RESOURCE_URL ?? `http://localhost:${port}/mcp`;
+  const resourceUrl = envValue(process.env.MCP_RESOURCE_URL) ?? `http://localhost:${port}/mcp`;
   const auth = mcpAuthSettingsFromEnv(process.env, resourceUrl);
+  const startupIssues = mcpStartupIssues(process.env, auth, resourceUrl);
+  if (startupIssues.length > 0) {
+    logger.error(`Invalid MCP auth configuration:\n- ${startupIssues.join("\n- ")}`);
+    process.exit(1);
+  }
 
   const apiToken = process.env.MCP_API_AUTH_TOKEN;
   const apiClientId = process.env.MCP_API_CLIENT_ID;

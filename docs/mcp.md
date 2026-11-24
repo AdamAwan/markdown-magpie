@@ -60,8 +60,8 @@ no generative or embedding work of its own, and proxies every request to the API
 
 - **M8** — Auth **fails closed** and is shared with the API via the `@magpie/auth` package:
   it is required unless an operator explicitly sets `AUTH_REQUIRED=false`. Any other or
-  unset value keeps auth required. When enabled, Auth0-issued tokens are validated locally
-  against the Auth0 JWKS — see the [Auth0 design](superpowers/specs/2026-06-18-auth0-mcp-gating-design.md).
+  unset value keeps auth required. When enabled, tokens issued by the configured provider
+  (`AUTH_PROVIDER`: Auth0 or Entra ID) are validated locally against its JWKS — see the [Auth0 design](superpowers/specs/2026-06-18-auth0-mcp-gating-design.md).
 - **M9** — **stdio auth.** The stdio transport presents a single bearer token
   (`MCP_AUTH_TOKEN`) to the API on every call. When `AUTH_REQUIRED=true` and the token is
   missing, the server MUST fail fast at startup with a non-zero exit
@@ -69,14 +69,19 @@ no generative or embedding work of its own, and proxies every request to the API
 - **M10** — **HTTP transport is an OAuth protected resource.** It serves protected-resource
   metadata at `/.well-known/oauth-protected-resource` and
   `/.well-known/oauth-protected-resource/mcp` (advertising the resource URL from
-  `MCP_RESOURCE_URL`, the Auth0 authorization server, and the supported scopes). Every
-  request to `/mcp` requires `Authorization: Bearer <token>` when `AUTH_REQUIRED=true`; a
-  missing or invalid token returns **401** with a
-  `WWW-Authenticate: Bearer resource_metadata="..."` header pointing at the metadata
-  document. Methods other than `tools/call` (`initialize`, `tools/list`, `ping`, …) need
-  only a valid token.
+  `MCP_RESOURCE_URL`, the authorization server, and the supported scopes — see M14 for
+  the per-provider forms). Every request to `/mcp` requires `Authorization: Bearer
+  <token>` when `AUTH_REQUIRED=true`; a missing or invalid token returns **401** with a
+  `WWW-Authenticate: Bearer resource_metadata="...", scope="..."` header pointing at the
+  metadata document and listing the advertised scopes (space-separated, the same form as
+  `scopes_supported`). Methods other than `tools/call` (`initialize`, `tools/list`,
+  `ping`, …) need only a valid token.
 - **M11** — **Per-tool scope.** `tools/call` additionally enforces the required scope for
-  the named tool (table below); insufficient scope returns **403**. JSON-RPC **batch**
+  the named tool (table below); insufficient scope returns **403** with an RFC 6750
+  `WWW-Authenticate: Bearer error="insufficient_scope", scope="...", resource_metadata="..."`
+  step-up challenge. Its `scope` is the union of the token's already-granted advertised
+  scopes and the scope(s) the request needs (in `scopes_supported` order and form), so a
+  client that re-authorizes with it never drops a scope it held. JSON-RPC **batch**
   (array) bodies are enforced too: the required scope is the **union** across every batched
   `tools/call`, and a token missing any one of them is rejected with **403** before the
   batch is dispatched — closing a bypass where an array body has no top-level `method` and
@@ -98,6 +103,26 @@ no generative or embedding work of its own, and proxies every request to the API
   permission — grant it on the API in Auth0 to activate per-user enforcement on the MCP
   surface. See
   [authorization.md](authorization.md#mcp-acting-as-the-end-user-on-behalf-of-delegation).
+- **M14** — **Provider-specific advertisement** (computed by the provider profile in
+  `packages/auth/src/provider.ts`). With `AUTH_PROVIDER=auth0` the metadata advertises the
+  issuer as the authorization server and the short scope names (unchanged from before
+  Entra support). With `AUTH_PROVIDER=entra` it advertises the versioned authorization
+  server `https://login.microsoftonline.com/<tenant-id>/oauth21/2026-08` (derived from
+  `AUTH_ISSUER` by replacing its trailing `/v2.0`) and **fully qualified** scopes
+  (`<MCP_API_ID_URI>/<scope>`, `MCP_API_ID_URI` defaulting to `MCP_RESOURCE_URL`).
+  `MCP_AUTHORIZATION_SERVER` overrides the advertised authorization server for either
+  provider. Inbound tokens are still verified against `AUTH_ISSUER` (Entra tokens carry
+  `iss = .../v2.0`) and their **short** scope names (`scp`). See
+  [Entra ID](#entra-id-mcp-client-sign-in).
+- **M15** — **Entra startup checks.** With `AUTH_PROVIDER=entra` and auth required, the
+  HTTP server refuses to start unless `MCP_AUDIENCE` is set explicitly (a v2 token's `aud`
+  is the MCP app's client-ID GUID, never the resource URL, so the default could never
+  match), an issuer is configured (`AUTH_ISSUER` or a legacy name — otherwise the
+  advertised authorization server would be derived from a placeholder), `MCP_RESOURCE_URL`
+  is an `https` URL with a non-empty path and no trailing slash (it doubles as the MCP
+  app's Application ID URI), and the effective Application ID URI (`MCP_API_ID_URI`, else
+  `MCP_RESOURCE_URL`) has no trailing slash and no quote, backslash or whitespace (it is
+  embedded in the quoted `scope="…"` challenge parameter) — `mcpStartupIssues`.
 
 Per-tool scopes (mirrors the API route scopes; enforced at the MCP boundary in
 `apps/mcp/src/http.ts`):
@@ -319,7 +344,10 @@ non-obvious behavioural contracts are numbered below.
 | `MCP_HTTP_HOST` | `127.0.0.1` | Host interface to bind to (set `0.0.0.0` to expose on all interfaces). |
 | `MCP_RESOURCE_URL` | `http://localhost:<port>/mcp` | Public URL of the `/mcp` endpoint, advertised in the OAuth protected-resource metadata. |
 | `MCP_API_AUTH_TOKEN` | — | Static service token for downstream API calls. Accepted as an alternative to the client-credentials pair below (see M12). |
-| `MCP_API_CLIENT_ID` / `MCP_API_CLIENT_SECRET` | — | Preferred auto-refreshing client-credentials pair for downstream API calls (M12). When set, tokens are minted at the Auth0 issuer's `oauth/token` for the API audience. |
+| `MCP_API_CLIENT_ID` / `MCP_API_CLIENT_SECRET` | — | Preferred auto-refreshing client-credentials pair for downstream API calls (M12). When set, tokens are minted at `AUTH_TOKEN_URL` (provider default) for the web API audience. |
+| `MCP_AUDIENCE` | `MCP_RESOURCE_URL` | Audience inbound user tokens are validated against — the MCP server's own audience, distinct from `AUTH_AUDIENCE`. **Required** with `AUTH_PROVIDER=entra`: the MCP app registration's client-ID GUID (M15). |
+| `MCP_AUTHORIZATION_SERVER` | auth0: the issuer; entra: `https://login.microsoftonline.com/<tenant-id>/oauth21/2026-08` | Authorization server advertised in the protected-resource metadata (M14). |
+| `MCP_API_ID_URI` | `MCP_RESOURCE_URL` | Entra only: the MCP app's Application ID URI that advertised scopes are qualified with (M14). |
 
 ### Auth variables (both transports)
 
@@ -338,6 +366,52 @@ whenever auth is enabled (see [Authentication & authorization](#authentication--
 | `AUTH_TOKEN_URL` | provider default | Client-credentials endpoint for the downstream service token (Auth0 `<issuer>oauth/token`; Entra `.../oauth2/v2.0/token`). |
 | `AUTH_API_ID_URI` | `api://<AUTH_AUDIENCE>` | Entra only: the downstream token requests `<AUTH_API_ID_URI>/.default`. |
 | `MCP_AUTH_TOKEN` | — | stdio only: bearer token presented to the API. Required unless `AUTH_REQUIRED=false` (the stdio server fails fast at startup otherwise). |
+
+### Entra ID (MCP client sign-in)
+
+Follows Microsoft's *Secure an MCP server with Microsoft Entra ID* guide. Single tenant
+only; set up the shared `AUTH_PROVIDER=entra` configuration first
+([authorization.md](./authorization.md#using-microsoft-entra-id)).
+
+1. **Register the MCP server as its own Entra app** (separate from the API app and from
+   the MCP's downstream M2M app).
+   - **Expose an API** → set the **Application ID URI to the canonical MCP endpoint URL**
+     (e.g. `https://mcp.contoso.com/mcp`: HTTPS, non-empty path, no trailing slash) — the
+     same value as `MCP_RESOURCE_URL`.
+   - Add **delegated scopes** named after the tool scopes: `read:knowledge`,
+     `ask:knowledge`, `feedback:questions`, `manage:jobs`, `manage:knowledge` (table
+     above).
+   - In the manifest set `"requestedAccessTokenVersion": 2` (v2 tokens only).
+2. **Configure the server:**
+
+   ```bash
+   AUTH_PROVIDER=entra
+   AUTH_ISSUER=https://login.microsoftonline.com/<tenant-id>/v2.0
+   MCP_RESOURCE_URL=https://mcp.contoso.com/mcp
+   MCP_AUDIENCE=<mcp-app-client-id>   # the GUID — v2 tokens' aud, NOT the URL
+   # MCP_API_ID_URI=...               # only if the Application ID URI differs from MCP_RESOURCE_URL
+   # MCP_AUTHORIZATION_SERVER=...     # only to override the derived .../oauth21/2026-08
+   ```
+
+   The metadata then advertises `authorization_servers:
+   ["https://login.microsoftonline.com/<tenant-id>/oauth21/2026-08"]` and scopes such as
+   `https://mcp.contoso.com/mcp/read:knowledge`; a token's `scp` carries the short name
+   (`read:knowledge`), which is what the per-tool gate checks.
+3. **Clients.** The `oauth21/2026-08` authorization server supports **Client ID Metadata
+   Document (CIMD)** clients, which need **no pre-registration**. A client without CIMD
+   support needs a pre-registered **public client** app (redirect URI per the client's
+   docs) with the MCP app's delegated scopes granted.
+
+Caveats:
+
+- **Client CIMD support varies.** Test the clients you rely on (Claude, VS Code, Cursor)
+  end to end before rolling out; fall back to a pre-registered public client where CIMD is
+  missing.
+- **The `oauth21/2026-08` endpoint is new.** If it misbehaves in your tenant,
+  `MCP_AUTHORIZATION_SERVER` can point clients elsewhere (e.g. the plain v2.0 authority,
+  which loses CIMD).
+- **Single tenant only** — tokens from other tenants fail issuer validation.
+- App-only (client-credentials) tokens to `/mcp` are not a supported sign-in path.
 
 ## Requirements
 
@@ -449,7 +523,8 @@ Continue, etc.).
 | --- | --- |
 | stdio transport: framing, JSON-RPC dispatch, tool declarations, `callTool` | `apps/mcp/src/main.ts` |
 | stdio auth guard (`resolveStdioAuthToken`) | `apps/mcp/src/main.ts` |
-| Streamable HTTP app: OAuth protected-resource metadata, per-tool/batch scope gate, `/mcp`, `/health` | `apps/mcp/src/http.ts` |
+| Streamable HTTP app: OAuth protected-resource metadata, 401/403 challenges, per-tool/batch scope gate, `/mcp`, `/health`, startup checks (`mcpStartupIssues`) | `apps/mcp/src/http.ts` |
+| Per-provider MCP advertisement (authorization server, scope form) and Entra resource checks | `packages/auth/src/provider.ts` |
 | HTTP service credential (client-credentials or static token) + on-behalf-of headers | `apps/mcp/src/http.ts` |
 | API proxy client: `askQuestion`, `listFlows`, `getJson`/`postJson`, job wait/poll, `submitFeedback`, `generateOutline`, `approveSeedPlan`, `getCitationSections`, `listKnowledgeChanges`, questionnaire calls | `apps/mcp/src/kb-client.ts` |
 | Logger (stderr sink for stdio) | `apps/mcp/src/logger.ts` |
@@ -459,8 +534,9 @@ Continue, etc.).
 ## Tests (behavioural contract)
 
 `apps/mcp/src/main.test.ts` (tool list + `callTool` dispatch, stdio auth guard),
-`apps/mcp/src/http.test.ts` (transport, OAuth metadata, per-tool and batch-union scope
-gating, service credential), `apps/mcp/src/kb-client.test.ts` (API proxying, job
+`apps/mcp/src/http.test.ts` (transport, OAuth metadata for Auth0 and Entra, 401/403
+challenges, per-tool and batch-union scope gating, Entra startup checks, service
+credential), `packages/auth/src/index.test.ts` (provider MCP defaults), `apps/mcp/src/kb-client.test.ts` (API proxying, job
 wait/poll fallback, per-tool payload shaping), `apps/mcp/src/logger.test.ts`.
 
 ## Provenance (design history)
