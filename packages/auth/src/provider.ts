@@ -44,6 +44,16 @@ export function isClientCredentialsToken(payload: JWTPayload): boolean {
 // no scopes either).
 const ENTRA_APP_TOKEN_TYPE = "app";
 
+// The versioned Entra authorization-server identifier MCP clients are pointed at
+// from the MCP server's protected-resource metadata. Advertising
+// `https://login.microsoftonline.com/<tenant-id>/oauth21/2026-08` (instead of the
+// plain v2.0 authority) is what enables Client ID Metadata Document (CIMD) clients
+// to sign in without pre-registration ("Secure an MCP server with Microsoft Entra
+// ID"). It is an AUTHORIZATION SERVER identifier only: the tokens it issues still
+// carry `iss` = `https://login.microsoftonline.com/<tenant-id>/v2.0`, so the
+// verifier keeps validating against AUTH_ISSUER.
+const ENTRA_MCP_AUTHORIZATION_SERVER_VERSION = "oauth21/2026-08";
+
 // Parses AUTH_PROVIDER. Unset/blank means the default (auth0); a value is matched
 // case-insensitively. Returns undefined for anything unrecognised so callers can
 // report it as a configuration error.
@@ -77,6 +87,20 @@ interface ClientCredentialsParams {
   apiIdUri?: string;
 }
 
+// Inputs to the MCP server's provider-specific startup checks.
+interface McpResourceConfig {
+  // The public /mcp URL (MCP_RESOURCE_URL).
+  resourceUrl: string;
+  // The MCP app's Application ID URI advertised scopes are qualified with
+  // (MCP_API_ID_URI, defaulting to resourceUrl).
+  resourceIdUri: string;
+  // Whether MCP_AUDIENCE was set explicitly (rather than defaulted to resourceUrl).
+  audienceConfigured: boolean;
+  // Whether an issuer was configured (AUTH_ISSUER or a legacy fallback) rather
+  // than left at the placeholder.
+  issuerConfigured: boolean;
+}
+
 interface ProviderProfile {
   // Normalises the configured issuer into the exact string the token's `iss` must equal.
   normaliseIssuer(issuer: string): string;
@@ -89,6 +113,21 @@ interface ProviderProfile {
   // Builds the client-credentials token request, or undefined when the
   // provider-specific inputs it needs are missing.
   clientCredentialsRequest(params: ClientCredentialsParams): ClientCredentialsRequest | undefined;
+  // The authorization server the MCP server advertises in its protected-resource
+  // metadata, derived from the (normalised) issuer.
+  defaultMcpAuthorizationServer(issuer: string): string;
+  // The form in which the MCP server advertises a scope (protected-resource
+  // `scopes_supported`, WWW-Authenticate `scope=`). `resourceIdUri` is the MCP
+  // server's own Application ID URI (Entra). Inbound tokens still carry the SHORT
+  // scope name, so verification never uses this form.
+  advertisedMcpScope(scope: string, resourceIdUri: string): string;
+  // The scopes the MCP 401 challenge asks a client to sign in with (short names).
+  // `basic` is the user-level subset; elevated scopes are then requested by step-up
+  // (the 403 insufficient_scope challenge) only when a tool needs them.
+  mcpSignInScopes(scopes: { all: readonly string[]; basic: readonly string[] }): readonly string[];
+  // Provider-specific MCP configuration problems that must stop the HTTP MCP
+  // server from starting (auth required). Each entry is a complete message.
+  mcpResourceIssues(config: McpResourceConfig): string[];
 }
 
 const auth0Profile: ProviderProfile = {
@@ -112,7 +151,15 @@ const auth0Profile: ProviderProfile = {
       client_secret: clientSecret,
       audience
     })
-  })
+  }),
+  // Auth0 is its own authorization server; the issuer is advertised unchanged.
+  defaultMcpAuthorizationServer: (issuer) => issuer,
+  // Auth0 scopes are plain names; the MCP audience is chosen via RFC 8707 `resource`.
+  advertisedMcpScope: (scope) => scope,
+  // Auth0 filters requested scopes by per-user RBAC, so asking for all of them is
+  // safe and keeps clients without step-up support working.
+  mcpSignInScopes: ({ all }) => all,
+  mcpResourceIssues: () => []
 };
 
 const entraProfile: ProviderProfile = {
@@ -158,8 +205,79 @@ const entraProfile: ProviderProfile = {
         scope: `${apiIdUri}/.default`
       }).toString()
     };
+  },
+  defaultMcpAuthorizationServer: (issuer) => `${entraAuthorityBase(issuer)}/${ENTRA_MCP_AUTHORIZATION_SERVER_VERSION}`,
+  // Entra scopes are requested fully qualified: `<Application ID URI>/<scope>`.
+  advertisedMcpScope: (scope, resourceIdUri) => `${resourceIdUri}/${scope}`,
+  // Entra delegated scopes are not per-user, and an elevated scope that needs admin
+  // consent would block the WHOLE sign-in for users who can't consent. Sign in with
+  // the user-level scopes only; elevated ones are requested via step-up.
+  mcpSignInScopes: ({ basic }) => basic,
+  mcpResourceIssues: ({ resourceUrl, resourceIdUri, audienceConfigured, issuerConfigured }) => {
+    const issues: string[] = [];
+    if (!issuerConfigured) {
+      issues.push(
+        "AUTH_ISSUER must be set to https://login.microsoftonline.com/<tenant-id>/v2.0 when AUTH_PROVIDER=entra " +
+          "(tokens are verified against it and the advertised authorization server is derived from it)"
+      );
+    }
+    if (!audienceConfigured) {
+      issues.push(
+        "MCP_AUDIENCE must be set to the MCP app registration's client-ID GUID when AUTH_PROVIDER=entra " +
+          "(v2 access tokens carry aud = that GUID, never the MCP resource URL)"
+      );
+    }
+    issues.push(...entraMcpResourceUrlIssues(resourceUrl));
+    issues.push(...entraMcpApiIdUriIssues(resourceIdUri, resourceUrl));
+    return issues;
   }
 };
+
+// Characters that would break the quoted-string `scope="…"` WWW-Authenticate
+// parameter the qualified scopes are advertised in.
+const QUOTED_STRING_BREAKERS = /["\\\s]/;
+
+// The Application ID URI qualifies every advertised scope. When it defaults to the
+// resource URL, the resource-URL checks already cover its shape; an explicit
+// MCP_API_ID_URI gets the trailing-slash check too. Either way it must be safe to
+// embed in a quoted string.
+function entraMcpApiIdUriIssues(resourceIdUri: string, resourceUrl: string): string[] {
+  const explicit = resourceIdUri !== resourceUrl;
+  const name = explicit ? "MCP_API_ID_URI" : "MCP_RESOURCE_URL";
+  const issues: string[] = [];
+  if (explicit && resourceIdUri.endsWith("/")) {
+    issues.push(`MCP_API_ID_URI (${resourceIdUri}) must not end with a trailing slash when AUTH_PROVIDER=entra`);
+  }
+  if (QUOTED_STRING_BREAKERS.test(resourceIdUri)) {
+    issues.push(
+      `${name} (${resourceIdUri}) qualifies the advertised scopes when AUTH_PROVIDER=entra and must not contain ` +
+        "quotes, backslashes or whitespace"
+    );
+  }
+  return issues;
+}
+
+// The MCP resource URL doubles as the MCP app's Application ID URI, which Entra
+// requires to be an HTTPS URL with a non-empty path and no trailing slash.
+function entraMcpResourceUrlIssues(resourceUrl: string): string[] {
+  const prefix = `MCP_RESOURCE_URL (${resourceUrl}) is the MCP app's Application ID URI when AUTH_PROVIDER=entra and`;
+  let url: URL;
+  try {
+    url = new URL(resourceUrl);
+  } catch {
+    return [`${prefix} must be a valid URL`];
+  }
+  const issues: string[] = [];
+  if (url.protocol !== "https:") {
+    issues.push(`${prefix} must use https`);
+  }
+  if (url.pathname === "/" || url.pathname === "") {
+    issues.push(`${prefix} must have a non-empty path (e.g. https://mcp.example.com/mcp)`);
+  } else if (resourceUrl.endsWith("/")) {
+    issues.push(`${prefix} must not end with a trailing slash`);
+  }
+  return issues;
+}
 
 export function providerProfile(provider: AuthProvider | undefined): ProviderProfile {
   return provider === "entra" ? entraProfile : auth0Profile;

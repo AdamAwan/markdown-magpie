@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import request from "supertest";
 import { exportJWK, generateKeyPair, SignJWT, type JSONWebKeySet } from "jose";
-import { createHttpMcpApp, mcpAuthSettingsFromEnv, type HttpMcpOptions } from "./http.js";
+import { createHttpMcpApp, mcpAuthSettingsFromEnv, mcpStartupIssues, type HttpMcpOptions } from "./http.js";
 
 const authIssuer = "https://example.auth0.com/";
 const authAudience = "https://markdown-magpie.local/api";
@@ -599,4 +599,235 @@ test("auth disabled lets /mcp through without a token", async () => {
   const res = await request(app).post("/mcp").send({ jsonrpc: "2.0", id: 1, method: "tools/list" });
   assert.notEqual(res.status, 401);
   assert.notEqual(res.status, 403);
+});
+
+// ── Entra ID (AUTH_PROVIDER=entra) ──────────────────────────────────────────
+
+const entraIssuer = "https://login.microsoftonline.com/tenant-id/v2.0";
+const entraResourceUrl = "https://mcp.contoso.com/mcp";
+const entraMcpClientId = "11111111-2222-3333-4444-555555555555";
+const qualifiedScopes = [
+  "https://mcp.contoso.com/mcp/read:knowledge",
+  "https://mcp.contoso.com/mcp/ask:knowledge",
+  "https://mcp.contoso.com/mcp/feedback:questions",
+  "https://mcp.contoso.com/mcp/manage:jobs",
+  "https://mcp.contoso.com/mcp/manage:knowledge"
+];
+// Entra's 401 asks for the user-level scopes only (manage:* come via step-up).
+const qualifiedSignInScopes = qualifiedScopes.slice(0, 3);
+
+// A v2 Entra user token: iss = the v2.0 issuer, aud = the MCP app's client-ID GUID,
+// scopes in `scp` by their SHORT name.
+async function makeEntraAuth(): Promise<{
+  jwks: () => Promise<JSONWebKeySet>;
+  token: (scp: string[]) => Promise<string>;
+}> {
+  const { privateKey, publicKey } = await generateKeyPair("RS256", { extractable: true });
+  const jwks = {
+    keys: [{ ...(await exportJWK(publicKey)), kid: "entra-key", alg: "RS256", use: "sig" }]
+  } satisfies JSONWebKeySet;
+  return {
+    jwks: async () => jwks,
+    token: async (scp) => {
+      const jwt = await new SignJWT({ scp: scp.join(" "), oid: "user-oid", roles: [] })
+        .setProtectedHeader({ alg: "RS256", kid: "entra-key" })
+        .setSubject("pairwise-sub")
+        .setIssuer(entraIssuer)
+        .setAudience(entraMcpClientId)
+        .setIssuedAt()
+        .setExpirationTime("5m")
+        .sign(privateKey);
+      return `Bearer ${jwt}`;
+    }
+  };
+}
+
+const entraEnv: NodeJS.ProcessEnv = {
+  AUTH_PROVIDER: "entra",
+  AUTH_ISSUER: entraIssuer,
+  AUTH_AUDIENCE: "api-client-guid",
+  MCP_RESOURCE_URL: entraResourceUrl,
+  MCP_AUDIENCE: entraMcpClientId
+};
+
+test("auth0 metadata and challenge are unchanged apart from the challenge's scope parameter", async () => {
+  const settings = mcpAuthSettingsFromEnv(
+    { AUTH0_DOMAIN: "wastedcake.eu.auth0.com", AUTH0_AUDIENCE: "https://magpie.wastedcake.com" },
+    resourceUrl
+  );
+  assert.equal(settings.authorizationServer, "https://wastedcake.eu.auth0.com/");
+  const app = createHttpMcpApp(testOptions({ auth: settings }));
+  const metadata = await request(app).get("/.well-known/oauth-protected-resource");
+  assert.deepEqual(metadata.body, {
+    resource: resourceUrl,
+    authorization_servers: ["https://wastedcake.eu.auth0.com/"],
+    bearer_methods_supported: ["header"],
+    scopes_supported: ["read:knowledge", "ask:knowledge", "feedback:questions", "manage:jobs", "manage:knowledge"]
+  });
+  const res = await request(app).post("/mcp").send({ jsonrpc: "2.0", id: 1, method: "ping" });
+  assert.equal(
+    res.header["www-authenticate"],
+    'Bearer resource_metadata="https://mcp-magpie.wastedcake.com/.well-known/oauth-protected-resource", ' +
+      'scope="read:knowledge ask:knowledge feedback:questions manage:jobs manage:knowledge"'
+  );
+});
+
+test("an insufficient-scope 403 step-up challenge names the granted scopes plus the needed one", async () => {
+  const auth = await makeTestAuth();
+  const app = createHttpMcpApp(
+    testOptions({ auth: { required: true, issuer: authIssuer, audience: authAudience, jwks: auth.jwks } })
+  );
+  const res = await request(app)
+    .post("/mcp")
+    .set("authorization", await auth.token(["manage:jobs", "ask:knowledge", "not-advertised"]))
+    .send({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "kb_search", arguments: { query: "hi" } } });
+  assert.equal(res.status, 403);
+  // Union of the already-granted advertised scopes and the required one, in
+  // scopes_supported order — so re-authorizing never drops a granted scope.
+  assert.equal(
+    res.header["www-authenticate"],
+    'Bearer error="insufficient_scope", scope="read:knowledge ask:knowledge manage:jobs", ' +
+      'resource_metadata="https://mcp-magpie.wastedcake.com/.well-known/oauth-protected-resource"'
+  );
+});
+
+test("entra metadata advertises the oauth21/2026-08 authorization server and qualified scopes", async () => {
+  const settings = mcpAuthSettingsFromEnv(entraEnv, entraResourceUrl);
+  assert.equal(settings.audience, entraMcpClientId);
+  // Tokens are still verified against the v2.0 issuer; only the advertised AS differs.
+  assert.equal(settings.issuer, entraIssuer);
+  assert.equal(settings.authorizationServer, "https://login.microsoftonline.com/tenant-id/oauth21/2026-08");
+  assert.equal(settings.resourceIdUri, entraResourceUrl);
+
+  const app = createHttpMcpApp({ auth: settings, resourceUrl: entraResourceUrl, apiToken: "service-token" });
+  const res = await request(app).get("/.well-known/oauth-protected-resource");
+  assert.deepEqual(res.body, {
+    resource: entraResourceUrl,
+    authorization_servers: ["https://login.microsoftonline.com/tenant-id/oauth21/2026-08"],
+    bearer_methods_supported: ["header"],
+    scopes_supported: qualifiedScopes
+  });
+});
+
+test("entra metadata defaults are derived when the settings omit them", async () => {
+  const app = createHttpMcpApp({
+    auth: { provider: "entra", required: true, issuer: entraIssuer, audience: entraMcpClientId },
+    resourceUrl: entraResourceUrl,
+    apiToken: "service-token"
+  });
+  const res = await request(app).get("/.well-known/oauth-protected-resource");
+  const body = res.body as { authorization_servers: string[]; scopes_supported: string[] };
+  assert.deepEqual(body.authorization_servers, ["https://login.microsoftonline.com/tenant-id/oauth21/2026-08"]);
+  assert.deepEqual(body.scopes_supported, qualifiedScopes);
+});
+
+test("MCP_AUTHORIZATION_SERVER and MCP_API_ID_URI override the advertised values", async () => {
+  const settings = mcpAuthSettingsFromEnv(
+    { ...entraEnv, MCP_AUTHORIZATION_SERVER: "https://login.example/as", MCP_API_ID_URI: "api://magpie-mcp" },
+    entraResourceUrl
+  );
+  const app = createHttpMcpApp({ auth: settings, resourceUrl: entraResourceUrl, apiToken: "service-token" });
+  const res = await request(app).get("/.well-known/oauth-protected-resource");
+  const body = res.body as { resource: string; authorization_servers: string[]; scopes_supported: string[] };
+  assert.equal(body.resource, entraResourceUrl);
+  assert.deepEqual(body.authorization_servers, ["https://login.example/as"]);
+  assert.equal(body.scopes_supported[0], "api://magpie-mcp/read:knowledge");
+
+  // Auth0 honours the authorization-server override too; blank values mean unset.
+  const auth0 = mcpAuthSettingsFromEnv(
+    { AUTH0_DOMAIN: "t.auth0.com", MCP_AUTHORIZATION_SERVER: "https://as.example/", MCP_AUDIENCE: " " },
+    resourceUrl
+  );
+  assert.equal(auth0.authorizationServer, "https://as.example/");
+  assert.equal(auth0.audience, resourceUrl);
+});
+
+test("entra challenges name the qualified scopes", async () => {
+  const auth = await makeEntraAuth();
+  const settings = mcpAuthSettingsFromEnv(entraEnv, entraResourceUrl);
+  const app = createHttpMcpApp({
+    auth: { ...settings, jwks: auth.jwks },
+    resourceUrl: entraResourceUrl,
+    apiToken: "service-token"
+  });
+  const unauthenticated = await request(app).post("/mcp").send({ jsonrpc: "2.0", id: 1, method: "ping" });
+  assert.equal(unauthenticated.status, 401);
+  assert.equal(
+    unauthenticated.header["www-authenticate"],
+    `Bearer resource_metadata="https://mcp.contoso.com/.well-known/oauth-protected-resource", scope="${qualifiedSignInScopes.join(" ")}"`
+  );
+
+  const forbidden = await request(app)
+    .post("/mcp")
+    .set("authorization", await auth.token(["read:knowledge"]))
+    .send({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "kb_ask", arguments: { question: "hi" } } });
+  assert.equal(forbidden.status, 403);
+  assert.match(
+    forbidden.header["www-authenticate"],
+    /error="insufficient_scope", scope="https:\/\/mcp\.contoso\.com\/mcp\/read:knowledge https:\/\/mcp\.contoso\.com\/mcp\/ask:knowledge"/
+  );
+});
+
+test("an entra v2 token (aud = MCP client-ID GUID, short scp) passes the MCP boundary", async () => {
+  const auth = await makeEntraAuth();
+  const settings = mcpAuthSettingsFromEnv(entraEnv, entraResourceUrl);
+  const app = createHttpMcpApp({
+    auth: { ...settings, jwks: auth.jwks },
+    resourceUrl: entraResourceUrl,
+    apiToken: "service-token"
+  });
+  const res = await request(app)
+    .post("/mcp")
+    .set("authorization", await auth.token(["read:knowledge"]))
+    .send({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "kb_search", arguments: { query: "hi" } } });
+  // The short `scp` name satisfied the tool's scope gate (no Accept header, so the
+  // transport answers without dispatching the tool — no downstream API call).
+  assert.notEqual(res.status, 401);
+  assert.notEqual(res.status, 403);
+});
+
+test("mcpStartupIssues: entra requires MCP_AUDIENCE and an https, slash-free resource URL; auth0 is unaffected", () => {
+  const issues = (env: NodeJS.ProcessEnv, url: string): string[] =>
+    mcpStartupIssues(env, mcpAuthSettingsFromEnv(env, url), url);
+
+  assert.deepEqual(issues(entraEnv, entraResourceUrl), []);
+
+  const noAudience = issues({ ...entraEnv, MCP_AUDIENCE: undefined }, entraResourceUrl);
+  assert.equal(noAudience.length, 1);
+  assert.match(noAudience[0] ?? "", /MCP_AUDIENCE/);
+
+  assert.match(issues(entraEnv, "http://localhost:4001/mcp")[0] ?? "", /https/);
+  assert.match(issues(entraEnv, "https://mcp.contoso.com/mcp/")[0] ?? "", /trailing slash/);
+
+  // Missing issuer: fail rather than advertise the placeholder issuer's oauth21 URL.
+  const noIssuer = issues({ ...entraEnv, AUTH_ISSUER: undefined }, entraResourceUrl);
+  assert.equal(noIssuer.length, 1);
+  assert.match(noIssuer[0] ?? "", /AUTH_ISSUER/);
+  // A legacy issuer name counts as configured.
+  assert.deepEqual(
+    issues({ ...entraEnv, AUTH_ISSUER: undefined, AUTH0_ISSUER_BASE_URL: entraIssuer }, entraResourceUrl),
+    []
+  );
+
+  // An explicit MCP_API_ID_URI is validated too.
+  assert.deepEqual(issues({ ...entraEnv, MCP_API_ID_URI: "api://magpie-mcp" }, entraResourceUrl), []);
+  assert.match(
+    issues({ ...entraEnv, MCP_API_ID_URI: "api://magpie-mcp/" }, entraResourceUrl)[0] ?? "",
+    /MCP_API_ID_URI .* trailing slash/
+  );
+  for (const bad of ['api://magpie"mcp', "api://magpie\\mcp", "api://magpie mcp"]) {
+    assert.match(
+      issues({ ...entraEnv, MCP_API_ID_URI: bad }, entraResourceUrl)[0] ?? "",
+      /MCP_API_ID_URI .* quotes, backslashes or whitespace/,
+      bad
+    );
+  }
+
+  // Not checked when auth is off.
+  assert.deepEqual(
+    issues({ ...entraEnv, AUTH_REQUIRED: "false", MCP_AUDIENCE: undefined }, "http://localhost:4001/mcp"),
+    []
+  );
+  // Auth0 deployments (default http localhost URL, defaulted audience) are unaffected.
+  assert.deepEqual(issues({ AUTH0_DOMAIN: "t.auth0.com" }, "http://localhost:4001/mcp"), []);
 });

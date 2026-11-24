@@ -285,7 +285,10 @@ design in `maintenance-redesign.md`). When in doubt, trust the code.
     deliberately non-waiting — items drip through the answer queue; clients re-read the
     worksheet until it settles). HTTP transport is its own OAuth protected resource with
     per-tool scopes; downstream API calls use a separate M2M credential (never the user's
-    token) plus on-behalf-of headers (`docs/mcp.md`).
+    token) plus on-behalf-of headers (`docs/mcp.md`). With `AUTH_PROVIDER=entra` the
+    metadata advertises Entra's versioned `.../oauth21/2026-08` authorization server and
+    scopes qualified with the MCP Application ID URI, and `MCP_AUDIENCE` (the MCP app's
+    client-ID GUID) is mandatory — the provider profile computes all of it.
 20. **Observability** — `@magpie/telemetry` (OpenTelemetry traces + metrics, **off by
     default**; enabled only when `OTEL_EXPORTER_OTLP_ENDPOINT` is set) threads W3C trace
     context API → pg-boss job → watcher → callback; metrics `magpie.jobs.finished` /
