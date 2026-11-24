@@ -5,6 +5,10 @@
 >
 > **Name:** a questionnaire review is a hot potato: nobody wants to hold it. Hot Potato
 > makes sure someone has to, and keeps a record of who did.
+>
+> **UI mockup:** [Hot Potato UI](https://claude.ai/artifact/N5Rs6deuEzj9seAGdvgVJJ) — four
+> screens (overview, check assignments, my rows, audit trail). It's a Claude artifact,
+> so you'll only be able to open it once it's been shared with you.
 
 ## The problem
 
