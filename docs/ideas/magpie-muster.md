@@ -1,10 +1,10 @@
-# Tiding — forced, audited sign-off for questionnaires
+# Magpie Muster — forced, audited sign-off for questionnaires
 
 > **Status:** idea (2026-11-24). Not built, not scheduled. A companion tool that *uses*
 > Magpie; it is deliberately **not** part of Magpie.
 >
-> **Name:** a group of magpies is a *tiding*. Each row gets its own magpie; together they
-> sign off the whole thing.
+> **Name:** magpies collect things; Muster collects sign-offs. To *muster* is to gather
+> everyone in, and an answer that's been signed off has *passed muster*.
 
 ## The problem
 
@@ -24,7 +24,7 @@ dodged**.
 ## The idea
 
 1. A user uploads the questionnaire (Excel / Word / etc.).
-2. Tiding uses Magpie to fill it in.
+2. Muster uses Magpie to fill it in.
 3. **Every row is assigned a named owner**, who must sign it off.
 4. Once every row is signed off, **one person signs off the whole document**.
 5. Every action is recorded in an audit trail, so it's always clear who signed what, and
@@ -40,8 +40,8 @@ From [questionnaires.md](../questionnaires.md):
   corpus"*, not *"I'm accountable for this"*.
 - Export to `.md` / `.csv`.
 
-Tiding adds the **people** layer: ownership, sign-off, chasing, final sign-off, audit.
-Keep *sign-off* (Tiding) and *approval* (Magpie) separate; a signed-off row can then
+Muster adds the **people** layer: ownership, sign-off, chasing, final sign-off, audit.
+Keep *sign-off* (Muster) and *approval* (Magpie) separate; a signed-off row can then
 approve the answer in Magpie so it becomes reusable.
 
 ## Key design points
