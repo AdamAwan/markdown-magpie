@@ -325,7 +325,8 @@ bulk-format commit, run `git config blame.ignoreRevsFile .git-blame-ignore-revs`
 - [docs/mcp.md](docs/mcp.md) - MCP transports, tools, auth, and clients
 - [docs/threat-model.md](docs/threat-model.md) - prompt-injection threat model and the mandatory-human-review control
 - [docs/security-review.md](docs/security-review.md) - hosting/IT-review pack: data flows, controls, and the operator hardening checklist
-- [docs/mvp.md](docs/mvp.md) - milestone roadmap
+- [docs/README.md](docs/README.md) - index of every product spec, guide, and operations reference
+- [docs/archive/](docs/archive/README.md) - historical documents (the original MVP roadmap, finished migration trackers); not maintained
 
 ## Authentication
 
