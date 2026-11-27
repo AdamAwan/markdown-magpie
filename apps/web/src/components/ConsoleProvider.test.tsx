@@ -607,6 +607,18 @@ test("the selected proposal survives refreshes that reorder the list around it",
   assert.equal(m.console().selectedProposal?.id, "p3");
 });
 
+test("when the selected proposal drops off the list, the preview moves to its nearest neighbour", async (t) => {
+  let proposals = [proposal("p1"), proposal("p2"), proposal("p3")];
+  const m = await mount(t, { routes: { "GET /proposals": () => ({ proposals }) } });
+
+  await m.run(() => m.console().setSelectedProposalId("p2"));
+  proposals = [proposal("p1"), proposal("p3")];
+  await m.run(() => m.console().refresh());
+
+  // Not back to the top (p1): the next proposal down takes its place.
+  assert.equal(m.console().selectedProposal?.id, "p3");
+});
+
 test("marking a proposal ready updates it in place; merging also refreshes", async (t) => {
   const m = await mount(t, { routes: { "GET /proposals": () => ({ proposals: [proposal("p1")] }) } });
   // The API echoes the proposal back in whichever status was requested.
