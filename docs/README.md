@@ -68,6 +68,12 @@ subsystem specs of Magpie itself.
   application (e.g. give a chatbot knowledge): the answer vs. retrieval patterns, over MCP
   or raw HTTP, with auth and operational notes. Points into the reference specs below.
 
+### Guides (working on Magpie)
+
+- **[web-testing.md](./web-testing.md)** — how the web console is tested: the
+  `node:test` component harnesses and the Playwright browser smoke suite
+  (`npm run test:e2e:web`, API mocked in the browser).
+
 ### Subsystem specs
 
 | Spec | Subsystem | Primary code |
