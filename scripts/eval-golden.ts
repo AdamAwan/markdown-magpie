@@ -332,6 +332,10 @@ async function main(): Promise<void> {
       DATABASE_URL: databaseUrl,
       PORT: String(apiPort),
       AUTH_REQUIRED: "false",
+      // Strict job-output policy (docs/ai-jobs.md J24): a completion carrying a
+      // field its job contract does not declare fails the job — and so this
+      // CI gate — instead of being silently stripped as it is in production.
+      MAGPIE_JOB_OUTPUT_STRICT: "true",
       // The eval is one client asking the whole question set as fast as the
       // pipeline will go, and with auth off every ask-tier request — the cases'
       // own POST /api/ask AND the watcher's /api/route + /api/retrieve callbacks
@@ -388,6 +392,8 @@ async function main(): Promise<void> {
       OPENAI_COMPATIBLE_API_KEY: "golden",
       OPENAI_COMPATIBLE_MODEL: "golden-fixture",
       MAGPIE_CHECKOUT_ROOT: checkoutRoot,
+      // Same strict policy on the watcher side, where a model reply is parsed.
+      MAGPIE_JOB_OUTPUT_STRICT: "true",
       WATCHER_POLL_INTERVAL_MS: "250",
       LOG_LEVEL: "warn"
     })

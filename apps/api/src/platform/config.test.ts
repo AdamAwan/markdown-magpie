@@ -181,6 +181,13 @@ describe("loadConfig — valid configs", () => {
     assert.equal(loadConfig({ ...minimalEnv, CORS_ALLOWED_ORIGINS: "" }).cors.allowedOrigins, "*");
   });
 
+  it("keeps undeclared job-output fields lenient unless strictness is explicitly switched on", () => {
+    assert.equal(loadConfig(minimalEnv).jobs.undeclaredOutputFields, "strip");
+    assert.equal(loadConfig({ ...minimalEnv, MAGPIE_JOB_OUTPUT_STRICT: "" }).jobs.undeclaredOutputFields, "strip");
+    assert.equal(loadConfig({ ...minimalEnv, MAGPIE_JOB_OUTPUT_STRICT: "false" }).jobs.undeclaredOutputFields, "strip");
+    assert.equal(loadConfig({ ...minimalEnv, MAGPIE_JOB_OUTPUT_STRICT: "true" }).jobs.undeclaredOutputFields, "reject");
+  });
+
   it("treats empty strings as unset (so commented-out .env vars use defaults)", () => {
     const config = loadConfig({
       ...minimalEnv,

@@ -1,5 +1,11 @@
 import { z } from "zod";
-import { AI_PROVIDERS, isAiProviderName, type AiProviderName } from "@magpie/jobs";
+import {
+  AI_PROVIDERS,
+  isAiProviderName,
+  undeclaredOutputFieldPolicyFromEnv,
+  type AiProviderName,
+  type UndeclaredOutputFieldPolicy
+} from "@magpie/jobs";
 import { authEnvIssues, authSettingsFromEnv, isAuthRequired, type ResolvedAuthSettings } from "@magpie/auth";
 import { resolveTelemetryConfig, type TelemetryConfig } from "@magpie/telemetry";
 import { parseAiPricing, type AiPricingEntry } from "./ai-pricing.js";
@@ -125,6 +131,12 @@ export interface AppConfig {
     // MAGPIE_JOB_REPAIR_ENABLED=false makes every schema-invalid output take the
     // immediate terminal-fail backstop instead. Mirrors rateLimit.enabled.
     repairEnabled: boolean;
+    // What a completion carrying a field its job contract does not declare does.
+    // "strip" (the default) keeps production lenient: the field is dropped and
+    // logged. "reject" — MAGPIE_JOB_OUTPUT_STRICT=true, set by the test context
+    // and the e2e/eval harnesses — terminal-fails the job instead, so a watcher
+    // or prompt emitting an undeclared field fails before it ships (J24).
+    undeclaredOutputFields: UndeclaredOutputFieldPolicy;
   };
   // Per-principal request throttling and a global cap on concurrent metered AI
   // work. Enforced by the API's rate-limit middleware (L1) and enqueue-time
@@ -381,6 +393,7 @@ const schema = z
     JOB_RUN_TO_COMPLETION_TIMEOUT_MS: optionalPositiveInt,
     JOB_SCHEDULE_TIMEZONE: optionalString,
     MAGPIE_JOB_REPAIR_ENABLED: optionalString,
+    MAGPIE_JOB_OUTPUT_STRICT: optionalString,
 
     RATE_LIMIT_ENABLED: optionalString,
     RATE_LIMIT_WINDOW_MS: optionalPositiveInt,
@@ -550,7 +563,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       runToCompletionTimeoutMs: parsed.JOB_RUN_TO_COMPLETION_TIMEOUT_MS,
       scheduleTimezone: parsed.JOB_SCHEDULE_TIMEZONE ?? "UTC",
       // On unless explicitly disabled, matching rateLimit.enabled's fail-safe default.
-      repairEnabled: parsed.MAGPIE_JOB_REPAIR_ENABLED !== "false"
+      repairEnabled: parsed.MAGPIE_JOB_REPAIR_ENABLED !== "false",
+      // Lenient unless explicitly switched on — see undeclaredOutputFieldPolicyFromEnv.
+      undeclaredOutputFields: undeclaredOutputFieldPolicyFromEnv(parsed)
     },
     rateLimit: {
       // On unless explicitly disabled (RATE_LIMIT_ENABLED=false), matching the

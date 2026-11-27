@@ -24,7 +24,6 @@ import {
   projectJob,
   retryJob,
   runJobToCompletion,
-  strippedOutputKeyPaths,
   waitForJob,
   MaintenanceShedError
 } from "./service.js";
@@ -1249,8 +1248,18 @@ test("(c) answer_question_batch is repairable and enforces the citation-subset g
   assert.equal(await ctx.stores.jobRepairContexts.get(job.id), undefined);
 });
 
-test("(vii) an extra undeclared field succeeds, is stripped from the stored result, and warns", async () => {
-  const ctx = makeTestContext();
+// The production policy for an undeclared output field (J24): lenient, so a model
+// emitting one stray field never costs a paid generation.
+function lenientOutputContext(): AppContext {
+  const base = makeTestContext();
+  return {
+    ...base,
+    settings: { ...base.settings, jobs: { ...base.settings.jobs, undeclaredOutputFields: "strip" } }
+  };
+}
+
+test("(vii) production policy: an extra undeclared field succeeds, is stripped from the stored result, and warns", async () => {
+  const ctx = lenientOutputContext();
   const warn = mock.method(logger, "warn");
   const job = await ctx.jobs.create("answer_question", answerInput());
   await claimJob(ctx, "worker", ["codex"]);
@@ -1277,6 +1286,37 @@ test("(vii) an extra undeclared field succeeds, is stripped from the stored resu
   assert.deepEqual(stripWarnings[0].strippedKeys, ["bogusField"]);
 });
 
+test("the test context runs the strict output policy; production config defaults to lenient", () => {
+  assert.equal(makeTestContext().settings.jobs.undeclaredOutputFields, "reject");
+});
+
+test("(vii-strict) strict policy: an undeclared field terminal-fails the job, with no repair and nothing persisted", async () => {
+  const ctx = makeTestContext();
+  const error = mock.method(logger, "error");
+  // answer_question is REPAIRABLE, so this also proves an undeclared field is
+  // never routed to a repair (a reshape would drop the field and hide the defect).
+  const job = await ctx.jobs.create("answer_question", answerInput());
+  await claimJob(ctx, "worker", ["codex"]);
+
+  const result = await completeJob(ctx, job.id, {
+    answer: "ok",
+    confidence: "high",
+    citations: [fullCitation("s1"), { ...fullCitation("s2"), score: 0.4 }],
+    bogusField: { nested: 1 }
+  });
+  assert.deepEqual(result, { ok: false, code: "invalid_output" });
+
+  const stored = await getJob(ctx, job.id);
+  assert.equal(stored?.state, "failed", "terminal — not sent back for a retry or a repair");
+  assert.equal(stored?.output, undefined);
+  assert.equal(stored?.error?.code, "undeclared_output_fields");
+  // Top-level and array-element strips are both named, so the fix is obvious.
+  assert.equal(stored?.error?.details?.undeclaredFields, "citations[1].score, bogusField");
+  assert.match(stored?.error?.message ?? "", /packages\/jobs\/src\/schemas\.ts/);
+  assert.equal(await ctx.stores.jobRepairContexts.get(job.id), undefined);
+  assert.equal(error.mock.callCount(), 1);
+});
+
 test("(viii) failJob without terminal still retries; a first transient provider failure goes to retry", async () => {
   const ctx = makeTestContext();
   const job = await ctx.jobs.create("answer_question", answerInput());
@@ -1288,12 +1328,4 @@ test("(viii) failJob without terminal still retries; a first transient provider 
     category: "provider"
   });
   assert.equal(failed?.state, "retry");
-});
-
-test("strippedOutputKeyPaths reports object-level strips (nested) and treats arrays as leaves", () => {
-  assert.deepEqual(strippedOutputKeyPaths({ a: 1, b: 2 }, { a: 1 }), ["b"]);
-  assert.deepEqual(strippedOutputKeyPaths({ a: { x: 1, y: 2 } }, { a: { x: 1 } }), ["a.y"]);
-  // Arrays are leaves: an element-level difference is not walked/reported.
-  assert.deepEqual(strippedOutputKeyPaths({ a: [{ x: 1, y: 2 }] }, { a: [{ x: 1 }] }), []);
-  assert.deepEqual(strippedOutputKeyPaths({ a: 1 }, { a: 1 }), []);
 });

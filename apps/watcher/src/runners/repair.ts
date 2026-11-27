@@ -1,7 +1,7 @@
 import type { ChatProvider } from "@magpie/core";
-import type { JobView } from "@magpie/jobs";
+import type { JobView, UndeclaredOutputFieldPolicy } from "@magpie/jobs";
 import { REPAIR_OUTPUT, wrapUntrusted } from "@magpie/prompts";
-import { parseJobOutput } from "../job-prompts.js";
+import { DEFAULT_UNDECLARED_OUTPUT_FIELDS, parseJobOutput } from "../job-prompts.js";
 import { logger } from "../logger.js";
 
 export interface RepairRepromptOptions {
@@ -12,6 +12,8 @@ export interface RepairRepromptOptions {
   // ONE completion — no retrieval, no agent loop.
   model: ChatProvider;
   signal: AbortSignal;
+  // See ChatRunnerOptions.undeclaredOutputFields. Strict when omitted.
+  undeclaredOutputFields?: UndeclaredOutputFieldPolicy;
 }
 
 // Single-shot reshape of a schema-invalid prior output (#288d). Exactly one model
@@ -58,5 +60,5 @@ export async function runRepairReprompt(options: RepairRepromptOptions): Promise
   // Parse against the job's own output contract (parseJobOutput uses extractJson
   // internally, tolerating a code fence/prose). A still-invalid reshape throws
   // here, which the API then terminal-fails.
-  return parseJobOutput(job, response.content);
+  return parseJobOutput(job, response.content, options.undeclaredOutputFields ?? DEFAULT_UNDECLARED_OUTPUT_FIELDS);
 }

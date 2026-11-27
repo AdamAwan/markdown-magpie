@@ -255,6 +255,7 @@ Lives in `apps/api/src/platform/ai-pricing.ts`.
 | `MAINTENANCE_MAX_AI_JOBS_PER_TICK` | `12` | Max AI jobs one maintenance fan-out tick may enqueue (L3 per-tick budget, #288b). Kept ≤ `AI_MAX_INFLIGHT_JOBS − AI_INTERACTIVE_RESERVED_JOBS`. |
 | `MAINTENANCE_FANOUT_ALERT_DEFERRED` | `20` | When a tick defers/rejects ≥ this many enqueues, its `maintenance_fanout` event is flagged `runaway` and escalated (#288b). |
 | `MAGPIE_JOB_REPAIR_ENABLED`     | `true`  | One informed repair-reprompt for a schema-invalid repairable output before terminal-fail (#288d); `false` ⇒ immediate terminal-fail. |
+| `MAGPIE_JOB_OUTPUT_STRICT`      | `false` | Read by **both** the API and the watcher. `false` ⇒ a field a job output carries but its contract does not declare is stripped and logged (production). `true` ⇒ it fails the job — for tests, CI and the e2e/eval harnesses only ([ai-jobs.md](./ai-jobs.md) J24). |
 | `AI_PRICING`                    | *(unset)* | JSON array of `(provider, model, inputPerMTok, outputPerMTok)` entries for cost accounting; malformed/duplicate content **fails boot** (RL27). Unset ⇒ cost reporting off. |
 
 ## Observability (Grafana)

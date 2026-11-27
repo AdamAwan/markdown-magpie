@@ -110,6 +110,14 @@ npm run test:db           # when you touched SQL, stores, or the broker
 
 ## Gotchas
 
+- **Job outputs are validated strictly in tests.** `makeTestContext()` sets
+  `MAGPIE_JOB_OUTPUT_STRICT=true` and every watcher runner you construct defaults to the
+  strict policy, so a fixture output (or canned model reply) carrying a field the job's
+  schema does not declare fails the job / throws — production would have silently stripped
+  it. Declare the field on the schema; only a test *about* the lenient production policy
+  should opt out (`settings.jobs.undeclaredOutputFields: "strip"` /
+  `{ undeclaredOutputFields: "strip" }`). The golden eval and the e2e compose stack run
+  strict too.
 - **Don't add a test framework.** If a helper seems missing, it's usually a `node:test`
   feature (`t.mock`, subtests, `{ skip }`, `{ only }`) — use those.
 - **Integration tests silently skip without the flag.** A green `npm test` does **not** mean

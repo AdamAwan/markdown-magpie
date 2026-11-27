@@ -55,7 +55,11 @@ export function makeTestContext(overrides: Partial<AppContext> = {}): AppContext
     // completes, keep the fallback wait tiny so tests don't block on the real
     // job-expiry deadline (5 min for reconcile_gap_clusters).
     JOB_RUN_TO_COMPLETION_TIMEOUT_MS: "100",
-    JOB_WAIT_POLL_MS: "5"
+    JOB_WAIT_POLL_MS: "5",
+    // Tests run the strict output policy: a completion carrying a field its job
+    // contract does not declare fails the job instead of being silently stripped,
+    // so a schema/prompt/runner drift fails in CI rather than shipping.
+    MAGPIE_JOB_OUTPUT_STRICT: "true"
   });
   const embedder = new BackgroundEmbedder(undefined, undefined);
 

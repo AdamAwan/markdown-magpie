@@ -1,5 +1,5 @@
 import type { JobCapability, JobType, JobView } from "@magpie/jobs";
-import { refreshFlowSnapshotOutputSchema } from "@magpie/jobs";
+import { buildJobOutput, refreshFlowSnapshotOutputSchema } from "@magpie/jobs";
 import {
   fetchPullRequestStatus as defaultFetchPullRequestStatus,
   fetchPullRequestReviewDecision as defaultFetchPullRequestReviewDecision
@@ -94,6 +94,6 @@ export class RefreshFlowSnapshotRunner {
       { jobId: job.id, resolved: results.length, total: open.length },
       `refresh_flow_snapshot: resolved ${results.length}/${open.length} pull request(s)`
     );
-    return refreshFlowSnapshotOutputSchema.parse({ results });
+    return buildJobOutput(refreshFlowSnapshotOutputSchema, { results });
   }
 }

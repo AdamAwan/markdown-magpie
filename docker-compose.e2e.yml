@@ -15,6 +15,17 @@
 # `app` profile. The watcher reaches it at http://openai-fixture:8800/v1 via the
 # OPENAI_COMPATIBLE_BASE_URL override above.
 services:
+  # The e2e stack runs the STRICT job-output policy on both sides of the queue:
+  # a completion carrying a field its job contract does not declare fails the
+  # job (and so the smoke test) instead of being silently stripped as it is in
+  # production. See docs/ai-jobs.md J24.
+  api:
+    environment:
+      MAGPIE_JOB_OUTPUT_STRICT: "true"
+  watcher:
+    environment:
+      MAGPIE_JOB_OUTPUT_STRICT: "true"
+
   openai-fixture:
     image: markdown-magpie:latest
     command: node scripts/fixtures/openai-fixture.mjs

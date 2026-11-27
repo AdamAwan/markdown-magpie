@@ -4,7 +4,7 @@ import { handleImportVerificationCompletion } from "../questionnaires/import-esc
 import { applyColumnMapping, handleColumnMappingFailure } from "../questionnaire-imports/service.js";
 import { logger } from "../../logger.js";
 import type { JobCapability, JobError, JobType, JobView } from "@magpie/jobs";
-import { isRepairableJobType, jobDefinition } from "@magpie/jobs";
+import { isRepairableJobType, jobDefinition, undeclaredFieldsMessage, validateJobOutput } from "@magpie/jobs";
 import type { AppContext } from "../../context.js";
 import { HttpError } from "../../http/errors.js";
 import type { JobListFilters } from "../../jobs/broker.js";
@@ -363,22 +363,27 @@ export async function completeJob(
       return { ok: true, job: existingJob };
     }
   } else {
-    const parsed = jobDefinition(existingJob.type).outputSchema.safeParse(output);
-    if (!parsed.success) {
+    const validation = validateJobOutput(existingJob.type, output, ctx.settings.jobs.undeclaredOutputFields);
+    if (!validation.ok) {
+      if (validation.reason === "undeclared_fields") {
+        // Strict policy only (tests, CI, the e2e/eval harnesses): the output is
+        // valid but carries fields the job contract does not declare.
+        return handleUndeclaredOutputFields(ctx, existingJob, validation.undeclaredPaths, executor);
+      }
       // Schema-invalid output. Either route it to ONE informed repair (a
       // repairable type, repair enabled, no prior repair context) or take the
       // terminal-fail backstop (#288d) — no more blind paid retries. See
       // decideRepairOrTerminal for the full decision table.
-      return handleInvalidOutput(ctx, existingJob, output, parsed.error, executor);
+      return handleInvalidOutput(ctx, existingJob, output, validation.error, executor);
     }
-    resultData = parsed.data;
+    resultData = validation.data;
     // Output schemas are z.object, so a valid parse STRIPPED any undeclared keys.
-    // Surface the strip (never fail on it) so a watcher shipping fields the job
-    // contract doesn't declare is observable rather than silent (#288d).
-    const strippedKeys = strippedOutputKeyPaths(output, resultData);
-    if (strippedKeys.length > 0) {
+    // Under the production policy that is surfaced, never failed on: a model
+    // emitting one stray field must not cost a paid generation, but a watcher
+    // shipping fields the job contract doesn't declare stays observable (#288d).
+    if (validation.strippedPaths.length > 0) {
       logger.warn(
-        { jobId, jobType: existingJob.type, strippedKeys },
+        { jobId, jobType: existingJob.type, strippedKeys: validation.strippedPaths },
         "watcher output carried undeclared fields stripped to the job contract"
       );
     }
@@ -585,6 +590,36 @@ export async function completeJob(
   return { ok: true, job: await ctx.jobs.get(jobId) };
 }
 
+// A completion that is valid against its contract but carries fields the
+// contract does not declare, under the strict policy
+// (settings.jobs.undeclaredOutputFields === "reject"). This is a DEFECT IN THE
+// CODE — a prompt or runner emitting a field nobody declared on the schema — not
+// a model slip, so it terminal-fails immediately and loudly: no repair (a
+// reshape would just drop the field and hide the defect) and no retry (it is
+// deterministic). Production never reaches this; it strips and warns instead.
+async function handleUndeclaredOutputFields(
+  ctx: AppContext,
+  job: JobView,
+  undeclaredPaths: string[],
+  executor: string
+): Promise<{ ok: false; code: "invalid_output" }> {
+  const message = undeclaredFieldsMessage(job.type, undeclaredPaths);
+  logger.error({ jobId: job.id, jobType: job.type, undeclaredFields: undeclaredPaths }, message);
+  await failJob(
+    ctx,
+    job.id,
+    {
+      code: "undeclared_output_fields",
+      message,
+      category: "validation",
+      details: { undeclaredFields: undeclaredPaths.join(", ") },
+      ...(executor ? { executor } : {})
+    },
+    { terminal: true }
+  );
+  return { ok: false, code: "invalid_output" };
+}
+
 // THE REPAIR DECISION (#288d). A schema-invalid watcher output is either routed
 // to ONE informed repair or taken straight to the terminal-fail backstop. See
 // the interaction table in the issue; this helper encodes it:
@@ -697,27 +732,6 @@ function citationSectionIds(output: unknown): string[] {
 // structured job_repair event. Undefined for non-provider inputs.
 function providerOf(job: JobView): string | undefined {
   return isPlainObject(job.input) && typeof job.input.provider === "string" ? job.input.provider : undefined;
-}
-
-// The dotted key paths present in `raw` but absent in `kept` after a z.object
-// parse stripped unknown keys (#288d). Walks plain objects recursively; ARRAYS
-// ARE TREATED AS LEAVES — element-level strips inside arrays are not reported
-// (pairing raw/kept array elements positionally against a possibly-reordered or
-// resized array is out of scope; object-level strips are what the warning surfaces).
-export function strippedOutputKeyPaths(raw: unknown, kept: unknown, prefix = ""): string[] {
-  if (!isPlainObject(raw) || !isPlainObject(kept)) {
-    return [];
-  }
-  const paths: string[] = [];
-  for (const [key, rawValue] of Object.entries(raw)) {
-    const path = prefix ? `${prefix}.${key}` : key;
-    if (!(key in kept)) {
-      paths.push(path);
-    } else {
-      paths.push(...strippedOutputKeyPaths(rawValue, kept[key], path));
-    }
-  }
-  return paths;
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
