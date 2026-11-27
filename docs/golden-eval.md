@@ -24,6 +24,10 @@ npm run eval:golden -- --embeddings-base-url=https://api.openai.com/v1 \
                        --embeddings-api-key-env=OPENAI_API_KEY
 ```
 
+The eval boots its API and watcher with `MAGPIE_JOB_OUTPUT_STRICT=true`, so a job output
+carrying a field its contract does not declare fails the run instead of being silently
+stripped as it would be in production ([ai-jobs.md](./ai-jobs.md) J24).
+
 Only these flags can steer a run — `cleanEnv()` still strips the ambient shell, so a
 developer's provider keys can never silently change what the eval measures. A comparison
 run prints its retrieval mode, fails fast if embeddings were configured but the API fell

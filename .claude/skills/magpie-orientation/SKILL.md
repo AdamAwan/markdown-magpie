@@ -310,8 +310,10 @@ non-repairable (source-grounded/agentic/patch-emitting) type, repair disabled
 (`MAGPIE_JOB_REPAIR_ENABLED=false`), or a repair run that is invalid *again* —
 **terminal-fails immediately** (`JobBroker.failTerminal`: straight to `failed` +
 dead-letter). Net: original + at most one repair, then terminal — no blind paid
-retries. Each decision emits a `job_repair` event; a successful completion warns
-on any undeclared fields the `z.object` output schema stripped.
+retries. Each decision emits a `job_repair` event. An output that is valid but
+carries a field the schema does **not declare** is a different case and is never
+repaired: production strips it and warns, tests/CI/e2e
+(`MAGPIE_JOB_OUTPUT_STRICT=true`) terminal-fail the job — see §5.
 
 **17 provider (AI) jobs** — queue `` `${type}__${provider}` ``:
 `answer_question`, `answer_question_batch`, `summarize_gap`, `draft_markdown_proposal`,
@@ -419,11 +421,27 @@ the watcher run a job?" → `apps/watcher/src/runners/`. "what does the API expo
 - **Commit AND push little and often** so there's always a reliable revert point.
 - **Update documentation** alongside code (`docs/`, README, this skill) when behavior
   or structure changes.
-- **Declare every output field on the job schema.** The broker validates completed
-  outputs against `packages/jobs/src/schemas.ts` and **strips undeclared fields** before
-  the API can persist them. Optional fields like `mapUpdates`, `uncoveredPoints`, and
-  `provenance` have all hit this trap — if a new output field "mysteriously disappears",
-  check the schema first.
+- **Declare every output field on the job schema.** Job outputs are parsed against
+  `packages/jobs/src/schemas.ts` (`z.object`), which **drops undeclared fields** — first
+  in the watcher (`parseJobOutput`, on the model's reply), then again at the API's
+  `completeJob`. `mapUpdates`, `uncoveredPoints`, `provenance` and the answer trace's
+  `routing.method` all shipped undeclared and vanished. That is now loud everywhere except
+  production (`docs/ai-jobs.md` J24/J24a):
+  - **Compile time** — schemas are built with `contract<Domain>()(…)`, so a field on the
+    `@magpie/core` job type that the schema lacks is a type error naming the path; outputs
+    assembled in code go through `buildJobOutput(schema, {...})` (excess-property check),
+    and `AnswerOutput` is the schema's own parsed type.
+  - **Test time** — `apps/watcher/src/output-contract.test.ts` asserts every field a
+    catalog prompt asks the model for (`outputShape`, the `Return JSON:` example, inline
+    examples) is declared on that job's output schema.
+  - **Run time** — one shared `validateJobOutput` with a policy: `strip` + warn in
+    production; `reject` (`MAGPIE_JOB_OUTPUT_STRICT=true`) in the API test context, the
+    golden eval, the e2e compose stack, and by default in every watcher runner a test
+    constructs. A failing test that says "output carries fields the job contract does not
+    declare" means: add the field to the schema, don't loosen the test.
+  - Not yet covered: **inputs** are still stripped silently at enqueue (compile-time
+    `contract` only). The one known input gap, `sources[].tokenEnv`, is pinned in
+    `schemas.ts` with the reason it is not simply declared.
 - **The completion dispatcher persists before side effects.** `completeJob`
   (`apps/api/src/features/jobs/service.ts`) validates and stores the
   `{result, executor, usage?, provider?, model?}` envelope (`usage` = the watcher's summed

@@ -214,9 +214,49 @@ paid-for generation away and force pg-boss to redo the whole job; both are close
   persists it beside the output as `{result, executor, usage}` — on the **envelope**, not the
   job's own output, so it can never collide with schema-stripping. CLI providers emit raw
   text and report nothing, so their completions carry **no** usage (unmetered, not zero).
-- **J24** — **Valid output strips undeclared keys, never fails on them.** Output schemas are
-  `z.object`, so a valid parse strips fields the contract does not declare; the strip is
-  logged (never a failure) so a watcher shipping extra fields is observable.
+- **J24** — **An undeclared output field is stripped in production and a hard failure
+  everywhere else.** Output schemas are `z.object`, so a valid parse drops any field the
+  contract does not declare. Every boundary that parses a job output goes through one
+  function, `validateJobOutput(type, output, policy)` (`packages/jobs/src/output-validation.ts`),
+  whose policy is one of:
+  - **`strip`** (production default) — the field is dropped and the strip is logged with its
+    path (`strippedKeys`, including paths inside arrays such as `provenance[0].sources[0].x`),
+    never failed on: a model emitting one stray field must not cost a paid generation.
+  - **`reject`** (`MAGPIE_JOB_OUTPUT_STRICT=true`) — the output is refused. Set by the API's
+    test context, the golden eval, and the e2e compose override, and the **default** of every
+    watcher runner constructed without an explicit policy (i.e. every unit test).
+
+  There are two such boundaries, and the first one is the one that matters: (a) the
+  **watcher's** `parseJobOutput` parses the model's reply *before* the API ever sees it — an
+  undeclared model-authored field is dropped here, so under `strip` the watcher logs it and
+  under `reject` the run throws; (b) the **API's** `completeJob` validates what the watcher
+  sent — under `reject` it terminal-fails the job with `undeclared_output_fields` (naming
+  the paths) and never routes it to a repair (J28), because a reshape would drop the field
+  and hide the defect. `createConfiguredRunners` passes the operator's policy to every AI
+  runner; a test pins that it is `strip` unless the variable is `true`.
+- **J24a** — **Three checks keep a field from being undeclared in the first place**, so the
+  runtime policy is a backstop rather than the detector:
+  1. **Compile time, domain ⇄ schema.** Each schema is built with `contract<Domain>()(…)`
+     in `schemas.ts`. `satisfies z.ZodType<Domain>` alone only proves the schema's output is
+     assignable to the `@magpie/core` type — an *optional* domain field the schema forgot
+     still type-checks, and is then stripped at runtime. `contract` also requires every
+     field the domain type declares (at any depth, through arrays and unions) to be declared
+     on the schema; the compile error names the missing path.
+  2. **Compile time, code-built outputs.** Outputs a runner assembles in code go through
+     `buildJobOutput(schema, {...})`, whose argument is typed as the schema's input, so an
+     undeclared key in the literal is an excess-property error. The answer runner's
+     `AnswerOutput` *is* `z.output<typeof answerQuestionOutputSchema>`, not a mirror of it.
+  3. **Test time, prompt ⇄ schema.** `apps/watcher/src/output-contract.test.ts` reads every
+     field each catalog prompt tells the model to return — its `outputShape`, its trailing
+     `Return JSON:` example, and inline JSON examples in its rules — and asserts the job's
+     output schema declares each one (`declaredOutputFieldPaths`). Every provider job must
+     either have a catalog prompt or a stated exemption there.
+  > ⚠️ **Known gap (input side).** `sources[].tokenEnv` on a git `SourceDescriptor` is set by
+  > the API but **not** declared on `sourceDescriptorSchema`, so it is stripped at enqueue
+  > and source-grounded jobs clone with the host-default token only. It is pinned as the one
+  > exclusion in `schemas.ts` (`QueuedSourceDescriptor`) rather than declared, because
+  > `POST /api/jobs` accepts caller-built descriptors: declaring it as-is would let a
+  > `manage:jobs` caller pair an arbitrary https url with an arbitrary watcher env-var name.
 - **J25** — **Execution identity rides the envelope too.** Each AI runner exposes an
   `aiIdentity` — its provider plus the *configured* model (chat model / Azure deployment /
   CLI `--model`) — and the worker loop stamps flat `provider`/`model` envelope fields on
@@ -239,7 +279,8 @@ paid-for generation away and force pg-boss to redo the whole job; both are close
 
 ## Schema-invalid output & one informed repair (#288d)
 
-- **J28** — When completion output fails its contract, the job takes one of two paths per
+- **J28** — When completion output fails its contract (a missing or mistyped *declared*
+  field — an *undeclared* field is J24, and is never repaired), the job takes one of two paths per
   `decideRepairOrTerminal`: (a) a **repairable** type with repair enabled and no prior repair
   context is offered **one** informed repair; (b) everything else takes the **terminal-fail
   backstop** — no more blind, paid retries.
@@ -289,7 +330,9 @@ paid-for generation away and force pg-boss to redo the whole job; both are close
   (J17); `POST /api/jobs/:id/heartbeat` (keep a claim alive; the response flags `cancelled`
   so the runner aborts); `POST /api/jobs/:id/complete` (`{output, executor, usage?,
   provider?, model?}` → the envelope of J18–J25; 500 `side_effects_failed`, 404
-  `job_not_found`, 409 `job_cancelled`, 400 `invalid_output`/`repair_enqueued`); `POST
+  `job_not_found`, 409 `job_cancelled`, 400 `invalid_output`/`repair_enqueued` — under the
+  strict output policy an undeclared field is also a 400 `invalid_output`, the job failing
+  with error code `undeclared_output_fields`, J24); `POST
   /api/jobs/:id/fail` (a structured `{error: {code, message, category}}`).
 - **J35** — Answer-path callbacks the watcher makes while running `answer_question`:
   `POST /api/retrieve` (scoped context for a flow) and `POST /api/route` (embedding-similarity
@@ -453,6 +496,7 @@ paid-for generation away and force pg-boss to redo the whole job; both are close
 | Concern | Code |
 | --- | --- |
 | Job contract (types, catalog, I/O schemas) | `packages/jobs/src/{types,catalog,schemas}.ts` |
+| Output validation + undeclared-field policy, `buildJobOutput`, declared-path introspection | `packages/jobs/src/output-validation.ts` |
 | pg-boss broker (enqueue, claim, complete/fail, dead-letter, admission) | `apps/api/src/jobs/{broker,pg-boss-broker}.ts`, fake: `apps/api/src/jobs/fake-broker.ts` |
 | Schedule reconciliation | `apps/api/src/jobs/schedule-reconciler.ts` |
 | Jobs feature (routes, persist-first complete, replay, repair, `parseCompletedJobOutput`) | `apps/api/src/features/jobs/{routes,service,schema}.ts` |
@@ -469,10 +513,10 @@ paid-for generation away and force pg-boss to redo the whole job; both are close
 
 ## Tests (behavioural contract)
 
-`packages/jobs/src/{catalog,schemas}.test.ts`,
+`packages/jobs/src/{catalog,schemas,output-validation}.test.ts`,
 `apps/api/src/jobs/{fake-broker,pg-boss-broker,pg-boss-broker.integration,schedule-reconciler}.test.ts`,
 `apps/api/src/features/jobs/{routes,service,fold-dispatch}.test.ts`,
-`apps/watcher/src/{worker-loop,capabilities,config,http-client,usage,job-prompts,source-tools,source-workspace,fetch-url,health-server}.test.ts`,
+`apps/watcher/src/{worker-loop,capabilities,config,http-client,usage,job-prompts,output-contract,source-tools,source-workspace,fetch-url,health-server}.test.ts`,
 `apps/watcher/src/runners/{chat,cli,generative,maintenance,publication,publication-comment,publication-crosslink,refresh-flow-snapshot,repair,source-agent}.test.ts`,
 `apps/api/src/features/source-map/routes.test.ts`,
 `apps/api/src/stores/{source-map-store,postgres-source-map-store}.test.ts`.

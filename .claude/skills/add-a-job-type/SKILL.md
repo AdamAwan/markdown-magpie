@@ -40,7 +40,10 @@ new type, extend the `JobCapability` union here too.
 
 ### 2. Define payload schemas — `packages/jobs/src/schemas.ts`
 Add `<name>InputSchema` and `<name>OutputSchema` (Zod). Reuse shared domain types from
-`@magpie/core` (`packages/core/src/index.ts`) where they exist rather than redefining shapes.
+`@magpie/core` (`packages/core/src/index.ts`) where they exist rather than redefining shapes,
+and when one exists build the schema with `contract<DomainType>()(z.object({...}))` rather
+than a bare `satisfies z.ZodType<DomainType>`: `contract` also fails the build when the
+domain type has a field the schema does not declare (the schema would silently strip it).
 Provider jobs must include `provider` in the input (the `ProviderInput<T>` pattern / the
 `define(..., "provider", ...)` path reads `input.provider`).
 
@@ -65,11 +68,17 @@ A runner implements `JobRunner` (`runners/types.ts`): `capability`, `supports(ty
   the **prompt + output handling**: generic jobs flow through `buildPrompt(job)` +
   `parseJobOutput` (see `job-prompts.ts`); jobs needing bespoke logic get an explicit branch
   (like `answer_question` / `reconcile_gap_clusters`). Register any new prompt in
-  `@magpie/prompts` (`packages/prompts/src/catalog.ts`).
+  `@magpie/prompts` (`packages/prompts/src/catalog.ts`) and add it to `JOB_PROMPTS` in
+  `job-prompts.ts` — `output-contract.test.ts` then checks every field the prompt asks for
+  (`outputShape`, the trailing `Return JSON:` example) against your output schema. A
+  provider job with no catalog prompt must be listed in that test's `NOT_PROMPT_SHAPED`
+  with where its output comes from; build such an output with
+  `buildJobOutput(<name>OutputSchema, {...})`, never a bare `schema.parse({...})`.
 - **Non-provider job** — extend the matching runner's `supports()` set and `run()` switch
   (e.g. add the type to `MAINTENANCE_JOB_TYPES` in `runners/maintenance.ts`), or add a new
   runner class and register it in `runners/index.ts` `createConfiguredRunners`, gated by
-  `ready("<capability>")`.
+  `ready("<capability>")`. Return the output through `buildJobOutput(<name>OutputSchema,
+  {...})` so an undeclared key is a compile error.
 
 ### 5. Gate the capability — `apps/watcher/src/capabilities.ts`
 Only if you added a **new** capability: add a `CapabilityGate` (its `requiredEnv` + `ready()`).
@@ -94,6 +103,7 @@ handled — otherwise the work runs and vanishes.
 ```bash
 npm run build                       # the JobType union + definitions record catch omissions
 npm test -w @magpie/jobs            # catalog.test.ts + schemas.test.ts
+npm test -w @magpie/watcher         # incl. output-contract.test.ts (prompt fields ⊆ schema)
 npm run typecheck && npm run lint
 ```
 
@@ -103,6 +113,16 @@ Postgres-backed broker integration test and `scripts/e2e-jobs.ts`).
 
 ## Gotchas
 
+- **Declare every output field — on the schema, not just the prompt or the core type.** The
+  schema is `z.object`, so a field it does not declare is dropped: by the watcher when it
+  parses the model's reply, and again by the API at completion. Adding a field means
+  touching **three** places together — the `@magpie/core` type, the Zod schema, and the
+  prompt's `outputShape` + `Return JSON:` example. Forgetting the schema now fails loudly:
+  `contract<…>()` at compile time (core type ahead of schema), `output-contract.test.ts`
+  (prompt ahead of schema), and the strict output policy at run time in tests/CI/e2e
+  (`MAGPIE_JOB_OUTPUT_STRICT=true` — "output carries fields the job contract does not
+  declare"). Production still strips + warns rather than failing a paid generation. The
+  fix is always to declare the field, never to switch the test to the lenient policy.
 - **`JobType` is a closed union.** Adding to `JOB_TYPES` cascades compile errors through the
   `definitions` record and every exhaustive switch — that's the design working; fix each,
   don't cast around it. (No `unknown`/`any` casts — project non-negotiable.)
