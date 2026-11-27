@@ -93,6 +93,34 @@ subsystem specs of Magpie itself.
 Every row is now linked; the migration checklist below records how the set was elevated.
 To add or update one of these specs, invoke the **`write-a-product-spec`** skill.
 
+### Operations & reference
+
+Operator- and contributor-facing references. They are kept accurate, but they are lookup
+material rather than clause-numbered specs.
+
+- **[configuration.md](./configuration.md)** — every environment variable the code reads:
+  where it is read, its default, and whether it is essential, common, or a tuning knob.
+- **[chat-providers.md](./chat-providers.md)** — chat and embedding provider setup.
+- **[question-logging.md](./question-logging.md)** — question log, feedback and gap sources.
+- **[golden-eval.md](./golden-eval.md)** — the golden-question answer-quality regression gate.
+- **[security-scanning.md](./security-scanning.md)** — CI security scanners, Dependabot and
+  the Dependabot auto-merge policy (including the repository settings it depends on).
+- **[security-review.md](./security-review.md)** — hosting / IT-review pack.
+
+### Design history & archive
+
+Not part of the living spec set — read these for _why_, never for _how it behaves now_.
+
+- **[maintenance-redesign.md](./maintenance-redesign.md)** (+
+  [visual walk-through](./maintenance-redesign.html)) — the shipped, partly superseded
+  design record for the patrols and the reconcile gate. Kept in place because source
+  comments cite its _Decisions_ section; its status banner lists what has drifted. The
+  living spec is [gaps-and-maintenance.md](./gaps-and-maintenance.md).
+- **[archive/](./archive/README.md)** — finished and superseded documents (the original MVP
+  roadmap, the scheduled-jobs migration tracker). Not maintained.
+- **`superpowers/`** — dated design specs, plans and task reports (see _What this is NOT_
+  above). Never retro-edited.
+
 ## Migration status
 
 The whole doc set has been elevated into the living-spec shape. `retrieval.md` is the

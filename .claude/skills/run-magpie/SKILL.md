@@ -26,7 +26,8 @@ overwrite already-set vars), which is how the local overrides below work. The co
 `.env` is the **production** config, so a local run must override two things:
 
 - `STORAGE_BACKEND=postgres` → needs Postgres (pgvector) on `:5432`.
-- AI job queue + stores are Postgres → **Redis is not required** despite `QUEUE_URL`.
+- AI job queue + stores are Postgres → **Redis is not required**. (An old `.env` may still
+  carry a `QUEUE_URL`; nothing reads it.)
 - `AUTH_REQUIRED=true` (prod) gates token validation across the API. Locally, **override
   `AUTH_REQUIRED=false`** so the API skips auth and the watcher can claim jobs without
   Auth0 — otherwise every call (and `/api/jobs/claim`) returns `401`. The watcher only

@@ -445,10 +445,12 @@ the watcher run a job?" → `apps/watcher/src/runners/`. "what does the API expo
   predicate drives publish routing, which scheduled tasks are offered (no PR-poll for
   local-git), and the console's Accept/Bin vs Publish/Merge UI. Don't re-sniff
   destinations ad hoc — key off it.
-- **Docs staleness is flagged inline.** `docs/maintenance-redesign.md` carries an explicit
-  "Superseded (2026-07)" callout for the removed shared-source-corpus design;
-  `docs/superpowers/` plans/specs are historical records, never retro-edited. Trust the
-  code when a doc and the source disagree.
+- **Docs staleness is flagged inline.** `docs/maintenance-redesign.md` is a shipped design
+  record (status banner at the top) and carries an explicit "Superseded (2026-07)" callout
+  for the removed shared-source-corpus design; `docs/archive/` holds finished/superseded
+  documents (the MVP roadmap, the scheduled-jobs migration tracker) that are not
+  maintained; `docs/superpowers/` plans/specs are historical records, never retro-edited.
+  Trust the code when a doc and the source disagree.
 
 ### Commands
 

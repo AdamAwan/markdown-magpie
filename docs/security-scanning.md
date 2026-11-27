@@ -11,6 +11,7 @@ newly-disclosed advisories, not to fix an active issue.
 | Concern | Tooling | Location |
 | --- | --- | --- |
 | Dependency updates | Dependabot (npm + github-actions, weekly) | [`.github/dependabot.yml`](../.github/dependabot.yml) |
+| Merging low-risk dependency updates | GitHub native auto-merge, enabled for Dependabot patch/minor PRs | [`dependabot-auto-merge.yml`](../.github/workflows/dependabot-auto-merge.yml) |
 | Dependency vulnerabilities | `npm audit --omit=dev --audit-level=high` | `audit` job in [`security.yml`](../.github/workflows/security.yml) |
 | Committed secrets | gitleaks | `secret-scan` job in `security.yml` |
 | IaC / Dockerfile misconfig | Trivy config scan | `config-scan` job in `security.yml` |
@@ -39,6 +40,88 @@ actionable CVEs are reported). This runs only when an image was actually pushed 
 there is nothing to scan on a pull request or a no-push manual dispatch. Because
 the deploy workflow (`deploy.yml`) consumes images published here, this puts a
 vulnerability report in front of every image that can be deployed.
+
+## Dependabot auto-merge
+
+Dependency bumps were a large share of the commit history and several were merged by
+hand. [`dependabot-auto-merge.yml`](../.github/workflows/dependabot-auto-merge.yml) removes
+the hand-merging for the low-risk ones.
+
+**What it does.** On every Dependabot pull request it reads the update metadata
+(`dependabot/fetch-metadata`, pinned to a commit SHA) and, when the update is a semver
+**patch** or **minor**, runs `gh pr merge --auto --squash`. That command does not merge
+anything: it switches on GitHub's native auto-merge for the PR, and GitHub performs the
+squash merge later, once the base branch's requirements are met.
+
+**What it never does.**
+
+- It never merges directly, and it never approves a pull request.
+- It never acts on a semver-**major** update — those are left for a human. For a grouped
+  PR the update type is the _highest_ bump in the group, so one major in a group holds
+  the whole PR back.
+- It never acts on a PR that was not opened by, or a run that was not triggered by,
+  `dependabot[bot]`.
+- It checks out and runs no code from the pull request. Its token is scoped to
+  `contents: write` and `pull-requests: write` on that one job (the minimum the auto-merge
+  API accepts); the workflow default is no permissions at all.
+
+**Grouping.** `dependabot.yml` batches npm minor/patch updates into one weekly PR
+(`dev-and-minor`) and all workflow-action updates into another (`actions`). Because the
+workflows pin actions by major tag (`@v7`), the `actions` PR is usually a major bump and
+therefore usually waits for a human.
+
+### Required repository settings
+
+The workflow is inert until the owner enables these, and **the second one is a safety
+requirement, not a nicety**:
+
+1. **Settings → General → Pull Requests → Allow auto-merge.** Without it the
+   `gh pr merge --auto` step fails and nothing is merged.
+2. **A branch protection rule (or ruleset) on `main` with "Require status checks to pass
+   before merging"**, listing at least the Verify jobs — `Typecheck`, `Test`,
+   `Golden Eval`, `Lint and Dead Code`, `Build` — and ideally the Security jobs
+   (`Dependency audit`, `Secret scan`).
+
+> ⚠️ **Without required status checks, auto-merge merges immediately.** Native auto-merge
+> waits only for _required_ checks and reviews. If `main` has no required checks, GitHub
+> has nothing to wait for and merges the pull request the moment auto-merge is enabled —
+> before CI has finished, and whether or not it would have passed. Set up the required
+> checks **first**, then turn on "Allow auto-merge". A check that is not marked required
+> does not hold an auto-merge back even when it fails.
+
+Things that follow from those settings:
+
+- If the rule also **requires pull-request reviews**, auto-merge waits for a human
+  approval. That is a reasonable policy, but it puts a click back on every update; this
+  workflow deliberately does not auto-approve.
+- If the rule **requires branches to be up to date**, a Dependabot PR that falls behind
+  `main` stalls until it is rebased (`@dependabot rebase`, or Dependabot's own rebase on
+  the next run).
+- Pushing to a Dependabot branch by hand does not switch auto-merge back off. Disable it
+  on the PR ("Disable auto-merge") before adding commits you want reviewed.
+
+### What an auto-merge does _not_ trigger
+
+GitHub does not start workflow runs for events caused by the workflow `GITHUB_TOKEN`, and
+that includes the push to `main` made by an auto-merge this workflow enabled. So an
+auto-merged dependency update does **not** run Verify on `main`, and therefore does not
+publish a container image or trigger `deploy.yml`. The update ships with the next
+human-merged change (whose Verify run builds `main` as a whole) or a manual
+`workflow_dispatch` of the publish workflow.
+
+That is the conservative default: no unattended production deploys from a bot's merge. To
+make auto-merged updates build and deploy on their own, enable auto-merge with a GitHub App
+installation token or a fine-grained PAT instead of `GITHUB_TOKEN` (set `GH_TOKEN` on the
+merge step) — and accept that dependency updates then reach production without a human in
+the loop.
+
+### Semver is a convention, not a guarantee
+
+A minor or patch release can still break things, and for `0.x` packages a minor bump is
+allowed to be breaking. The required checks (typecheck, the full test suite against
+Postgres, the golden-question eval, lint, build) are the actual gate — which is why they
+must be _required_. If a class of package proves unsafe to auto-merge, exclude it from the
+group in `dependabot.yml` or add an `ignore` rule rather than loosening the checks.
 
 ## npm `overrides`
 
@@ -70,7 +153,12 @@ copy under `@modelcontextprotocol/node` can stay on a vulnerable version.
 ## Maintaining this
 
 - Dependabot PRs are labelled `dependencies`; minor/patch npm updates are grouped
-  into a single PR to keep review noise down.
+  into a single PR, and workflow-action updates into another, to keep review noise down.
+  Patch/minor PRs auto-merge once the required checks pass (see _Dependabot auto-merge_
+  above); majors need a human.
+- `dependabot/fetch-metadata` is pinned to a full commit SHA with the version in a trailing
+  comment, because that workflow holds a write token. Dependabot keeps SHA pins current the
+  same way it does tags. The other workflows still pin actions by major tag.
 - To make a report-only scanner blocking, change its `exit-code` from `"0"` to
   `"1"` after confirming the current baseline is clean.
 - The `audit` job only gates on runtime dependencies (`--omit=dev`), but a plain
