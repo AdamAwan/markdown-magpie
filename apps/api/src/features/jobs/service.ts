@@ -20,7 +20,7 @@ import * as questionnairesService from "../questionnaires/service.js";
 import * as sourceSyncService from "../source-sync/service.js";
 import * as sourceMapService from "../source-map/service.js";
 import * as snapshotsService from "../snapshots/service.js";
-import { applyPullRequestTransition } from "../../scheduling/gap-reconciler.js";
+import { applyPullRequestTransition, continueReconcileFromCompletedReshape } from "../../scheduling/gap-reconciler.js";
 import * as foldService from "../../scheduling/fold.js";
 import { snapshotRoot } from "../../platform/repositories.js";
 import type { FanoutBudget } from "../../platform/maintenance-fanout.js";
@@ -460,6 +460,10 @@ export async function completeJob(
     // re-ask. Inside the replayable block on purpose: if the commit fails, the
     // 500-replay re-runs it from the persisted answer.
     await proposalsService.continueGapClosureFromCompletedJob(ctx, existingJob);
+    // CONTINUATION: a completed gap-cluster reshape resumes the reconcile tick that
+    // enqueued it — apply the critic's verdicts, then draft. A no-op for a reshape
+    // job no tick registered.
+    await continueReconcileFromCompletedReshape(ctx, existingJob, resultData);
     // Stage-2 findings for an imported questionnaire answer route to a knowledge
     // gap (the sources back it, the KB never wrote it down) or to a register
     // entry. Without this the job runs and its findings vanish.

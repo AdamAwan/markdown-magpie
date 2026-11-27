@@ -1,8 +1,20 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import type { JobType, JobView } from "@magpie/jobs";
+import { FakeJobBroker } from "../jobs/fake-broker.js";
 import { makeTestContext } from "../test-support/context.js";
 import { reconcileGaps } from "./gap-reconciler.js";
 import type { AppContext } from "../context.js";
+
+// Completes every reshape at once with no verdicts. The reconciler does not wait
+// on a reshape, and drafts only once one has been applied — this test is about
+// drafting, so the reshape is made a no-op that is already done when enqueued.
+class NoVerdictReshapeBroker extends FakeJobBroker {
+  override async create(type: JobType, input: unknown): Promise<JobView> {
+    const job = await super.create(type, input);
+    return type === "reconcile_gap_clusters" ? super.complete(job.id, { merges: [], splits: [], dismissals: [] }) : job;
+  }
+}
 
 const keepOpen = {
   fetchPullRequestStatus: async () => ({ merged: false, state: "open" as const, mergeable: "unknown" as const })
@@ -27,7 +39,7 @@ function draftJobsForCluster(jobs: { input: unknown }[], clusterId: string): num
 
 describe("autonomous drafts are not re-drafted once linked", () => {
   it("does not enqueue a second draft for a cluster that already has a linked proposal", async () => {
-    const ctx = makeTestContext();
+    const ctx = makeTestContext({ jobs: new NoVerdictReshapeBroker() });
     const clusterA = await seedClusterWithGap(ctx, "Refunds");
 
     // First reconcile: drafts cluster A (one draft job carrying gapClusterId=A).
@@ -48,10 +60,7 @@ describe("autonomous drafts are not re-drafted once linked", () => {
     });
 
     // A new gap in a different cluster bumps the catalog revision so the next
-    // reconcile re-runs clustering + drafting. With two clusters, the reshape job
-    // will be enqueued but FakeJobBroker never completes it; use a short timeout so
-    // requestReshape's bounded-wait resolves quickly and drafting still runs.
-    ctx.settings.jobs.runToCompletionTimeoutMs = 20;
+    // reconcile re-runs clustering + drafting.
     await seedClusterWithGap(ctx, "Credit notes");
 
     // Second reconcile: drafts the new cluster but NOT A again.

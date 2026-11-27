@@ -96,6 +96,13 @@ export class RunLockTimeoutError extends Error {
 // waiters (many re-asks of one proposal completing at once) would starve the
 // holder and deadlock the pool. Polling holds a connection only for the instant
 // of each attempt.
+//
+// The default deadline sits BELOW the watcher's 30s request timeout on purpose:
+// a continuation that cannot get the lock should answer the completion POST with
+// a clean 500 (which the watcher retries) rather than be abandoned mid-wait by a
+// client-side abort.
+const DEFAULT_LOCK_WAIT_MS = 20_000;
+
 export async function withFlowRunLockWaiting<T>(
   pool: RunLockPool | undefined,
   taskType: string,
@@ -103,7 +110,7 @@ export async function withFlowRunLockWaiting<T>(
   run: () => Promise<T>,
   options: { timeoutMs?: number; pollMs?: number } = {}
 ): Promise<T> {
-  const deadline = Date.now() + (options.timeoutMs ?? 30_000);
+  const deadline = Date.now() + (options.timeoutMs ?? DEFAULT_LOCK_WAIT_MS);
   const pollMs = options.pollMs ?? 100;
   while (true) {
     const result = await withFlowRunLock(pool, taskType, flowId, run);
