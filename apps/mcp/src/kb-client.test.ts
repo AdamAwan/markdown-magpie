@@ -7,10 +7,13 @@ import assert from "node:assert/strict";
 // first executed statement) and pull the module in via a lazy dynamic import that
 // only resolves once these are in place. The getJson suite below uses the same
 // already-loaded instance, which is fine — it never sleeps.
+// The timeouts are real-time deadlines: they must stay well above what a few
+// stubbed polls take on a stalled CI runner (50 ms proved too tight), while the
+// two "Timed out" tests wait the full budget, so keep them small.
 process.env.ANSWER_POLL_INTERVAL_MS = "1";
-process.env.ANSWER_TIMEOUT_MS = "50";
+process.env.ANSWER_TIMEOUT_MS = "500";
 process.env.OUTLINE_POLL_INTERVAL_MS = "1";
-process.env.OUTLINE_TIMEOUT_MS = "50";
+process.env.OUTLINE_TIMEOUT_MS = "500";
 
 const {
   getJson,
