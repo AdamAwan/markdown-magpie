@@ -27,6 +27,7 @@ import { InMemoryWatcherRegistryStore } from "../stores/watcher-registry-store.j
 import { NullInsightsStore } from "../stores/insights-store.js";
 import { InMemoryJobAcceptanceStore } from "../stores/job-acceptance-store.js";
 import { InMemoryJobRepairContextStore } from "../stores/job-repair-context-store.js";
+import { InMemoryOrchestrationFollowupStore } from "../stores/orchestration-followup-store.js";
 import { InMemoryRateLimitStore } from "../stores/rate-limit-store.js";
 
 // Builds an AppContext wired entirely to in-memory stores with fake collaborators,
@@ -85,6 +86,7 @@ export function makeTestContext(overrides: Partial<AppContext> = {}): AppContext
       insights: new NullInsightsStore(),
       jobAcceptances: new InMemoryJobAcceptanceStore(),
       jobRepairContexts: new InMemoryJobRepairContextStore(),
+      orchestrationFollowups: new InMemoryOrchestrationFollowupStore(),
       rateLimit: new InMemoryRateLimitStore()
     },
     jobs: new FakeJobBroker(),

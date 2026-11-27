@@ -46,6 +46,8 @@ import type { JobAcceptanceStore } from "./stores/job-acceptance-store.js";
 import { PostgresJobAcceptanceStore } from "./stores/postgres-job-acceptance-store.js";
 import type { JobRepairContextStore } from "./stores/job-repair-context-store.js";
 import { PostgresJobRepairContextStore } from "./stores/postgres-job-repair-context-store.js";
+import type { OrchestrationFollowupStore } from "./stores/orchestration-followup-store.js";
+import { PostgresOrchestrationFollowupStore } from "./stores/postgres-orchestration-followup-store.js";
 import type { RateLimitStore } from "./stores/rate-limit-store.js";
 import { PostgresRateLimitStore } from "./stores/postgres-rate-limit-store.js";
 
@@ -77,6 +79,9 @@ export interface AppContext {
     jobAcceptances: JobAcceptanceStore;
     // Out-of-band repair state for the schema-invalid-output repair path (#288d).
     jobRepairContexts: JobRepairContextStore;
+    // Continuation state for the non-blocking maintenance orchestrators: which
+    // orchestration a follow-up AI job belongs to, so its completion can resume it.
+    orchestrationFollowups: OrchestrationFollowupStore;
     rateLimit: RateLimitStore;
   };
   jobs: JobBroker;
@@ -196,6 +201,7 @@ export async function createAppContext(config: AppConfig): Promise<AppContext> {
       insights: createInsightsStore(pool, pgBossSchema),
       jobAcceptances: new PostgresJobAcceptanceStore(pool),
       jobRepairContexts: new PostgresJobRepairContextStore(pool),
+      orchestrationFollowups: new PostgresOrchestrationFollowupStore(pool),
       rateLimit: new PostgresRateLimitStore(pool)
     },
     jobs,
