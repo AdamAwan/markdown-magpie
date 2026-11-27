@@ -97,7 +97,8 @@ material rather than clause-numbered specs.
 - **[chat-providers.md](./chat-providers.md)** — chat and embedding provider setup.
 - **[question-logging.md](./question-logging.md)** — question log, feedback and gap sources.
 - **[golden-eval.md](./golden-eval.md)** — the golden-question answer-quality regression gate.
-- **[security-scanning.md](./security-scanning.md)** — CI security scanners and Dependabot.
+- **[security-scanning.md](./security-scanning.md)** — CI security scanners, Dependabot and
+  the Dependabot auto-merge policy (including the repository settings it depends on).
 - **[security-review.md](./security-review.md)** — hosting / IT-review pack.
 
 ### Design history & archive

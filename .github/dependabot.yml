@@ -1,6 +1,8 @@
 # Dependabot keeps dependencies patched. Two ecosystems are covered:
 #   - npm: the workspace monorepo (single root package-lock.json).
 #   - github-actions: the workflows under .github/workflows.
+# Patch/minor PRs get GitHub auto-merge enabled by
+# .github/workflows/dependabot-auto-merge.yml; majors wait for a human.
 # See docs/security-scanning.md for how this fits the overall CI security posture.
 version: 2
 updates:
@@ -28,3 +30,13 @@ updates:
     labels:
       - dependencies
       - github-actions
+    groups:
+      # One weekly PR for every workflow action instead of one PR per action.
+      # No update-types filter on purpose: the workflows pin actions by major
+      # tag (`@v7`), so almost every bump Dependabot proposes here is a major and
+      # a minor/patch-only group would never match anything. A grouped PR that
+      # contains any major is NOT auto-merged (see dependabot-auto-merge.yml).
+      actions:
+        applies-to: version-updates
+        patterns:
+          - "*"
