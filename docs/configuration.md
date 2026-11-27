@@ -202,6 +202,7 @@ See [ai-jobs.md](./ai-jobs.md) and [rate-limiting.md](./rate-limiting.md). All r
 | `JOB_RUN_TO_COMPLETION_TIMEOUT_MS` | the job type's `expireInSeconds` | dev/test | Overrides the bounded-wait deadline. The test harness uses it to keep runs short. |
 | `JOB_SCHEDULE_TIMEZONE` | `UTC` | common | Timezone for cron schedules. |
 | `MAGPIE_JOB_REPAIR_ENABLED` | on | tuning | Exactly `false` disables the one informed repair-reprompt for schema-invalid outputs. |
+| `MAGPIE_JOB_OUTPUT_STRICT` | off | dev-test | `true` makes an undeclared job-output field a hard failure (API and watcher). Set by tests and the e2e/eval harnesses; leave unset in production, where such fields are stripped and logged. |
 | `RATE_LIMIT_ENABLED` | on | common | Exactly `false` disables both the per-principal limiter and the AI capacity guard. |
 | `RATE_LIMIT_WINDOW_MS` | `60000` | tuning | Fixed-window width. |
 | `RATE_LIMIT_ASK_PER_WINDOW` | `30` | common | `/ask` + `/retrieve` per principal per window. |
