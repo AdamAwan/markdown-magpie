@@ -254,9 +254,10 @@ zero embedding calls. It owns everything up to and including a populated, embedd
   `OPENAI_COMPATIBLE_API_KEY`) when blank; setting `OPENAI_COMPATIBLE_EMBEDDING_MODEL` is
   what enables it, together with a base URL. Both `text-embedding-3-small` and `ada-002`
   produce 1536-dim vectors and are compatible; a narrower model such as
-  `BAAI/bge-base-en-v1.5` (768) is padded to the stored width. `EMBEDDING_PROVIDER` is
-  **informational only** — surfaced in `/api/config` for display, it does not enable
-  embeddings.
+  `BAAI/bge-base-en-v1.5` (768) is padded to the stored width. There is no
+  `EMBEDDING_PROVIDER` variable: the embedding provider is auto-detected from the
+  variables above, and the `embeddingProvider` field `/api/config` reports is derived from
+  that detection (a leftover `EMBEDDING_PROVIDER` in an old `.env` is ignored).
 
 - **IN24** — Hybrid retrieval activates automatically when `KNOWLEDGE_STORE=postgres` **and**
   an embedding endpoint is configured; otherwise the system stays on

@@ -94,6 +94,8 @@ To add or update one of these specs, invoke the **`write-a-product-spec`** skill
 Operator- and contributor-facing references. They are kept accurate, but they are lookup
 material rather than clause-numbered specs.
 
+- **[configuration.md](./configuration.md)** — every environment variable the code reads:
+  where it is read, its default, and whether it is essential, common, or a tuning knob.
 - **[chat-providers.md](./chat-providers.md)** — chat and embedding provider setup.
 - **[question-logging.md](./question-logging.md)** — question log, feedback and gap sources.
 - **[golden-eval.md](./golden-eval.md)** — the golden-question answer-quality regression gate.
