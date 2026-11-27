@@ -84,11 +84,12 @@ export interface WatcherApi extends WatcherApiClient {
   // job the API bounded-waits on, drafting and publication enqueue). An absent
   // flowId reconciles the default flow.
   reconcileGaps(flowId: string | undefined, signal?: AbortSignal): Promise<{ ok: true }>;
-  // Drives post-merge gap-closure verification in the API for a merged proposal:
-  // re-asks the triggering questions (enqueued answer_question jobs the API
-  // bounded-waits on), runs the deterministic closure test, and resolves or
-  // reopens the gaps. Returns the API's closure result; the runner passes it
-  // through unchanged (schema-validated).
+  // Starts (or resumes) post-merge gap-closure verification in the API for a
+  // merged proposal: the API enqueues an answer_question re-ask per triggering
+  // question and returns at once (`closureStatus: "pending"`); each re-ask's
+  // completion resumes the verification, which runs the deterministic closure
+  // test and resolves or reopens the gaps. Returns the API's result; the runner
+  // passes it through unchanged (schema-validated).
   verifyClosure(proposalId: string, signal?: AbortSignal): Promise<unknown>;
   // Drives source-change sync in the API (checkout/diff/candidate gather + the
   // generative plan job the API bounded-waits on + publication enqueue), returning

@@ -454,6 +454,12 @@ export async function completeJob(
     if (isAnswerJobType(existingJob.type) && isAnswerQuestionJobOutput(resultData)) {
       await questionnairesService.handleQuestionnaireAnswerCompletion(ctx, existingJob, resultData);
     }
+    // CONTINUATION: a completed gap-closure re-ask resumes its proposal's
+    // verification (the verify_gap_closure orchestrator enqueued it and returned
+    // without waiting). A no-op for every answer job that is not a registered
+    // re-ask. Inside the replayable block on purpose: if the commit fails, the
+    // 500-replay re-runs it from the persisted answer.
+    await proposalsService.continueGapClosureFromCompletedJob(ctx, existingJob);
     // Stage-2 findings for an imported questionnaire answer route to a knowledge
     // gap (the sources back it, the KB never wrote it down) or to a register
     // entry. Without this the job runs and its findings vanish.
@@ -891,6 +897,12 @@ export async function failJob(
   // Retryable failures are skipped — the job will run again.
   if (failingJob && isAnswerJobType(failingJob.type) && failedJob.state === "failed") {
     await questionnairesService.handleQuestionnaireAnswerFailure(ctx, failingJob, jobError.message);
+  }
+  // A gap-closure re-ask that failed terminally records NO verdict (an
+  // infrastructure failure is never a still_open) — the proposal stays unverified,
+  // and this makes that loud.
+  if (failingJob && failedJob.state === "failed") {
+    await proposalsService.noteGapClosureReaskFailed(ctx, failingJob, jobError.message);
   }
   // A terminally failed (dead-lettered) mapping job marks its questionnaire import
   // `failed` with the reason (#366), so the console shows the error instead of a

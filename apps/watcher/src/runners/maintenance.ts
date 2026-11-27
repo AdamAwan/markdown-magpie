@@ -82,9 +82,13 @@ export class MaintenanceRunner {
     // here so a contract drift surfaces as a job failure rather than a silent
     // pass-through of the wrong payload.
     const output = verifyGapClosureOutputSchema.parse(result);
+    // `pending` is the normal first outcome: the API enqueued the re-asks and
+    // returned; their completions record the verdict. This job is done either way.
     logger.info(
       { jobId: job.id, proposalId, closureStatus: output.closureStatus, questions: output.perQuestion.length },
-      `verify_gap_closure[${job.id}]: ${output.closureStatus} (${output.perQuestion.length} question(s))`
+      output.closureStatus === "pending"
+        ? `verify_gap_closure[${job.id}]: re-asks enqueued; the verdict is recorded when they complete`
+        : `verify_gap_closure[${job.id}]: ${output.closureStatus} (${output.perQuestion.length} question(s))`
     );
     return output;
   }
