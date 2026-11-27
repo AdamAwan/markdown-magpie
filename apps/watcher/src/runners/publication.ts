@@ -12,7 +12,8 @@ import {
   crosslinkPullRequestsInputSchema,
   crosslinkPullRequestsOutputSchema,
   commentPullRequestInputSchema,
-  commentPullRequestOutputSchema
+  commentPullRequestOutputSchema,
+  buildJobOutput
 } from "@magpie/jobs";
 import {
   ensureGitCheckout,
@@ -237,7 +238,7 @@ export class PublicationRunner {
         { jobId: job.id, proposalId, branchName: publication.branchName },
         `publish_proposal[${job.id}]: proposal is a no-op (content already in the base); nothing published`
       );
-      return publishProposalOutputSchema.parse({
+      return buildJobOutput(publishProposalOutputSchema, {
         proposalId,
         branchName: publication.branchName,
         commitSha: publication.commitSha,
@@ -293,7 +294,7 @@ export class PublicationRunner {
     }
 
     // Validate against the contract before returning, symmetric with publishSourceSync.
-    return publishProposalOutputSchema.parse({
+    return buildJobOutput(publishProposalOutputSchema, {
       proposalId,
       branchName: publication.branchName,
       commitSha: publication.commitSha,
@@ -324,7 +325,7 @@ export class PublicationRunner {
         commented.push(url);
       }
     }
-    return crosslinkPullRequestsOutputSchema.parse({ commented, linkedAt: new Date().toISOString() });
+    return buildJobOutput(crosslinkPullRequestsOutputSchema, { commented, linkedAt: new Date().toISOString() });
   }
 
   private async commentPullRequest(job: JobView): Promise<unknown> {
@@ -334,7 +335,7 @@ export class PublicationRunner {
       body,
       ...(tokenEnv ? { tokenEnv } : {})
     });
-    return commentPullRequestOutputSchema.parse(commentUrl ? { commentUrl } : {});
+    return buildJobOutput(commentPullRequestOutputSchema, commentUrl ? { commentUrl } : {});
   }
 }
 

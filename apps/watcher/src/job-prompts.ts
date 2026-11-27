@@ -1,17 +1,7 @@
-import type {
-  AnswerTrace,
-  Citation,
-  Confidence,
-  FlowSelectionRequired,
-  ImportVerdict,
-  KnowledgeGapSignal,
-  OutOfScope,
-  ReconcileResult,
-  SourceMapEntry
-} from "@magpie/core";
+import type { AnswerTrace, Citation, Confidence, ImportVerdict, ReconcileResult, SourceMapEntry } from "@magpie/core";
 import { NO_SOURCE_MATERIAL_GAP_PREFIX } from "@magpie/core";
-import type { JobType, JobView } from "@magpie/jobs";
-import { jobDefinition } from "@magpie/jobs";
+import type { JobType, JobView, UndeclaredOutputFieldPolicy, answerQuestionOutputSchema } from "@magpie/jobs";
+import { undeclaredFieldsMessage, validateJobOutput } from "@magpie/jobs";
 import type { z } from "zod";
 import {
   CORRECT_DOCUMENT,
@@ -30,40 +20,29 @@ import {
   SUMMARIZE_GAP,
   VERIFY_DOCUMENT,
   VERIFY_IMPORTED_ANSWER,
-  wrapUntrusted
+  wrapUntrusted,
+  type PromptDefinition
 } from "@magpie/prompts";
 import type { FetchableInternetSource } from "./fetch-url.js";
 import type { RetrievedSection } from "./http-client.js";
+import { logger } from "./logger.js";
 import type { SourceWorkspace } from "./source-workspace.js";
 
 // The answer-question output the watcher returns after route -> retrieve ->
 // answer. Citations are derived in code (never trusted from the model), so this
 // is built by buildAnswerOutput rather than parsed from the model's JSON.
-export interface AnswerOutput {
-  answer: string;
-  confidence: Confidence;
-  citations: Citation[];
-  gaps?: KnowledgeGapSignal[];
-  flowId?: string;
-  flowSelectionRequired?: FlowSelectionRequired;
-  outOfScope?: OutOfScope;
-  trace?: AnswerTrace;
-  // The condensed, self-contained question a follow-up was rewritten into (#239).
-  // Set by the answer runner when it condensed a follow-up using the conversation
-  // context; the API persists it on the question log for gap hygiene. Absent when
-  // no condensation ran (first turn, or an already-standalone follow-up).
-  standaloneQuestion?: string;
-  // The reconciler's verdict when the job carried candidate prior answers to reuse
-  // (questionnaire trust). Set by the answer runner: on a reuse verdict the runner
-  // builds the output directly, and on a fresh verdict it stamps this onto the
-  // normal answer flow's output. Absent when the job carried no candidates.
-  reuse?: ReconcileResult;
-  // Stage-1 adjudication of an imported answer (questionnaire ingestion). Set
-  // from the model's structured reply on the grounded branch; the answer runner
-  // then settles the final value, forcing "uncovered" whenever the answer cites
-  // nothing. Absent when the job carried no imported answer.
-  importVerdict?: ImportVerdict;
-}
+//
+// The type IS the job contract's parsed shape, not a hand-kept mirror of it: a
+// field the answer runner starts emitting has to be declared on
+// answerQuestionOutputSchema first, or the object literal that sets it does not
+// compile — instead of compiling here and being stripped at the API. Field-level
+// documentation lives on @magpie/core's AnswerQuestionJobOutput, which the schema
+// is checked against in both directions.
+export type AnswerOutput = z.output<typeof answerQuestionOutputSchema>;
+// One gap signal as the contract admits it. Narrower than @magpie/core's
+// KnowledgeGapSignal on purpose: the answer job may only raise `auto`,
+// `manual` or `followup` gaps (`verification` gaps are raised by the API).
+type AnswerGap = NonNullable<AnswerOutput["gaps"]>[number];
 
 // The loop-level portion of the trace the answer runner assembles as it goes
 // (routing, searches, pool). buildAnswerOutput completes it with the answer
@@ -94,25 +73,27 @@ export function buildFlowSelectionRequiredOutput(
   };
 }
 
-// The task instructions for each generic chat job type (everything except
+// The catalog prompt for each generic chat job type (everything except
 // answer_question, which the answer runner assembles itself with its retrieved
 // context). A type with no entry falls back to the generic job envelope.
-const JOB_INSTRUCTIONS: Partial<Record<JobType, string>> = {
-  summarize_gap: SUMMARIZE_GAP.instructions,
-  draft_markdown_proposal: DRAFT_MARKDOWN_PROPOSAL.instructions,
-  draft_seed_document: DRAFT_SEED_DOCUMENT.instructions,
-  outline_flow_seed: OUTLINE_FLOW_SEED.instructions,
-  revise_seed_plan: REVISE_SEED_PLAN.instructions,
-  fold_markdown_proposal: FOLD_MARKDOWN_PROPOSAL.instructions,
-  fold_changeset_proposal: FOLD_CHANGESET_PROPOSAL.instructions,
-  sync_source_changes_generate_plan: SOURCE_CHANGE_SYNC.instructions,
-  verify_document: VERIFY_DOCUMENT.instructions,
-  verify_imported_answer: VERIFY_IMPORTED_ANSWER.instructions,
-  map_questionnaire_columns: MAP_QUESTIONNAIRE_COLUMNS.instructions,
-  correct_document: CORRECT_DOCUMENT.instructions,
-  dedupe_documents: DEDUPE_DOCUMENTS.instructions,
-  split_document: SPLIT_DOCUMENT.instructions,
-  improve_document: IMPROVE_DOCUMENT.instructions
+// Exported so the output-contract test can check that every field a prompt tells
+// the model to return is declared on that job's output schema.
+export const JOB_PROMPTS: Partial<Record<JobType, PromptDefinition>> = {
+  summarize_gap: SUMMARIZE_GAP,
+  draft_markdown_proposal: DRAFT_MARKDOWN_PROPOSAL,
+  draft_seed_document: DRAFT_SEED_DOCUMENT,
+  outline_flow_seed: OUTLINE_FLOW_SEED,
+  revise_seed_plan: REVISE_SEED_PLAN,
+  fold_markdown_proposal: FOLD_MARKDOWN_PROPOSAL,
+  fold_changeset_proposal: FOLD_CHANGESET_PROPOSAL,
+  sync_source_changes_generate_plan: SOURCE_CHANGE_SYNC,
+  verify_document: VERIFY_DOCUMENT,
+  verify_imported_answer: VERIFY_IMPORTED_ANSWER,
+  map_questionnaire_columns: MAP_QUESTIONNAIRE_COLUMNS,
+  correct_document: CORRECT_DOCUMENT,
+  dedupe_documents: DEDUPE_DOCUMENTS,
+  split_document: SPLIT_DOCUMENT,
+  improve_document: IMPROVE_DOCUMENT
 };
 
 // Job types whose `input` is a genuine instruction to the model rather than
@@ -132,7 +113,7 @@ const PLAINTEXT_INPUT_JOB_TYPES: ReadonlySet<JobType> = new Set<JobType>(["revis
 // buildSourceGroundedPrompt on the agentic paths instead; the old shared-corpus
 // leading block this function once rendered died with the corpus pipeline.
 export function buildPrompt(job: JobView): string {
-  const instructions = JOB_INSTRUCTIONS[job.type];
+  const instructions = JOB_PROMPTS[job.type]?.instructions;
   if (!instructions) {
     return `${GENERIC_JOB.instructions}\n\nJob:\n${wrapUntrusted(JSON.stringify({ type: job.type, input: job.input }, null, 2))}`;
   }
@@ -156,7 +137,7 @@ export function buildSourceGroundedPrompt(
   mapEntries: SourceMapEntry[] = [],
   fetchable: FetchableInternetSource[] = []
 ): string {
-  const instructions = JOB_INSTRUCTIONS[job.type] ?? GENERIC_JOB.instructions;
+  const instructions = (JOB_PROMPTS[job.type] ?? GENERIC_JOB).instructions;
   const workspaceLines = workspaces
     .map((ws) =>
       mode === "cli"
@@ -219,15 +200,33 @@ function omitInputKeys(input: unknown, keys: string[]): unknown {
 // @magpie/jobs. Tolerates surrounding prose by extracting the first JSON object.
 // answer_question is intentionally not handled here — its output is built from
 // retrieved sections via buildAnswerOutput.
-export function parseJobOutput(job: JobView, stdout: string): unknown {
-  const parsed = extractJson(stdout);
-  const schema = jobDefinition(job.type).outputSchema as z.ZodType<unknown>;
-  const result = schema.safeParse(parsed);
-  if (!result.success) {
-    throw new Error(`${job.type} output does not match the job contract: ${result.error.message}`);
+//
+// This parse is where a model-authored field the schema does not declare gets
+// dropped — BEFORE the API ever sees it, so the API's own strip warning cannot
+// observe it. `undeclaredFields` therefore decides it here: "strip" (production)
+// drops the field and logs which, "reject" (tests, CI, e2e) throws.
+export function parseJobOutput(job: JobView, stdout: string, undeclaredFields: UndeclaredOutputFieldPolicy): unknown {
+  const validation = validateJobOutput(job.type, extractJson(stdout), undeclaredFields);
+  if (!validation.ok) {
+    throw new Error(
+      validation.reason === "undeclared_fields"
+        ? undeclaredFieldsMessage(job.type, validation.undeclaredPaths)
+        : `${job.type} output does not match the job contract: ${validation.error.message}`
+    );
   }
-  return result.data;
+  if (validation.strippedPaths.length > 0) {
+    logger.warn(
+      { jobId: job.id, jobType: job.type, strippedKeys: validation.strippedPaths },
+      `${job.type}[${job.id}]: model output carried undeclared fields stripped to the job contract`
+    );
+  }
+  return validation.data;
 }
+
+// The policy every runner entry point falls back to when its caller names none:
+// strict. Production always names one (createConfiguredRunners), so this is what
+// tests get — see the option's doc on ChatRunnerOptions / CliRunnerOptions.
+export const DEFAULT_UNDECLARED_OUTPUT_FIELDS: UndeclaredOutputFieldPolicy = "reject";
 
 // Builds the answer_question output from the model's final answer text and the
 // sections the watcher accumulated across the agentic retrieval loop. Citations
@@ -554,7 +553,7 @@ function groundedFollowupGaps(
   citedSectionIds: string[],
   unproductiveSearches: Set<string>,
   confidence: Confidence
-): KnowledgeGapSignal[] {
+): AnswerGap[] {
   if (!structured || structured.followupGaps.length === 0 || unproductiveSearches.size === 0) {
     return [];
   }
@@ -661,8 +660,8 @@ function toGapSignal(
   question: string,
   citedSectionIds: string[],
   confidence: Confidence,
-  source: KnowledgeGapSignal["source"]
-): KnowledgeGapSignal {
+  source: AnswerGap["source"]
+): AnswerGap {
   return { summary, question, confidence, citedSectionIds, source };
 }
 

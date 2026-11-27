@@ -1,5 +1,6 @@
 import { createAzure } from "@ai-sdk/azure";
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
+import { undeclaredOutputFieldPolicyFromEnv } from "@magpie/jobs";
 import { createChatProvider } from "@magpie/retrieval";
 import { CAPABILITY_GATES, DEFAULT_CAPABILITY_RUNTIME, type CapabilityRuntime } from "../capabilities.js";
 import type { WatcherApi } from "../http-client.js";
@@ -32,6 +33,11 @@ export function createConfiguredRunners(
   const agenticTimeoutMs = positiveInt(env.MAGPIE_AGENTIC_TIMEOUT_MS, 600_000);
   // Shared by both hosted chat providers — see chatTemperature below.
   const temperature = chatTemperature(env.CHAT_TEMPERATURE);
+  // Production is lenient about an undeclared field in a model's output (strip +
+  // warn); MAGPIE_JOB_OUTPUT_STRICT=true — set by the e2e/eval harnesses — makes
+  // it a hard failure. Named explicitly on every AI runner because the runners
+  // themselves default to strict (so tests are strict without opting in).
+  const undeclaredOutputFields = undeclaredOutputFieldPolicyFromEnv(env);
 
   if (ready("openai-compatible")) {
     // The agent model drives the source-agent tool loop for source-grounded jobs;
@@ -54,7 +60,7 @@ export function createConfiguredRunners(
           ...temperature
         }),
         api,
-        { agentModel: openaiAgentModel, ...optionalModel(env.OPENAI_COMPATIBLE_MODEL) }
+        { agentModel: openaiAgentModel, undeclaredOutputFields, ...optionalModel(env.OPENAI_COMPATIBLE_MODEL) }
       )
     );
   }
@@ -94,7 +100,7 @@ export function createConfiguredRunners(
         api,
         // Azure's "model" for pricing purposes is the deployment name — the
         // operator prices whatever the deployment serves.
-        { agentModel: azureAgentModel, ...optionalModel(env.AZURE_OPENAI_CHAT_DEPLOYMENT) }
+        { agentModel: azureAgentModel, undeclaredOutputFields, ...optionalModel(env.AZURE_OPENAI_CHAT_DEPLOYMENT) }
       )
     );
   }
@@ -110,6 +116,7 @@ export function createConfiguredRunners(
         api,
         timeoutMs: positiveInt(env.AGENT_CLI_TIMEOUT_MS, DEFAULT_CHAT_TIMEOUT_MS),
         agenticTimeoutMs,
+        undeclaredOutputFields,
         ...(env.CLI_CANCEL_GRACE_MS ? { cancelGraceMs: positiveInt(env.CLI_CANCEL_GRACE_MS, 5_000) } : {})
       })
     );
@@ -126,6 +133,7 @@ export function createConfiguredRunners(
         api,
         timeoutMs: positiveInt(env.AGENT_CLI_TIMEOUT_MS, DEFAULT_CHAT_TIMEOUT_MS),
         agenticTimeoutMs,
+        undeclaredOutputFields,
         ...(env.CLI_CANCEL_GRACE_MS ? { cancelGraceMs: positiveInt(env.CLI_CANCEL_GRACE_MS, 5_000) } : {})
       })
     );

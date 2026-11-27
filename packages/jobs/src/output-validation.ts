@@ -54,6 +54,15 @@ export function validateJobOutput(
   return { ok: true, data: parsed.data, strippedPaths };
 }
 
+// For an output a runner assembles IN CODE (publication, maintenance, snapshot
+// refresh, the reconcile verdicts) rather than parses from a model. Typing the
+// argument as the schema's own input makes an undeclared field a COMPILE error
+// (excess-property check on the object literal), where a bare
+// `schema.parse({...})` would accept anything and silently strip it.
+export function buildJobOutput<Schema extends z.ZodType>(schema: Schema, output: z.input<Schema>): z.output<Schema> {
+  return schema.parse(output);
+}
+
 // The message both boundaries use for an undeclared-field failure, so the fix is
 // spelled out wherever it surfaces (a thrown watcher error, a failed job).
 export function undeclaredFieldsMessage(type: JobType, undeclaredPaths: readonly string[]): string {

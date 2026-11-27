@@ -5,6 +5,8 @@ import type { ChatProvider, ChatRequest, ChatResponse } from "@magpie/core";
 import { JOB_TYPES, jobDefinition, type JobView, type JobType } from "@magpie/jobs";
 import type { RetrievedSection, RetrieveResponse, WatcherApi } from "../http-client.js";
 import { ChatRunner } from "./chat.js";
+import { CliRunner } from "./cli.js";
+import { createConfiguredRunners } from "./index.js";
 
 function job(type: JobView["type"], input: unknown): JobView {
   return {
@@ -1655,5 +1657,62 @@ describe("ChatRunner", () => {
 
     assert.equal(output.title, "T");
     assert.equal(chat.requests.length, 1, "the one-shot generative path handled the job");
+  });
+});
+
+describe("undeclared output fields", () => {
+  const summary = { summary: "s", priority: 1, rationale: "r" };
+  const reply = JSON.stringify({ ...summary, sentiment: "grumpy" });
+
+  it("a runner built without a policy (every test) is strict: an undeclared field fails the run", async () => {
+    const runner = new ChatRunner("openai-compatible", new FakeChatProvider(() => reply), fakeApi());
+    assert.equal(runner.undeclaredOutputFields, "reject");
+    await assert.rejects(
+      runner.run(job("summarize_gap", { provider: "openai-compatible" }), new AbortController().signal),
+      /summarize_gap output carries fields the job contract does not declare: sentiment/
+    );
+  });
+
+  it("a runner given the production policy strips the field and completes", async () => {
+    const runner = new ChatRunner("openai-compatible", new FakeChatProvider(() => reply), fakeApi(), {
+      undeclaredOutputFields: "strip"
+    });
+    const output = await runner.run(
+      job("summarize_gap", { provider: "openai-compatible" }),
+      new AbortController().signal
+    );
+    assert.deepEqual(output, summary);
+  });
+
+  // The runners default to strict, so production leniency rests entirely on the
+  // composition root naming the policy on EVERY AI runner it builds. Pin that.
+  const env = {
+    OPENAI_COMPATIBLE_BASE_URL: "https://example.invalid/v1",
+    OPENAI_COMPATIBLE_API_KEY: "k",
+    OPENAI_COMPATIBLE_MODEL: "m",
+    AZURE_OPENAI_ENDPOINT: "https://example.invalid",
+    AZURE_OPENAI_API_KEY: "k",
+    AZURE_OPENAI_CHAT_DEPLOYMENT: "d",
+    CODEX_CLI_PATH: "codex",
+    CLAUDE_CLI_PATH: "claude"
+  };
+  const policies = (extra: Record<string, string>): string[] =>
+    createConfiguredRunners({ ...env, ...extra }, fakeApi()).flatMap((runner) =>
+      runner instanceof ChatRunner || runner instanceof CliRunner
+        ? [`${runner.capability}:${runner.undeclaredOutputFields}`]
+        : []
+    );
+
+  it("the composition root makes every AI runner lenient by default (production)", () => {
+    assert.deepEqual(policies({}), ["openai-compatible:strip", "azure-openai:strip", "codex:strip", "claude:strip"]);
+  });
+
+  it("the composition root makes every AI runner strict under MAGPIE_JOB_OUTPUT_STRICT=true (e2e/eval)", () => {
+    assert.deepEqual(policies({ MAGPIE_JOB_OUTPUT_STRICT: "true" }), [
+      "openai-compatible:reject",
+      "azure-openai:reject",
+      "codex:reject",
+      "claude:reject"
+    ]);
   });
 });

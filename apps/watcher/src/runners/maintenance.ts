@@ -7,7 +7,8 @@ import {
   seedBootstrapOutputSchema,
   sourceChangeSyncOutputSchema,
   verifyGapClosureInputSchema,
-  verifyGapClosureOutputSchema
+  verifyGapClosureOutputSchema,
+  buildJobOutput
 } from "@magpie/jobs";
 import type { WatcherApi } from "../http-client.js";
 import { logger } from "../logger.js";
@@ -103,7 +104,7 @@ export class MaintenanceRunner {
     // TODO(Task 8E/follow-up): reconcile endpoint returns no counts; returning
     // zeros under-reports actual drafted/published. Surface real counts when the
     // endpoint exposes them.
-    return processGapsToPullRequestsOutputSchema.parse({ drafted: 0, published: 0 });
+    return buildJobOutput(processGapsToPullRequestsOutputSchema, { drafted: 0, published: 0 });
   }
 
   private async runSourceSync(job: JobView, signal: AbortSignal): Promise<unknown> {
@@ -119,7 +120,7 @@ export class MaintenanceRunner {
       { jobId: job.id, runCount: runIds.length },
       `source_change_sync[${job.id}]: created ${runIds.length} sync run(s)`
     );
-    return sourceChangeSyncOutputSchema.parse({ runIds });
+    return buildJobOutput(sourceChangeSyncOutputSchema, { runIds });
   }
 
   private async runFixPatrol(job: JobView, signal: AbortSignal): Promise<unknown> {
@@ -133,7 +134,7 @@ export class MaintenanceRunner {
       { jobId: job.id, runId, selectedCount, findingCount },
       `correctness_patrol[${job.id}]: checked ${selectedCount} document(s), ${findingCount} finding(s) (run ${runId})`
     );
-    return correctnessPatrolOutputSchema.parse({ runId, selectedCount, findingCount });
+    return buildJobOutput(correctnessPatrolOutputSchema, { runId, selectedCount, findingCount });
   }
 
   private async runImprovePatrol(job: JobView, signal: AbortSignal): Promise<unknown> {
@@ -147,7 +148,7 @@ export class MaintenanceRunner {
       { jobId: job.id, runId, selectedCount, enqueuedCount },
       `editorial_patrol[${job.id}]: selected ${selectedCount} document(s), enqueued ${enqueuedCount} scan(s) (run ${runId})`
     );
-    return editorialPatrolOutputSchema.parse({ runId, selectedCount, enqueuedCount });
+    return buildJobOutput(editorialPatrolOutputSchema, { runId, selectedCount, enqueuedCount });
   }
 }
 
