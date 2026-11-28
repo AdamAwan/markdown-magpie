@@ -20,7 +20,7 @@ const TOP_LEVEL_LOCK_FILES = ["index.lock", "HEAD.lock", "config.lock", "packed-
 // and is left alone — the operation then fails as a transient lock error and the
 // job queue retries it later, by which time the lock has either been released or
 // aged into staleness.
-export function staleLockAgeMs(): number {
+function staleLockAgeMs(): number {
   return GIT_SUBPROCESS_TIMEOUT_MS * 2;
 }
 

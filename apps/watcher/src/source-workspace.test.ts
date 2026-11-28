@@ -49,6 +49,45 @@ describe("prepareSourceWorkspaces", () => {
     assert.equal(seenTokenEnv, "ACME_PAT");
   });
 
+  it("threads the job's abort signal to the checkout and propagates an abort (IN44)", async () => {
+    const checkoutRoot = mkdtempSync(path.join(tmpdir(), "magpie-ws-"));
+    const controller = new AbortController();
+    let seenSignal: AbortSignal | undefined;
+    const checkout = async (req: { id: string; url: string; checkoutRoot: string; signal?: AbortSignal }) => {
+      seenSignal = req.signal;
+      controller.abort(new Error("job cancelled"));
+      throw new Error("git fetch aborted: job cancelled");
+    };
+    await assert.rejects(
+      prepareSourceWorkspaces([git(), git({ id: "g2", name: "Other" })], {
+        checkoutRoot,
+        checkout,
+        signal: controller.signal
+      }),
+      /aborted: job cancelled/,
+      "an abort is not degraded into an 'unavailable' note"
+    );
+    assert.equal(seenSignal, controller.signal);
+  });
+
+  it("redacts credentials from an unavailable source's note (TM37)", async () => {
+    const checkoutRoot = mkdtempSync(path.join(tmpdir(), "magpie-ws-"));
+    const cloned = path.join(checkoutRoot, "g2");
+    mkdirSync(cloned, { recursive: true });
+    const checkout = async (req: { id: string; url: string; checkoutRoot: string }) => {
+      if (req.id === "g1") {
+        throw new Error("fatal: could not read from https://bot:ghp_secret@example.com/r.git");
+      }
+      return { localPath: cloned, remoteUrl: req.url };
+    };
+    const prepared = await prepareSourceWorkspaces([git(), git({ id: "g2", name: "Other" })], {
+      checkoutRoot,
+      checkout
+    });
+    assert.equal(prepared.notes.length, 1);
+    assert.doesNotMatch(prepared.notes[0], /ghp_secret/);
+  });
+
   it("captures the checkout head sha on the workspace", async () => {
     const checkoutRoot = mkdtempSync(path.join(tmpdir(), "magpie-ws-"));
     const cloned = path.join(checkoutRoot, "g1");

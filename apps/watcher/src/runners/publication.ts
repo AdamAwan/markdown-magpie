@@ -21,6 +21,7 @@ import {
   LocalGitProposalPublisher,
   raisePullRequest,
   commentOnPullRequest,
+  redactCredentials,
   resolvePrimaryBranch,
   type RaisePullRequestRequest,
   type RaisedPullRequest
@@ -33,10 +34,13 @@ import { logger } from "../logger.js";
 // The git operations the publication runner needs, injectable so tests exercise
 // the orchestration (context fetch, branch derivation, changeset assembly, PR
 // fallback) without running real git or hitting GitHub.
+//
+// Every git/GitHub step takes the job's abort signal (P24): a cancelled or
+// shutting-down job kills its in-flight git child instead of running on.
 export interface PublicationDeps {
-  prepareRepository(repository: RepositoryRef): Promise<RepositoryRef>;
-  publishProposal(request: PublishProposalBranchRequest): Promise<PublishProposalBranchResponse>;
-  publishChangeset(request: PublishChangesetRequest): Promise<PublishProposalBranchResponse>;
+  prepareRepository(repository: RepositoryRef, signal?: AbortSignal): Promise<RepositoryRef>;
+  publishProposal(request: PublishProposalBranchRequest, signal?: AbortSignal): Promise<PublishProposalBranchResponse>;
+  publishChangeset(request: PublishChangesetRequest, signal?: AbortSignal): Promise<PublishProposalBranchResponse>;
   raisePullRequest(request: RaisePullRequestRequest): Promise<RaisedPullRequest | undefined>;
   commentOnPullRequest(request: {
     pullRequestUrl: string;
@@ -49,10 +53,15 @@ export interface PublicationDeps {
 export function createGitPublicationDeps(): PublicationDeps {
   const publisher = new LocalGitProposalPublisher();
   return {
-    prepareRepository: (repository) =>
-      preparePublicationRepository(repository, process.env.MAGPIE_CHECKOUT_ROOT ?? ".magpie/checkouts"),
-    publishProposal: (request) => publisher.publish(request),
-    publishChangeset: (request) => publisher.publishChangeset(request),
+    prepareRepository: (repository, signal) =>
+      preparePublicationRepository(
+        repository,
+        process.env.MAGPIE_CHECKOUT_ROOT ?? ".magpie/checkouts",
+        ensureGitCheckout,
+        signal
+      ),
+    publishProposal: (request, signal) => publisher.publish(request, signal ? { signal } : {}),
+    publishChangeset: (request, signal) => publisher.publishChangeset(request, signal ? { signal } : {}),
     raisePullRequest,
     commentOnPullRequest
   };
@@ -61,7 +70,8 @@ export function createGitPublicationDeps(): PublicationDeps {
 export async function preparePublicationRepository(
   repository: RepositoryRef,
   checkoutRoot: string,
-  checkout: typeof ensureGitCheckout = ensureGitCheckout
+  checkout: typeof ensureGitCheckout = ensureGitCheckout,
+  signal?: AbortSignal
 ): Promise<RepositoryRef> {
   const remoteUrl = repository.remoteUrl ?? repository.git?.remoteUrl;
   if (!remoteUrl) {
@@ -73,7 +83,8 @@ export async function preparePublicationRepository(
     url: remoteUrl,
     checkoutRoot,
     branch: repository.defaultBranch,
-    ...(repository.tokenEnv ? { tokenEnv: repository.tokenEnv } : {})
+    ...(repository.tokenEnv ? { tokenEnv: repository.tokenEnv } : {}),
+    ...(signal ? { signal } : {})
   });
   const relativePath = repository.git?.relativePathFromRoot;
   const indexedPath =
@@ -177,9 +188,9 @@ export class PublicationRunner {
     return PUBLISH_JOB_TYPES.has(type);
   }
 
-  async run(job: JobView, _signal: AbortSignal): Promise<unknown> {
+  async run(job: JobView, signal: AbortSignal): Promise<unknown> {
     if (job.type === "publish_proposal") {
-      return this.publishProposal(job);
+      return this.publishProposal(job, signal);
     }
     if (job.type === "crosslink_pull_requests") {
       return this.crosslinkPullRequests(job);
@@ -190,7 +201,7 @@ export class PublicationRunner {
     throw new Error(`PublicationRunner cannot handle ${job.type}`);
   }
 
-  private async publishProposal(job: JobView): Promise<unknown> {
+  private async publishProposal(job: JobView, signal: AbortSignal): Promise<unknown> {
     const { proposalId, destination, regenerate } = publishProposalInputSchema.parse(job.input);
     logger.info(
       { jobId: job.id, proposalId },
@@ -203,7 +214,7 @@ export class PublicationRunner {
     // and the git publisher re-checks against the destination subtree; this guards
     // whatever PublicationDeps implementation is wired in).
     assertPublishablePaths(proposal);
-    const preparedRepository = await this.deps.prepareRepository(toRepositoryRef(repository));
+    const preparedRepository = await this.deps.prepareRepository(toRepositoryRef(repository), signal);
 
     const branchName = createProposalBranchName(proposal);
     const title = `docs: ${proposal.title}`;
@@ -216,25 +227,31 @@ export class PublicationRunner {
         { jobId: job.id, proposalId, branchName, fileCount: proposal.changeset.length },
         `publish_proposal[${job.id}]: publishing "${proposal.title}" (${proposal.changeset.length} file change(s)) to branch ${branchName}`
       );
-      publication = await this.deps.publishChangeset({
-        repository: preparedRepository,
-        branchName,
-        title,
-        changes: proposal.changeset
-      });
+      publication = await this.deps.publishChangeset(
+        {
+          repository: preparedRepository,
+          branchName,
+          title,
+          changes: proposal.changeset
+        },
+        signal
+      );
     } else {
       logger.info(
         { jobId: job.id, proposalId, branchName },
         `publish_proposal[${job.id}]: publishing "${proposal.title}" to branch ${branchName}`
       );
-      publication = await this.deps.publishProposal({
-        repository: preparedRepository,
-        branchName,
-        title,
-        markdown: proposal.markdown,
-        targetPath: proposal.targetPath,
-        ...(regenerate ? { regenerate: true } : {})
-      });
+      publication = await this.deps.publishProposal(
+        {
+          repository: preparedRepository,
+          branchName,
+          title,
+          markdown: proposal.markdown,
+          targetPath: proposal.targetPath,
+          ...(regenerate ? { regenerate: true } : {})
+        },
+        signal
+      );
     }
     // A no-op create: the generated content already matches the base, so no branch
     // was pushed and there is nothing to open a PR for. Report it so the API settles
@@ -259,10 +276,17 @@ export class PublicationRunner {
       `publish_proposal[${job.id}]: pushed ${publication.branchName} at ${publication.commitSha.slice(0, 8)}`
     );
 
-    // The branch is pushed. For a github destination, try to open a PR — a PR
-    // failure must not lose the branch, so degrade to a branch-only publish. A
-    // local-git (file://) destination has no GitHub PR to open, and the console's
-    // Merge action takes over from branch-pushed, so skip the PR step entirely.
+    // The branch is pushed. A local-git (file://) destination has no GitHub PR to
+    // open, and the console's Merge action takes over from branch-pushed, so skip
+    // the PR step entirely.
+    //
+    // For a github destination a failed PR step FAILS the job (P26) so the queue
+    // retries it. Recording a branch-only publish instead would strand the proposal
+    // as branch-pushed with no PR and nothing that would ever open one. The retry
+    // is safe: the publisher finds the already-pushed branch and returns its tip
+    // without pushing again (P25), and raisePullRequest reuses an open PR for the
+    // branch. `undefined` (not a GitHub remote, or no token) is still a legitimate
+    // branch-only publish.
     let pullRequestUrl: string | undefined;
     if (destination === "local-git") {
       logger.info(
@@ -270,31 +294,39 @@ export class PublicationRunner {
         `publish_proposal[${job.id}]: local-git destination — branch pushed, skipping pull request`
       );
     } else {
+      const baseBranch = resolvePrimaryBranch({
+        configuredBranch: repository.defaultBranch,
+        detectedDefault: repository.git?.defaultBranch,
+        detectedCurrent: repository.git?.currentBranch
+      });
+      let raised: RaisedPullRequest | undefined;
       try {
-        const baseBranch = resolvePrimaryBranch({
-          configuredBranch: repository.defaultBranch,
-          detectedDefault: repository.git?.defaultBranch,
-          detectedCurrent: repository.git?.currentBranch
-        });
-        const raised = await this.deps.raisePullRequest({
+        raised = await this.deps.raisePullRequest({
           remoteUrl: publication.remoteUrl,
           headBranch: publication.branchName,
           baseBranch,
           title: `docs: ${proposal.title}`,
           body: buildPullRequestBody(proposal),
-          ...(repository.tokenEnv ? { tokenEnv: repository.tokenEnv } : {})
+          ...(repository.tokenEnv ? { tokenEnv: repository.tokenEnv } : {}),
+          signal
         });
-        pullRequestUrl = raised?.url;
-        if (pullRequestUrl) {
-          logger.info(
-            { jobId: job.id, pullRequestUrl },
-            `publish_proposal[${job.id}]: opened pull request ${pullRequestUrl}`
-          );
-        }
       } catch (error) {
+        const reason = redactCredentials(error instanceof Error ? error.message : String(error));
         logger.warn(
-          { jobId: job.id, branchName: publication.branchName, err: error },
-          `Branch ${publication.branchName} pushed, but PR creation failed: ${error instanceof Error ? error.message : "unknown error"}`
+          { jobId: job.id, branchName: publication.branchName, err: reason },
+          `publish_proposal[${job.id}]: branch ${publication.branchName} pushed, but PR creation failed; failing the job so it is retried`
+        );
+        // The cause is the PR helper's own error, whose message is already built
+        // from redacted GitHub output.
+        throw new Error(`Branch ${publication.branchName} was pushed but opening its pull request failed: ${reason}`, {
+          cause: error
+        });
+      }
+      pullRequestUrl = raised?.url;
+      if (pullRequestUrl) {
+        logger.info(
+          { jobId: job.id, pullRequestUrl },
+          `publish_proposal[${job.id}]: opened pull request ${pullRequestUrl}`
         );
       }
     }
