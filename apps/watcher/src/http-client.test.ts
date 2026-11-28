@@ -58,6 +58,11 @@ function installFakeFetch(delayMs: number, body: unknown): void {
 }
 
 const realFetch = globalThis.fetch;
+
+// A claimed job: the id plus the attempt (retryCount) it was claimed at.
+const JOB = { id: "job-1", retryCount: 2 };
+// A retry schedule fast enough for tests that only care whether a retry happens.
+const FAST_RETRY = { baseDelayMs: 1, maxDelayMs: 2, budgetMs: 1_000 };
 afterEach(() => {
   globalThis.fetch = realFetch;
 });
@@ -102,10 +107,10 @@ describe("HttpWatcherApi complete() retry", () => {
     const api = new HttpWatcherApi({
       apiBaseUrl: "http://api.test",
       workerName: "test-worker",
-      completeRetryBaseDelayMs: 1
+      settleRetry: FAST_RETRY
     });
 
-    await api.complete("job-1", { answer: "ok" });
+    await api.complete(JOB, { answer: "ok" });
     assert.equal(state.calls, 2, "expected one retry after the 503");
   });
 
@@ -116,11 +121,11 @@ describe("HttpWatcherApi complete() retry", () => {
     const api = new HttpWatcherApi({
       apiBaseUrl: "http://api.test",
       workerName: "test-worker",
-      completeRetryBaseDelayMs: 1
+      settleRetry: FAST_RETRY
     });
 
     await api.complete(
-      "job-1",
+      JOB,
       { answer: "ok" },
       { inputTokens: 10, outputTokens: 2 },
       { provider: "openai-compatible", model: "gpt-test" }
@@ -128,6 +133,7 @@ describe("HttpWatcherApi complete() retry", () => {
     assert.deepEqual(state.bodies[0], {
       output: { answer: "ok" },
       executor: "test-worker",
+      attempt: 2,
       usage: { inputTokens: 10, outputTokens: 2 },
       provider: "openai-compatible",
       model: "gpt-test"
@@ -139,11 +145,11 @@ describe("HttpWatcherApi complete() retry", () => {
     const api = new HttpWatcherApi({
       apiBaseUrl: "http://api.test",
       workerName: "test-worker",
-      completeRetryBaseDelayMs: 1
+      settleRetry: FAST_RETRY
     });
 
-    await api.complete("job-1", { answer: "ok" });
-    assert.deepEqual(state.bodies[0], { output: { answer: "ok" }, executor: "test-worker" });
+    await api.complete(JOB, { answer: "ok" });
+    assert.deepEqual(state.bodies[0], { output: { answer: "ok" }, executor: "test-worker", attempt: 2 });
   });
 
   it("retries a completion POST after a network error and succeeds", async () => {
@@ -151,24 +157,42 @@ describe("HttpWatcherApi complete() retry", () => {
     const api = new HttpWatcherApi({
       apiBaseUrl: "http://api.test",
       workerName: "test-worker",
-      completeRetryBaseDelayMs: 1
+      settleRetry: FAST_RETRY
     });
 
-    await api.complete("job-1", { answer: "ok" });
+    await api.complete(JOB, { answer: "ok" });
     assert.equal(state.calls, 2);
   });
 
-  it("gives up after exhausting retries on a persistent 5xx", async () => {
-    const state = installScriptedFetch([{ status: 502 }, { status: 502 }, { status: 502 }, { status: 502 }]);
+  it("keeps retrying a persistent 5xx until the time budget is spent, then gives up (J61)", async () => {
+    const state = installScriptedFetch(Array.from({ length: 200 }, () => ({ status: 502 })));
     const api = new HttpWatcherApi({
       apiBaseUrl: "http://api.test",
       workerName: "test-worker",
-      completeRetryBaseDelayMs: 1
+      // Delays 2,4,8,8,8… ms (capped, jittered over the upper half): a 60ms
+      // budget allows several retries, never an unbounded loop.
+      settleRetry: { baseDelayMs: 4, maxDelayMs: 16, budgetMs: 60 }
     });
 
-    await assert.rejects(api.complete("job-1", { answer: "ok" }), /502/);
-    // One initial attempt + 3 retries = 4 calls total, then it gives up.
-    assert.equal(state.calls, 4);
+    const startedAt = Date.now();
+    await assert.rejects(api.complete(JOB, { answer: "ok" }), /502/);
+    assert.ok(state.calls >= 4, `expected several retries within the budget, got ${state.calls}`);
+    assert.ok(state.calls < 60, `expected the budget to bound the retries, got ${state.calls}`);
+    assert.ok(Date.now() - startedAt < 1_000, "gave up near the budget");
+  });
+
+  it("retries 429 and 408 as transient, like a 5xx", async () => {
+    const state = installScriptedFetch([{ status: 429 }, { status: 408 }, { status: 200, body: {} }]);
+    const api = new HttpWatcherApi({ apiBaseUrl: "http://api.test", workerName: "w", settleRetry: FAST_RETRY });
+    await api.complete(JOB, { answer: "ok" });
+    assert.equal(state.calls, 3);
+  });
+
+  it("does not retry a 409 (cancelled, or no longer held by this attempt — J62)", async () => {
+    const state = installScriptedFetch([{ status: 409, body: { error: "job_not_active" } }]);
+    const api = new HttpWatcherApi({ apiBaseUrl: "http://api.test", workerName: "w", settleRetry: FAST_RETRY });
+    await assert.rejects(api.complete(JOB, { answer: "ok" }), /409/);
+    assert.equal(state.calls, 1);
   });
 
   it("does not retry a deterministic 4xx contract failure (e.g. invalid_output)", async () => {
@@ -176,10 +200,54 @@ describe("HttpWatcherApi complete() retry", () => {
     const api = new HttpWatcherApi({
       apiBaseUrl: "http://api.test",
       workerName: "test-worker",
-      completeRetryBaseDelayMs: 1
+      settleRetry: FAST_RETRY
     });
 
-    await assert.rejects(api.complete("job-1", { answer: "ok" }), /400/);
+    await assert.rejects(api.complete(JOB, { answer: "ok" }), /400/);
     assert.equal(state.calls, 1, "a 4xx must fail immediately, not retry");
+  });
+});
+
+describe("HttpWatcherApi fail() retry (API31)", () => {
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+  });
+
+  it("retries a failure POST after a 5xx or a network error and sends the attempt", async () => {
+    const state = installScriptedFetch([{ status: 500 }, { networkError: true }, { status: 200, body: {} }]);
+    const api = new HttpWatcherApi({ apiBaseUrl: "http://api.test", workerName: "w", settleRetry: FAST_RETRY });
+    await api.fail(JOB, { code: "runner_failed", message: "boom", category: "internal" });
+    assert.equal(state.calls, 3);
+    assert.deepEqual(state.bodies[2], {
+      error: { code: "runner_failed", message: "boom", category: "internal", executor: "w" },
+      attempt: 2
+    });
+  });
+
+  it("does not retry a 404 (the job is gone)", async () => {
+    const state = installScriptedFetch([{ status: 404, body: { error: "job_not_found" } }]);
+    const api = new HttpWatcherApi({ apiBaseUrl: "http://api.test", workerName: "w", settleRetry: FAST_RETRY });
+    await assert.rejects(api.fail(JOB, { code: "x", message: "y", category: "internal" }), /404/);
+    assert.equal(state.calls, 1);
+  });
+});
+
+describe("HttpWatcherApi heartbeat() (J60)", () => {
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+  });
+
+  it("sends the claimed attempt and reports whether this attempt still holds the job", async () => {
+    const state = installScriptedFetch([
+      { status: 200, body: { cancelled: false, active: true } },
+      { status: 200, body: { cancelled: false, active: false } },
+      // An API predating J60 sends no `active`: read as still held.
+      { status: 200, body: { cancelled: false } }
+    ]);
+    const api = new HttpWatcherApi({ apiBaseUrl: "http://api.test", workerName: "w" });
+    assert.deepEqual(await api.heartbeat(JOB), { cancelled: false, active: true });
+    assert.deepEqual(await api.heartbeat(JOB), { cancelled: false, active: false });
+    assert.deepEqual(await api.heartbeat(JOB), { cancelled: false, active: true });
+    assert.deepEqual(state.bodies[0], { workerName: "w", attempt: 2 });
   });
 });

@@ -4,7 +4,7 @@ import { describe, it } from "node:test";
 import type { JobCapability, JobError, JobType, JobView } from "@magpie/jobs";
 import { createLogger } from "@magpie/logger";
 import type { JobRunner } from "./runners/types.js";
-import type { WatcherApiClient } from "./http-client.js";
+import type { ClaimedJob, HeartbeatReply, WatcherApiClient } from "./http-client.js";
 import { WorkerLoop } from "./worker-loop.js";
 
 function fakeJob(overrides: Partial<JobView> = {}): JobView {
@@ -20,24 +20,27 @@ function fakeJob(overrides: Partial<JobView> = {}): JobView {
     createdAt: "2026-01-01T00:00:00.000Z",
     updatedAt: "2026-01-01T00:00:00.000Z",
     expireInSeconds: 300,
-    heartbeatSeconds: 60,
+    heartbeatSeconds: 120,
     ...overrides
   };
 }
 
 interface FakeApiOptions {
   jobs: (JobView | undefined)[];
-  // Heartbeat results, consumed in order; defaults to not-cancelled.
-  heartbeats?: boolean[];
+  // Heartbeat replies, consumed in order; defaults to held and not cancelled.
+  // `true` is shorthand for a cancelled reply.
+  heartbeats?: (boolean | HeartbeatReply)[];
 }
 
 class FakeApiClient implements WatcherApiClient {
   claims: { workerName: string; capabilities: JobCapability[] }[] = [];
   completed: { id: string; output: unknown; usage?: unknown; identity?: unknown }[] = [];
   failed: { id: string; error: JobError }[] = [];
+  // The attempt (claimed retryCount) every lifecycle call carried, in order.
+  attempts: { call: "heartbeat" | "complete" | "fail"; attempt: number }[] = [];
   heartbeatCalls = 0;
   private readonly jobs: (JobView | undefined)[];
-  private readonly heartbeats: boolean[];
+  private readonly heartbeats: (boolean | HeartbeatReply)[];
 
   constructor(options: FakeApiOptions) {
     this.jobs = [...options.jobs];
@@ -49,22 +52,27 @@ class FakeApiClient implements WatcherApiClient {
     return this.jobs.length ? this.jobs.shift() : undefined;
   }
 
-  async heartbeat(): Promise<{ cancelled: boolean }> {
+  async heartbeat(job: ClaimedJob): Promise<HeartbeatReply> {
     this.heartbeatCalls += 1;
-    return { cancelled: this.heartbeats.length ? Boolean(this.heartbeats.shift()) : false };
+    this.attempts.push({ call: "heartbeat", attempt: job.retryCount });
+    const next = this.heartbeats.shift();
+    if (next === undefined || next === false) return { cancelled: false, active: true };
+    return next === true ? { cancelled: true, active: false } : next;
   }
 
-  async complete(id: string, output: unknown, usage?: unknown, identity?: unknown): Promise<void> {
+  async complete(job: ClaimedJob, output: unknown, usage?: unknown, identity?: unknown): Promise<void> {
+    this.attempts.push({ call: "complete", attempt: job.retryCount });
     this.completed.push({
-      id,
+      id: job.id,
       output,
       ...(usage !== undefined ? { usage } : {}),
       ...(identity !== undefined ? { identity } : {})
     });
   }
 
-  async fail(id: string, error: JobError): Promise<void> {
-    this.failed.push({ id, error });
+  async fail(job: ClaimedJob, error: JobError): Promise<void> {
+    this.attempts.push({ call: "fail", attempt: job.retryCount });
+    this.failed.push({ id: job.id, error });
   }
 }
 
@@ -210,9 +218,47 @@ describe("WorkerLoop", () => {
     assert.equal(api.completed.length, 0);
   });
 
-  it("heartbeats at half the job's heartbeat interval", async () => {
-    // heartbeatSeconds 0.04 => 20ms cadence; ~70ms of work should fire ~3 beats.
-    const api = new FakeApiClient({ jobs: [fakeJob({ heartbeatSeconds: 0.04 })] });
+  it("aborts the runner and reports nothing when a heartbeat says the job is no longer held (J60)", async () => {
+    // The claim lapsed (the job was re-queued or re-claimed by another watcher):
+    // the run is aborted and neither completed nor failed from here.
+    const api = new FakeApiClient({
+      jobs: [fakeJob({ heartbeatSeconds: 0.04, retryCount: 2 })],
+      heartbeats: [{ cancelled: false, active: false }]
+    });
+    let abortedSignal: AbortSignal | undefined;
+    const runner = new FakeRunner(
+      (signal) =>
+        new Promise((_resolve, reject) => {
+          abortedSignal = signal;
+          signal.addEventListener("abort", () => reject(new Error("aborted by signal")), { once: true });
+        })
+    );
+    const loop = new WorkerLoop(api, [runner], CAPS, "w1", silentLogger, { pollIntervalMs: 1 });
+    await loop.tick();
+    assert.ok(abortedSignal?.aborted, "runner's signal should be aborted");
+    assert.equal(api.completed.length, 0);
+    assert.equal(api.failed.length, 0);
+    assert.deepEqual(api.attempts[0], { call: "heartbeat", attempt: 2 }, "the heartbeat names the claimed attempt");
+  });
+
+  it("fences completion and failure to the claimed attempt (J60)", async () => {
+    const completing = new FakeApiClient({ jobs: [fakeJob({ retryCount: 1 })] });
+    await new WorkerLoop(completing, [new FakeRunner(async () => ({}))], CAPS, "w1", silentLogger, {
+      pollIntervalMs: 1
+    }).tick();
+    assert.deepEqual(completing.attempts, [{ call: "complete", attempt: 1 }]);
+
+    const failing = new FakeApiClient({ jobs: [fakeJob({ retryCount: 3 })] });
+    const thrower = new FakeRunner(async () => {
+      throw new Error("boom");
+    });
+    await new WorkerLoop(failing, [thrower], CAPS, "w1", silentLogger, { pollIntervalMs: 1 }).tick();
+    assert.deepEqual(failing.attempts, [{ call: "fail", attempt: 3 }]);
+  });
+
+  it("heartbeats at a quarter of the job's heartbeat window", async () => {
+    // heartbeatSeconds 0.08 => 20ms cadence; ~70ms of work should fire ~3 beats.
+    const api = new FakeApiClient({ jobs: [fakeJob({ heartbeatSeconds: 0.08 })] });
     const runner = new FakeRunner(async () => {
       await new Promise((resolve) => setTimeout(resolve, 70));
       return {};
@@ -253,7 +299,7 @@ describe("WorkerLoop", () => {
         return undefined;
       },
       async heartbeat() {
-        return { cancelled: false };
+        return { cancelled: false, active: true };
       },
       async complete() {},
       async fail() {}

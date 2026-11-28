@@ -18,7 +18,7 @@ export interface WorkerLoopOptions {
 }
 
 // The default heartbeat cadence (ms) used when a job carries no heartbeatSeconds.
-// Mirrors the @magpie/jobs catalog BASE_POLICY heartbeatSeconds of 60s, halved.
+// A quarter of the @magpie/jobs catalog BASE_POLICY heartbeatSeconds of 120s.
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 30_000;
 
 // The poll/execute loop. It claims a job for the capabilities this watcher
@@ -103,7 +103,7 @@ export class WorkerLoop {
       log.error("no runner supports job type; failing job");
       const error = new Error(`No runner supports job type ${job.type}`);
       recordException(error);
-      await this.api.fail(job.id, this.toJobError(job, error));
+      await this.api.fail(job, this.toJobError(job, error));
       this.recordOutcome(job, "failed", Date.now() - startedAt);
       return;
     }
@@ -131,7 +131,7 @@ export class WorkerLoop {
       // The runner's aiIdentity (provider + configured model) rides every
       // completion it produces — even usage-less ones (CLI providers), where it
       // marks WHICH model ran unmetered rather than implying the run was free.
-      await this.api.complete(job.id, output, usage, runner.aiIdentity);
+      await this.api.complete(job, output, usage, runner.aiIdentity);
       log.info({ durationMs, outcome: "completed" }, "job done");
       this.recordOutcome(job, "completed", durationMs);
     } catch (error) {
@@ -146,7 +146,7 @@ export class WorkerLoop {
       log.error({ durationMs, outcome: "failed", err: error }, "job failed");
       recordException(error);
       this.recordOutcome(job, "failed", durationMs);
-      await this.api.fail(job.id, this.toJobError(job, error));
+      await this.api.fail(job, this.toJobError(job, error));
     } finally {
       heartbeat.stop();
       this.activeController = undefined;
@@ -159,17 +159,25 @@ export class WorkerLoop {
     recordJobDuration(job.type, outcome, durationMs);
   }
 
-  // Polls the server heartbeat on a cadence of half the job's heartbeat window.
-  // A cancelled response aborts the active controller so the runner can wind down.
+  // Polls the server heartbeat on a cadence of a quarter of the job's heartbeat
+  // window, so three lost beats in a row still keep the claim (J60). It keeps
+  // beating until the job's terminal report is done — including while
+  // complete() retries through an API outage. A reply saying this attempt no
+  // longer holds the job (cancelled, failed, completed, or re-queued after the
+  // claim lapsed) aborts the active controller: the runner winds down and the
+  // loop reports nothing further.
   private startHeartbeat(job: JobView, controller: AbortController): { stop(): void } {
     const intervalMs = heartbeatIntervalMs(job);
     const timer = setInterval(() => {
       void this.api
-        .heartbeat(job.id)
+        .heartbeat(job)
         .then((result) => {
           if (result.cancelled) {
             this.logger.info({ jobId: job.id }, "job cancellation requested by server; aborting");
             controller.abort(new Error("job cancelled"));
+          } else if (result.active === false) {
+            this.logger.warn({ jobId: job.id }, "job no longer held by this watcher; aborting");
+            controller.abort(new Error("job no longer held"));
           }
         })
         .catch(() => {
@@ -198,7 +206,7 @@ export class WorkerLoop {
 function heartbeatIntervalMs(job: JobView): number {
   const seconds = job.heartbeatSeconds;
   if (typeof seconds === "number" && seconds > 0) {
-    return Math.max(1, (seconds * 1000) / 2);
+    return Math.max(1, (seconds * 1000) / 4);
   }
   return DEFAULT_HEARTBEAT_INTERVAL_MS;
 }
