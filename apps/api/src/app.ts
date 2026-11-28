@@ -98,8 +98,15 @@ export function buildApp(ctx: AppContext, options?: ApiAuthOptions): Hono {
         );
       }
     }
-    const ready = databaseOk && brokerStarted;
-    return c.json({ ready, checks: { database: databaseOk, broker: brokerStarted } }, ready ? 200 : 503);
+    // The knowledge index must have loaded the persisted corpus: a replica whose
+    // startup hydrate failed would otherwise answer every question from an empty
+    // index while reporting ready (hydrate retries in the background).
+    const knowledgeIndexOk = ctx.stores.knowledgeIndex.isHydrated();
+    const ready = databaseOk && brokerStarted && knowledgeIndexOk;
+    return c.json(
+      { ready, checks: { database: databaseOk, broker: brokerStarted, knowledgeIndex: knowledgeIndexOk } },
+      ready ? 200 : 503
+    );
   });
   api.use("*", requireAuth(authOptions));
 

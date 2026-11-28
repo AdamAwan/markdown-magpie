@@ -62,6 +62,7 @@ export class PostgresKnowledgeStore
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
+      await lockRepositoryForIndexing(client, summary.repository.id);
       await client.query(
         `
           INSERT INTO repositories (id, name, remote_url, default_branch, local_path, provider, indexed_commit_sha)
@@ -123,6 +124,7 @@ export class PostgresKnowledgeStore
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
+      await lockRepositoryForIndexing(client, input.repository.id);
 
       if (input.deletedDocumentIds.length > 0) {
         // document_sections.document_id references documents(id); delete sections
@@ -588,6 +590,17 @@ export class PostgresKnowledgeStore
       );
     }
   }
+}
+
+// Serializes index writes for one repository across every API replica sharing
+// this database (docs/ingestion.md IN26). The in-process KeyedMutex in
+// InMemoryKnowledgeIndex covers one replica; two replicas re-indexing the same
+// repository could still interleave their transactions — upserting overlapping
+// section rows in different orders (a deadlock) or pruning each other's rows.
+// A TRANSACTION-level advisory lock releases itself at COMMIT/ROLLBACK, so a
+// crashed writer can never leave the repository locked. Keyed like run-lock.ts.
+async function lockRepositoryForIndexing(client: pg.PoolClient, repositoryId: string): Promise<void> {
+  await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [`knowledge-index ${repositoryId}`]);
 }
 
 // The approximate (HNSW) vector search. `ORDER BY embedding <=> query` is the

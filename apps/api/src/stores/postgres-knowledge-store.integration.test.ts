@@ -216,6 +216,57 @@ test(
   }
 );
 
+test(
+  "index writes for one repository serialize across store instances (replicas)",
+  { skip: !runIntegration },
+  async (t) => {
+    const pool = new pg.Pool({ connectionString: databaseUrl });
+    const repositoryId = `lock-${randomUUID()}`;
+    t.after(async () => {
+      await pool.query("DELETE FROM documents WHERE repository_id = $1", [repositoryId]);
+      await pool.query("DELETE FROM repositories WHERE id = $1", [repositoryId]);
+    });
+    t.after(() => pool.end());
+
+    // Another replica is mid-way through writing this repository: it holds the
+    // repository's indexing lock inside its open transaction.
+    const otherReplica = await pool.connect();
+    await otherReplica.query("BEGIN");
+    await otherReplica.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [
+      `knowledge-index ${repositoryId}`
+    ]);
+
+    const store = new PostgresKnowledgeStore(pool);
+    let saved = false;
+    const save = store
+      .saveIndexedRepository(
+        {
+          repository: {
+            id: repositoryId,
+            name: repositoryId,
+            defaultBranch: "main",
+            localPath: "/tmp",
+            provider: "local"
+          },
+          documentCount: 0,
+          sectionCount: 0
+        },
+        [],
+        []
+      )
+      .then(() => {
+        saved = true;
+      });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    assert.equal(saved, false, "this replica's write waits for the other's transaction");
+
+    await otherReplica.query("COMMIT");
+    otherReplica.release();
+    await save;
+    assert.equal(saved, true, "and proceeds once it commits");
+  }
+);
+
 test("migration 0072 indexes the section foreign keys", { skip: !runIntegration }, async (t) => {
   const pool = new pg.Pool({ connectionString: databaseUrl });
   t.after(() => pool.end());

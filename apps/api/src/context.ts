@@ -238,15 +238,18 @@ export async function createAppContext(config: AppConfig): Promise<AppContext> {
         logger.error({ err: message }, "failed to adopt unversioned section embeddings");
       }
       // Syncing git checkouts is required: a failure here aborts startup (the
-      // caller maps a throw to a non-zero exit). Hydrating the index is
-      // best-effort — a fresh or unreachable store should not stop the server.
+      // caller maps a throw to a non-zero exit). Hydrating the index does not
+      // abort startup — an unreachable store should not stop the server — but a
+      // failed hydrate is retried in the background with backoff, and /api/ready
+      // stays 503 until one succeeds, so this replica never serves an empty index
+      // as if it were the knowledge base (docs/api.md API27).
       await syncConfiguredGitCheckouts(this.repositoryDeps());
-      try {
-        await knowledgeIndex.hydrate();
-      } catch (error) {
-        const message = error instanceof Error ? error.message : "Unknown error";
-        logger.error({ err: message }, "failed to hydrate knowledge index from storage");
-      }
+      await knowledgeIndex.startHydration({
+        onError: (error, attempt) => {
+          const message = error instanceof Error ? error.message : "Unknown error";
+          logger.error({ err: message, attempt }, "failed to hydrate knowledge index from storage; retrying");
+        }
+      });
       // Best-effort one-shot migration: give pre-existing proposals a gap cluster
       // so the reconciler has lineage to work from. No-ops once clusters exist.
       try {
