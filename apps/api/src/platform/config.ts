@@ -121,7 +121,6 @@ export interface AppConfig {
   jobs: {
     waitTimeoutMs: number;
     waitPollMs: number;
-    runToCompletionTimeoutMs?: number;
     scheduleTimezone: string;
     // Whether a schema-invalid completion of a repairable provider job gets one
     // informed repair-reprompt before terminal-failing (#288d). On by default;
@@ -381,7 +380,6 @@ const schema = z
 
     JOB_WAIT_TIMEOUT_MS: optionalPositiveInt,
     JOB_WAIT_POLL_MS: optionalPositiveInt,
-    JOB_RUN_TO_COMPLETION_TIMEOUT_MS: optionalPositiveInt,
     JOB_SCHEDULE_TIMEZONE: optionalString,
     MAGPIE_JOB_REPAIR_ENABLED: optionalString,
 
@@ -566,7 +564,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     jobs: {
       waitTimeoutMs: parsed.JOB_WAIT_TIMEOUT_MS ?? 25_000,
       waitPollMs: parsed.JOB_WAIT_POLL_MS ?? 250,
-      runToCompletionTimeoutMs: parsed.JOB_RUN_TO_COMPLETION_TIMEOUT_MS,
       scheduleTimezone: parsed.JOB_SCHEDULE_TIMEZONE ?? "UTC",
       // On unless explicitly disabled, matching rateLimit.enabled's fail-safe default.
       repairEnabled: parsed.MAGPIE_JOB_REPAIR_ENABLED !== "false"
