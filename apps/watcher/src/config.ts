@@ -25,10 +25,10 @@ export interface WatcherConfig {
   pollIntervalMs: number;
   // Abort deadline (ms) for the maintenance orchestration callbacks
   // (reconcile-gaps, source-sync, fix-patrol, improve-patrol). Those API
-  // endpoints bounded-wait on a batch of AI jobs and legitimately run for
-  // minutes, so they need a far longer deadline than the hot-path request
-  // timeout. Defaults to 15 minutes; raise it toward the maintenance job's
-  // 1-hour budget for very large patrol batches.
+  // endpoints never wait on the AI jobs they enqueue, but they do real work
+  // inline — git checkouts and diffs, embedding and retrieval calls, PR status
+  // polls — which can outlast the hot-path request timeout on a large flow.
+  // Defaults to 15 minutes.
   maintenanceTimeoutMs: number;
   auth: {
     required: boolean;

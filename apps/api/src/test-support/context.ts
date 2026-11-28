@@ -51,11 +51,7 @@ export function makeTestContext(overrides: Partial<AppContext> = {}): AppContext
     // Auth fails closed by default; the in-memory test context explicitly opts
     // out so buildApp(makeTestContext()) exercises handlers without tokens.
     AUTH_REQUIRED: "false",
-    // Bounded-waits (e.g. the reconciler's reshape job) resolve to a terminal job
-    // instantly when a fake broker completes it synchronously; when a broker never
-    // completes, keep the fallback wait tiny so tests don't block on the real
-    // job-expiry deadline (5 min for reconcile_gap_clusters).
-    JOB_RUN_TO_COMPLETION_TIMEOUT_MS: "100",
+    // Keep the /api/jobs/:id/wait long-poll snappy under test.
     JOB_WAIT_POLL_MS: "5"
   });
   const embedder = new BackgroundEmbedder(undefined, undefined);

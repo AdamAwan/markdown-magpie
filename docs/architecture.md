@@ -107,6 +107,13 @@ model has two tiers: each scheduled task fires *exactly one* orchestrator job on
 the real work (tier 2). The job-type identifier is also the pg-boss queue name, so the
 same string names the Schedules row, the dataflow box, and the job-queue `type=` filter.
 
+An orchestrator **never waits** on its tier-2 jobs. It enqueues them and returns, so the
+watcher that claimed it is free at once; where the orchestration has more to do once a
+tier-2 job finishes (apply a reshape then draft, act on a verify verdict, commit a
+gap-closure verdict), it resumes from that job's completion. A single watcher can therefore
+run the whole pipeline — there is no minimum watcher count beyond the capabilities the
+deployment needs ([ai-jobs.md](./ai-jobs.md) J22a).
+
 The reconciler, the correctness/editorial patrols, embedding-based gap clustering, the
 per-flow advisory lock and short-circuits, the reconcile gate (`ChangeIntent`), and the
 merge-cascade gap-closure verification are all specified in

@@ -22,9 +22,10 @@ const MAINTENANCE_JOB_TYPES: ReadonlySet<JobType> = new Set([
 ]);
 
 // Runs the scheduled maintenance jobs by POSTing a thin API endpoint, keeping the
-// heavy reconciler orchestration (and its store access) inside the API. The
-// reshape's only generative step is itself an enqueued AI job the API
-// bounded-waits on, so this runner needs no model provider.
+// heavy orchestration (and its store access) inside the API. Every generative
+// step is an AI job the API ENQUEUES and does not wait for, so this runner needs
+// no model provider and each call returns promptly — which is what lets the
+// watcher that ran the orchestrator go on to run the jobs it enqueued.
 export class MaintenanceRunner {
   readonly capability: JobCapability = "maintenance";
 

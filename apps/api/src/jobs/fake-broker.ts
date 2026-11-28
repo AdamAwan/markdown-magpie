@@ -208,9 +208,9 @@ export class FakeJobBroker implements JobBroker {
     const job = this.getExisting(id);
     // Mirrors pg-boss's cancelJobs SQL (`WHERE state < 'completed'`): cancelling a
     // job that has already reached a terminal state is a no-op, not an overwrite.
-    // This matters for any cancel that races a completion (#162): a job
-    // that completes/fails in the gap between the bounded wait's timeout and the
-    // cancel call must keep its real terminal state, not flip to "cancelled".
+    // This matters for any cancel that races a completion (#162): a job that
+    // completes/fails just before the cancel call reaches the broker must keep
+    // its real terminal state, not flip to "cancelled".
     if (TERMINAL_JOB_STATES.has(job.state)) {
       return job;
     }

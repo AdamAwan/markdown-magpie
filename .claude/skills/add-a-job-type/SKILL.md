@@ -118,20 +118,27 @@ Postgres-backed broker integration test and `scripts/e2e-jobs.ts`).
   run time. The API's ask service picks the configured provider before enqueuing.
 - New docs: if the job is user-visible or changes the model, update `docs/ai-jobs.md` /
   `docs/architecture.md` alongside the code.
-- **A maintenance *orchestrator* self-starves a single watcher.** The maintenance pattern is:
-  the watcher claims the job and POSTs a thin API endpoint, and the API `runJobToCompletion`s
-  the real generative work as *enqueued* AI jobs (`verify_gap_closure`, the patrols, the gap
-  reconciler all do this). The claiming watcher **blocks inside that POST** for the whole
-  orchestration, and a watcher runs **one job at a time** — so the inner AI jobs can only be
-  claimed by a *second* watcher. With one watcher they never get claimed and time out. If you
-  add or touch such a job, it **requires ≥2 watchers** (say so in docs; `run-magpie` starts
-  two, and the console warns at one). This is a real trap — it bit `verify_gap_closure` (#150).
-- **An orchestrator timeout is not a result.** `runJobToCompletion` does **not** throw when its
-  bounded wait elapses — it cancels the job and returns a non-`completed` `JobView` (state
-  `cancelled`/`failed`). Check `job.state === "completed"` before reading `job.output`; treating
-  a timed-out/empty output as a *content* verdict silently converts an infrastructure outage
-  (no watcher free) into a wrong answer. Fail/retry the orchestrator instead so its own retry
-  budget absorbs the outage (see `verifyGapClosure` throwing `VerificationIncompleteError` →
-  `503`). To exercise this in a test, a plain `FakeJobBroker` leaves the enqueued job in
-  `created` so the bounded wait (`JOB_RUN_TO_COMPLETION_TIMEOUT_MS`, 100ms in the test context)
-  times out and cancels it.
+- **An orchestrator must never wait on a job it enqueues.** The maintenance pattern is: the
+  watcher claims the job and POSTs a thin API endpoint, which enqueues the real generative
+  work as AI jobs and **returns**. A watcher runs **one job at a time** and stays inside
+  that POST until it returns — so an endpoint that waited for its follow-up would need a
+  *second* watcher to run it, and with one watcher would starve itself (this bit
+  `verify_gap_closure`, #150). There is deliberately no "create a job and wait" helper.
+- **If the orchestration has more to do after the follow-up finishes, continue from its
+  completion.** Register an `orchestration_followups` row for the follow-up job
+  (`ctx.stores.orchestrationFollowups.register` — which orchestration, a scope key, and
+  whatever context the continuation needs that the job input lacks), then add a
+  `continue…FromCompleted…` handler to the dispatcher in
+  `apps/api/src/features/jobs/service.ts` (`completeJob`). Follow the three existing ones
+  (`proposals/service.ts`, `scheduling/gap-reconciler.ts`, `patrol/service.ts`) and keep
+  their three properties: **serialised** (`withFlowRunLockWaiting` — a continuation waits
+  for the lock, it must not skip), **idempotent** (re-read the row under the lock; a settled
+  row is a no-op; do paid enqueues before settling), and **self-healing** (the orchestrator's
+  next tick applies a `completed` follow-up whose continuation never ran and writes off one
+  that failed — the broker, not the row, says whether a job is still running).
+- **A follow-up that has not completed is not a result.** Only a job in state `completed`
+  carries an outcome. Treating a queued, failed or cancelled follow-up as a *content*
+  verdict silently converts an infrastructure outage into a wrong answer — report it as
+  pending instead (see `verifyGapClosure`'s `pending` outcome). To exercise this in a test,
+  a plain `FakeJobBroker` leaves the enqueued job in `created`; drive it like a watcher with
+  `completeJob` / `failJob` from `features/jobs/service.ts`.

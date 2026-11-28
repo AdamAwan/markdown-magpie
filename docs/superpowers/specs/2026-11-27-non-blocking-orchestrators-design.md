@@ -177,4 +177,18 @@ verify settles, so its findings and summary are final rather than always zero.
   a fresh fan-out budget (the tick that enqueued the verify is long gone), so the
   per-tick budget no longer bounds verify + correct together. The global
   non-interactive ceiling still does.
-- The single-watcher console warning and the two-watcher requirement are removed.
+- The two-watcher requirement is gone: no orchestrator waits on a job, so one watcher runs
+  the whole pipeline. `runJobToCompletion`, its orphan-cancel and `MaintenanceShedError`
+  are deleted with their last caller.
+
+## Left for a follow-up
+
+- **The console's single-watcher warning is still there** (`apps/web/src/lib/console.ts`,
+  the `single-watcher` notice). It is now wrong, but a test in
+  `apps/web/src/lib/console.test.tsx` pins it and the web tests were out of scope for this
+  change. Removing it is a two-hunk edit: delete the `workers.length === 1` block, and turn
+  the "warns when exactly one watcher is connected" test into "raises nothing for a single
+  fully-capable watcher".
+- **`JOB_RUN_TO_COMPLETION_TIMEOUT_MS` / `settings.jobs.runToCompletionTimeoutMs` no longer
+  do anything** — the bounded wait they capped is gone. The config key, its test and the
+  `.env.example` line were left in place for the separate env-var cleanup.

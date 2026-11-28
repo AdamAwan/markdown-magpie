@@ -33,9 +33,9 @@ const BASE_POLICY = {
 } as const;
 
 // The interactive class of AI work: jobs a live caller is waiting on right now —
-// POST /api/ask (answer_question, including verify_gap_closure's re-asks, which
-// a blocked orchestrator bounded-waits on) and the console's flow outline
-// (outline_flow_seed). Every other AI_JOB_TYPES member is maintenance fan-out
+// POST /api/ask (answer_question — the type verify_gap_closure's re-asks also
+// use, so they ride the same lane although no caller waits on them) and the
+// console's flow outline (outline_flow_seed). Every other AI_JOB_TYPES member is maintenance fan-out
 // that nobody is sitting in front of. This split drives the two QoS levers for
 // #240: brokers probe interactive queues first when a watcher claims, and the
 // API's AI capacity gate reserves interactive headroom at enqueue time. Declared

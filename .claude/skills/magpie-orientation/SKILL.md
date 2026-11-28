@@ -42,14 +42,16 @@ Implications you must design around:
   `AI_EXECUTION_MODE` was removed in the queue-only migration.
 - **A watcher runs one job at a time** (`apps/watcher/src/worker-loop.ts`): claim one job,
   heartbeat, report exactly one terminal outcome.
-- **Maintenance orchestrators need ≥2 watchers.** A maintenance job (`verify_gap_closure`,
-  the patrols, the reconciler) claims a watcher, then *blocks* in an API callback while the
-  API bounded-waits on the follow-up AI jobs it enqueues. Since a watcher runs one job at a
-  time, those follow-ups can only be answered by a **second** watcher — with one watcher
-  the orchestration self-starves and times out. `verify_gap_closure` handles that timeout
-  safely (an incomplete re-ask is an infra failure that retries, never a false `still_open`
-  — #150), and the console warns when only one watcher is connected. Run two locally (see
-  the **run-magpie** skill).
+- **Orchestrators never wait on a job — one watcher is enough.** A maintenance job
+  (`verify_gap_closure`, the patrols, the reconciler) claims a watcher and POSTs a thin API
+  endpoint, which **enqueues** its follow-up AI jobs and **returns**. The orchestration
+  resumes from the follow-up job's completion, in the completion dispatcher (`completeJob`):
+  an `orchestration_followups` row keyed by the follow-up's job id says which orchestration
+  to continue. There is no bounded wait and no "create a job and wait for it" helper — do
+  not add one (it would hold the claiming watcher in its callback, so the follow-up could
+  only run on a *second* watcher: the self-starve this design removed). `verify_gap_closure`
+  only ever derives a verdict from a re-ask that reached `completed`; an unanswered or
+  failed re-ask is *pending*, never a false `still_open` (#150).
 - **The watcher has no database access** — its package.json has no `@magpie/db`, `pg`, or
   `pg-boss` dependency. API and watcher share only (a) the HTTP API
   (`apps/watcher/src/http-client.ts` is the sole conduit: claim/heartbeat/complete/fail
@@ -332,18 +334,25 @@ live ask via the interactive reserve.
 | `correctness_patrol` | maintenance | cron hourly | orchestrator → `POST /api/fix-patrol/run` |
 | `editorial_patrol` | maintenance | cron hourly | orchestrator → `POST /api/fix-patrol/improve/run` |
 | `verify_gap_closure` | maintenance | **on merge** (not cron) | orchestrator → `POST /api/proposals/:id/verify-closure` |
-| `seed_bootstrap` | maintenance | cron hourly | guard-check → `POST /api/flows/:id/seed-bootstrap/run` (enqueue-and-return, never bounded-waits) |
+| `seed_bootstrap` | maintenance | cron hourly | guard-check → `POST /api/flows/:id/seed-bootstrap/run` (enqueue-and-return) |
 | `refresh_flow_snapshot` | github | cron ~5 min (GitHub flows only) | leaf: polls PRs, reports mergeability |
 | `publish_proposal` | github / local-git (destination fan-out) | event | leaf: push branch, open PR |
 | `crosslink_pull_requests` | github | event | leaf: comment linking two PRs |
 | `comment_pull_request` | github | event | leaf: one PR comment |
 
 Maintenance jobs are *orchestrators*: they POST a thin API endpoint where the heavy
-orchestration lives, and the API bounded-waits on the tier-2 AI jobs it enqueues
-(`runJobToCompletion` — reuses in-flight jobs via `reuseKey`, and on timeout **cancels the
-orphaned job** so a late watcher never runs a paid generation nobody reads). A Postgres
-advisory lock keyed on (taskType, flowId) serialises overlapping runs
-(`apps/api/src/scheduling/run-lock.ts`). Cron tasks are registered **per flow** from
+orchestration lives. The endpoint **enqueues** its tier-2 AI jobs and returns — every one
+of the six is enqueue-and-return. Three of them have work left once a tier-2 job finishes,
+and resume from its completion (`completeJob` → the `continue…` handlers, keyed by an
+`orchestration_followups` row): `verify_gap_closure` commits its verdicts when the last
+`answer_question` re-ask completes; `process_gaps_to_pull_requests` applies the
+`reconcile_gap_clusters` verdicts and *then* drafts; `correctness_patrol` acts on each
+`verify_document` verdict and completes its `running` maintenance run when the last
+settles. An in-flight follow-up is reused rather than duplicated, a follow-up's result is
+always read (by its completion, or by the next tick if the continuation never ran), and a
+continuation is serialised, idempotent and replay-safe. A Postgres advisory lock keyed on
+(taskType, flowId) serialises overlapping runs (`apps/api/src/scheduling/run-lock.ts`;
+continuations use `withFlowRunLockWaiting`, which waits instead of skipping). Cron tasks are registered **per flow** from
 `flowTaskTemplates` in `apps/api/src/scheduling/task-registry.ts` and managed from the
 Schedules page.
 
@@ -378,7 +387,7 @@ apps/
 packages/
   core/       Shared domain types + provider interfaces (incl. ProvenanceClaim).
   auth/       Auth0 token validation + on-behalf-of helpers.
-  db/         SQL migrations (0001–0060; see the write-a-migration skill).
+  db/         SQL migrations (0001–0070; see the write-a-migration skill).
   git/        Git sync + PR adapters: ensureGitCheckout (blobless partial clones),
               PR status/mergeability polling, LocalGitProposalPublisher, checkout locks.
   jobs/       Job contracts: JOB_TYPES, capabilities, input/output schemas, queue
@@ -459,7 +468,7 @@ npm run e2e:jobs    # queue e2e harness; eval:api / eval:gap-threshold for eval 
 npm run eval:golden # golden-question answer-quality regression gate (docs/golden-eval.md)
 ```
 
-To actually **launch and drive the running stack** (Postgres → migrate → API → Watcher ×2
+To actually **launch and drive the running stack** (Postgres → migrate → API → Watcher
 → Web, with the local `.env` overrides needed because your `.env` (gitignored, deploy-only —
 never committed) holds the prod config), use the **run-magpie** skill — don't re-derive the
 launch recipe here.
