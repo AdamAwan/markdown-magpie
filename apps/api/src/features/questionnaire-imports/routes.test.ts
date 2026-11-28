@@ -3,7 +3,9 @@ import assert from "node:assert/strict";
 import type { ImportSheetPreview, Questionnaire, QuestionnaireImport, SheetMapping } from "@magpie/core";
 import { buildApp } from "../../app.js";
 import { makeTestContext } from "../../test-support/context.js";
+import { zipSync } from "fflate";
 import { applyColumnMapping } from "./service.js";
+import { MAX_XLSX_ENTRY_BYTES } from "./parse-xlsx.js";
 
 // Auth is disabled in the test context, so requireScopes is a pass-through and
 // these exercise the endpoints' shape directly (the questionnaire routes model).
@@ -46,6 +48,19 @@ test("POST /api/questionnaire-imports stages the upload and returns 202", async 
   const body = (await res.json()) as { import: QuestionnaireImport };
   assert.equal(body.import.status, "mapping");
   assert.equal(body.import.filename, "acme.csv");
+});
+
+test("POST answers 413 workbook_too_large for an xlsx that inflates past the bounds (zip bomb)", async () => {
+  const ctx = flowContext();
+  const app = buildApp(ctx);
+  const bomb = zipSync({ "xl/sharedStrings.xml": new Uint8Array(MAX_XLSX_ENTRY_BYTES + 1) }, { level: 9 });
+  const form = new FormData();
+  form.set("file", new File([bomb], "bomb.xlsx"));
+  form.set("flowId", "security");
+  form.set("name", "Bomb");
+  const res = await upload(app, form);
+  assert.equal(res.status, 413);
+  assert.equal(((await res.json()) as { error: string }).error, "workbook_too_large");
 });
 
 test("POST rejects a body with no file, an unknown flow, and an unreadable file", async () => {

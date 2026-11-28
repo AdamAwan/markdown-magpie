@@ -1,6 +1,6 @@
 import type { SheetGrid } from "@magpie/core";
 import { parseCsv } from "./parse-csv.js";
-import { parseXlsx } from "./parse-xlsx.js";
+import { parseXlsx, WorkbookTooLargeError } from "./parse-xlsx.js";
 
 // Format detection and the bounds. The uploaded bytes never leave this module:
 // they are parsed here, in the request, and dropped — only the extracted grid
@@ -16,7 +16,8 @@ const MAX_CELL_CHARS = 20000;
 
 type ImportFormat = "xlsx" | "csv";
 
-export type ParseFailure = "unsupported_format" | "file_too_large" | "unreadable_file" | "empty_file";
+export type ParseFailure =
+  "unsupported_format" | "file_too_large" | "workbook_too_large" | "unreadable_file" | "empty_file";
 
 export type ParseResult = { ok: true; format: ImportFormat; sheets: SheetGrid[] } | { ok: false; code: ParseFailure };
 
@@ -69,7 +70,12 @@ export function parseWorkbook(filename: string, bytes: Uint8Array): ParseResult 
   try {
     sheets =
       format === "csv" ? [{ name: filename, rows: parseCsv(new TextDecoder().decode(bytes)) }] : parseXlsx(bytes);
-  } catch {
+  } catch (error) {
+    // An archive that inflates past the decompression bounds (a zip bomb, or a
+    // workbook far beyond any questionnaire) is reported as too large (Q37).
+    if (error instanceof WorkbookTooLargeError) {
+      return { ok: false, code: "workbook_too_large" };
+    }
     // A corrupt archive, a truncated upload, or XML this reader cannot follow.
     // The operator gets a message and their file back; nothing is stored.
     return { ok: false, code: "unreadable_file" };
