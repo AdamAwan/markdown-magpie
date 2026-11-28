@@ -33,7 +33,7 @@ const DEFAULT_RELEASE_TIMEOUT_MS = 5_000;
 // The abort reason stop() uses, so the loop can tell a shutdown (release the job
 // back to the queue) from a server-side cancellation (the job is already
 // terminal; do nothing) on the same AbortSignal.
-export class WatcherShutdownError extends Error {
+class WatcherShutdownError extends Error {
   constructor() {
     super("watcher shutting down");
     this.name = "WatcherShutdownError";

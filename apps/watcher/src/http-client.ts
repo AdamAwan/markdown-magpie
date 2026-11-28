@@ -7,7 +7,7 @@ import type { EmbeddingRoute, RoutableFlow } from "@magpie/retrieval";
 // Everything the worker loop needs from the API's durable job lifecycle. Kept as
 // an interface so the loop and runners can be tested against a fake without
 // touching the network.
-export interface WatcherApiClient {
+interface WatcherApiClient {
   claim(workerName: string, capabilities: JobCapability[]): Promise<JobView | undefined>;
   heartbeat(jobId: string): Promise<{ cancelled: boolean }>;
   // `usage` is the run's summed provider-reported token usage (#241), omitted

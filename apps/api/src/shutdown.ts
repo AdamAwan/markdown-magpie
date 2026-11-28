@@ -17,7 +17,7 @@ import type { Logger } from "@magpie/logger";
 // A second SIGTERM/SIGINT while draining exits immediately (an operator's
 // "really stop"), and a hard backstop exits if teardown itself hangs.
 
-export interface ShutdownStep {
+interface ShutdownStep {
   name: string;
   run: () => Promise<unknown>;
 }
