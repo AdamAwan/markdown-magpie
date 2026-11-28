@@ -376,6 +376,13 @@ the env files**:
   interpolated one (an empty string when the shell and `.env` do not define it), so keep
   them in the project `.env` or pass `--env-file`.
 
+The image sets `NODE_ENV=production`, so the compose stack runs the
+[production safety](#production-safety) checks: `.env.compose.example` sets
+`STORAGE_BACKEND=postgres` and `CORS_ALLOWED_ORIGINS` (the deployed console origin — change
+it in `.env.compose` for another host), and `docker-compose.e2e.yml` sets
+`MAGPIE_ALLOW_UNAUTHENTICATED_PRODUCTION=true` on the API so an e2e stack run with
+`AUTH_REQUIRED=false` still boots.
+
 `docker-compose.watcher.yml` (a standalone remote watcher) instead loads `.env` as its
 `env_file` and pins only `MAGPIE_CHECKOUT_ROOT`.
 
