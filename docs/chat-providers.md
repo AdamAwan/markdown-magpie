@@ -56,13 +56,41 @@ Each CLI provider also accepts:
 - `CODEX_CLI_ARGS` / `CLAUDE_CLI_ARGS` — base args (default `exec` / `-p`).
 - `CODEX_CLI_MODEL` / `CLAUDE_CLI_MODEL` — when set, `--model <value>` is appended
   to the args (the flag both CLIs share); leave unset to use the CLI's own default.
-- `CODEX_CLI_PROMPT_MODE` / `CLAUDE_CLI_PROMPT_MODE` — `arg` (default) passes the
-  prompt as a CLI argument; `stdin` pipes it in. **Use `stdin` on Windows**, where
-  retrieval-augmented prompts exceed the ~32 KB command-line limit and otherwise
-  fail with `spawn ENAMETOOLONG`.
+- `CODEX_CLI_PROMPT_MODE` / `CLAUDE_CLI_PROMPT_MODE` — `stdin` (default) pipes the
+  prompt in; `arg` passes it as a CLI argument. Keep `stdin`: in `arg` mode a prompt
+  above ~128 KB fails to spawn on Linux (`spawn E2BIG`) and one above the ~32 KB
+  Windows command line fails with `spawn ENAMETOOLONG` — retrieval-augmented and
+  source-grounded prompts reach both ([ai-jobs.md](ai-jobs.md) J80). Before this
+  default changed, `arg` was the default.
+- `AGENT_CLI_MAX_OUTPUT_BYTES` — cap on a run's captured stdout (default 8 MiB);
+  crossing it stops the run. A timed-out or cancelled run is killed with its whole
+  process tree (J85).
 
 On Windows, set `*_CLI_PATH` to a directly-spawnable executable (e.g. `claude.exe`);
 a `.cmd`/`.ps1` PATH shim cannot be spawned without a shell.
+
+## Retries, truncation and errors
+
+The two hosted providers retry a **transient** failure — HTTP 408, 429 or 5xx, a
+timed-out attempt (`AGENT_API_TIMEOUT_MS` applies per attempt), or a dropped
+connection — up to `AGENT_API_MAX_RETRIES` times (default 2), backing off
+exponentially with jitter or for the provider's `Retry-After` / `retry-after-ms`,
+whichever is longer. A `Retry-After` longer than 30 s is not waited out in-process;
+the job fails and its queue retry picks it up later. Cancelling the job stops a
+pending wait immediately. Other 4xx responses are never retried — they are
+configuration or request errors ([ai-jobs.md](ai-jobs.md) J81).
+
+A reply with `finish_reason: "length"` was cut off at the model's output-token limit.
+It fails as a **truncation** (`ProviderOutputTruncatedError`) rather than being parsed:
+raise the deployment's max output tokens if this recurs (J83).
+
+Provider errors name the status and the provider's own short error message only —
+never the raw response body, which can echo prompt text — with credential-shaped
+tokens redacted (J82). The same typed error (`ProviderRequestError`: `status`,
+`retryAfterMs`, `retryable`) is what the API's embedding calls throw; query-time
+embedding calls additionally sit behind a short timeout and a circuit breaker so a
+down embedding endpoint degrades retrieval to keyword-only within milliseconds
+instead of stalling each ask (J86, see [retrieval.md](retrieval.md)).
 
 ## Sampling temperature
 

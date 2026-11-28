@@ -77,11 +77,17 @@ Implications you must design around:
     neutral temp-dir cwd, `--tools ""`, `--strict-mcp-config`, `--setting-sources ""`,
     system prompt via `--system-prompt`; source-grounded claude runs get the MCP/settings
     flags too) so host or checkout MCP config, settings/hooks, and CLAUDE.md never reach
-    the agent — see "CLI environment isolation" in `docs/ai-jobs.md`.
+    the agent — see "CLI environment isolation" in `docs/ai-jobs.md`. The prompt goes over
+    **stdin by default** (`*_CLI_PROMPT_MODE=arg` is opt-in — argv fails above ~128 KB on
+    Linux / ~32 KB on Windows), stdout is capped (`AGENT_CLI_MAX_OUTPUT_BYTES`), and each
+    CLI is its own process group so a timeout/cancel kills its helpers too
+    (`runners/cli-process.ts`; `docs/ai-jobs.md` J80/J85).
   - **HTTP providers** run a bounded tool loop (`runners/source-agent.ts`): `list_dir` /
-    `read_file` / `grep` tools, max 24 steps, 400 KB total read budget, realpath
-    confinement (no `..`/symlink/absolute escape). Infra faults fail the job — the loop
-    never forces an ungrounded answer.
+    `read_file` / `grep` tools, max 24 steps, 400 KB total read budget (`grep` results
+    draw on it too, and `grep` is async with file/byte/match caps), realpath
+    confinement (no `..`/symlink/absolute escape), and one `MAGPIE_AGENTIC_TIMEOUT_MS`
+    deadline over the whole loop. Infra faults fail the job — the loop never forces an
+    ungrounded answer; a `finishReason: "length"` step fails as truncation.
   - The watcher stamps `mapUpdates.observedSha` from the checkout HEAD itself — an infra
     fact never trusted from the model.
 - **Provider-neutral.** `AI_PROVIDER` selects `openai-compatible | azure-openai | codex |
@@ -103,7 +109,11 @@ Implications you must design around:
 (`apps/api/src/stores/embed-sections.ts`), query-time retrieval
 (`apps/api/src/stores/knowledge-index.ts`, with an LRU query cache), flow routing, and
 gap-cluster bucketing. So "the API never calls a provider inline" is true for
-*chat/generative* work only.
+*chat/generative* work only. Query-time retrieval and embedding routing use a separate
+request-path instance (`ctx.providers.queryEmbedding`: 5 s timeout behind a circuit
+breaker) so a down embedding endpoint degrades to keyword-only fast; indexing keeps
+`ctx.providers.embedding` (60 s). Provider failures are typed `ProviderRequestError`s
+(`status`, `retryAfterMs`, `retryable`) — `docs/ai-jobs.md` J81–J86.
 
 ## 2. The product pipeline (feature map)
 
@@ -409,7 +419,8 @@ packages/
   prompts/    Shared AI prompt catalog (21 prompts, shared contract constants:
               CONSERVATIVE_CONTRACT, SOURCE_MAP_CONTRACT, FACTUAL_REGISTER_CONTRACT,
               UNTRUSTED_CONTENT_CONTRACT + wrapUntrusted delimiters for prompt-injection
-              hardening — see docs/threat-model.md C6).
+              hardening; each wrap carries a fresh random id and forged markers in
+              the content are neutralised — see docs/threat-model.md TM3/TM31).
   retrieval/  Embeddings, RRF fusion, chat/embedding HTTP providers, LLM flow router +
               embedding flow router. (Answer orchestration itself lives in api/watcher.)
   telemetry/  OpenTelemetry wiring (traces/metrics/log-trace mixin), off by default.

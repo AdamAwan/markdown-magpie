@@ -309,7 +309,11 @@ Caveats an operator needs before turning it on:
   For an air-gapped host, pre-populate the `embeddings-cache` volume.
 - **It is not free of cost, just of money.** ~2.5 GB image (linux/amd64) plus ~275 MB of
   weights, and CPU inference is markedly slower than a hosted endpoint — hence the
-  `EMBEDDING_TIMEOUT_MS=60000` in the example config.
+  `EMBEDDING_TIMEOUT_MS=60000` in the example config. That timeout covers indexing only:
+  query-time embeddings (retrieval, embedding routing) use a separate 5 s timeout behind a
+  circuit breaker ([ai-jobs.md](./ai-jobs.md) J86), so a query that lands while Ollama is
+  still loading the model after an idle unload degrades to keyword-only for that ask
+  rather than waiting.
 - **Retrieval quality is below a hosted model.** Measured below.
 
 ### Measured comparison
