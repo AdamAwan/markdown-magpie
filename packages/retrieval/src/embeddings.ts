@@ -1,5 +1,5 @@
 import type { EmbeddingProvider } from "@magpie/core";
-import { DEFAULT_EMBEDDING_TIMEOUT_MS, fetchWithTimeout } from "./http.js";
+import { assertProviderResponseOk, DEFAULT_EMBEDDING_TIMEOUT_MS, fetchWithTimeout } from "./http.js";
 
 export const EMBEDDING_DIMENSIONS = 1536;
 
@@ -127,9 +127,11 @@ export function createEmbeddingProvider(config: EmbeddingProviderConfig): Embedd
 }
 
 async function parseEmbeddingResponse(response: Response, expectedCount: number): Promise<number[][]> {
-  if (!response.ok) {
-    throw new Error(`Embedding provider failed with ${response.status}: ${await response.text()}`);
-  }
+  // A non-2xx throws a typed ProviderRequestError — `status`, `retryAfterMs`,
+  // `retryable` — so a caller (the API's background embedder) can back off on
+  // 429/5xx and skip on a request-specific 4xx without parsing the message, which
+  // carries only a short redacted summary of the body (J82).
+  await assertProviderResponseOk(response, "Embedding provider");
 
   const body = (await response.json()) as {
     data?: Array<{ embedding?: number[]; index?: number }>;

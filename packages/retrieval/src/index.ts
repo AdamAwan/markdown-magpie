@@ -5,3 +5,12 @@ export * from "./routing.js";
 export * from "./flow-router.js";
 export * from "./rrf.js";
 export * from "./embeddings.js";
+export * from "./query-embedding.js";
+export {
+  DEFAULT_CHAT_RETRY_POLICY,
+  ProviderOutputTruncatedError,
+  ProviderRequestError,
+  type ProviderFailureKind,
+  type RetryHooks,
+  type RetryPolicy
+} from "./http.js";

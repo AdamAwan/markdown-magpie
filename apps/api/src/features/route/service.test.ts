@@ -24,7 +24,9 @@ const FLOWS = [
 const deployVsBilling = (text: string): number[] => (text.includes("Billing") ? [0, 1] : [1, 0]);
 
 test("routes to the flow whose embedding clearly wins", async () => {
-  const ctx = makeTestContext({ providers: { embedding: new FakeEmbeddingProvider(deployVsBilling) } });
+  const ctx = makeTestContext({
+    providers: { embedding: undefined, queryEmbedding: new FakeEmbeddingProvider(deployVsBilling) }
+  });
 
   const result = await route(ctx, { question: "how do I deploy", flows: FLOWS });
 
@@ -43,7 +45,7 @@ test("abstains when no embedding provider is configured (no embed call)", async 
 
 test("embeds question + flows in one batched call, then reuses cached flow vectors", async () => {
   const provider = new FakeEmbeddingProvider(deployVsBilling);
-  const ctx = makeTestContext({ providers: { embedding: provider } });
+  const ctx = makeTestContext({ providers: { embedding: undefined, queryEmbedding: provider } });
 
   await route(ctx, { question: "deploy question one", flows: FLOWS });
   assert.equal(provider.calls.length, 1, "one batched embedding call");
@@ -63,7 +65,7 @@ test("routes using each flow's config routing summary, resolved server-side by i
   const provider = new FakeEmbeddingProvider((text) =>
     /rollback|deploy/i.test(text) ? [1, 0] : /billing|invoice/i.test(text) ? [0, 1] : [0.5, 0.5]
   );
-  const ctx = makeTestContext({ providers: { embedding: provider } });
+  const ctx = makeTestContext({ providers: { embedding: undefined, queryEmbedding: provider } });
   ctx.knowledgeConfig.flows = [
     { id: "a", name: "Team A", sourceIds: ["s"], destinationId: "kb-a", routingSummary: "deployments and rollbacks" },
     { id: "b", name: "Team B", sourceIds: ["s"], destinationId: "kb-b", routingSummary: "billing and invoices" }
@@ -89,7 +91,9 @@ test("routes using each flow's config routing summary, resolved server-side by i
 });
 
 test("abstains on a near-tie (all flows equally similar)", async () => {
-  const ctx = makeTestContext({ providers: { embedding: new FakeEmbeddingProvider(() => [1, 1]) } });
+  const ctx = makeTestContext({
+    providers: { embedding: undefined, queryEmbedding: new FakeEmbeddingProvider(() => [1, 1]) }
+  });
   const result = await route(ctx, {
     question: "ambiguous",
     flows: [
@@ -106,7 +110,7 @@ test("abstains when the embedding call fails (routing must never fail the ask)",
       throw new Error("embedding backend down");
     }
   };
-  const ctx = makeTestContext({ providers: { embedding: provider } });
+  const ctx = makeTestContext({ providers: { embedding: undefined, queryEmbedding: provider } });
   const result = await route(ctx, { question: "how do I deploy", flows: FLOWS });
   assert.equal(result.status, "abstain");
 });
