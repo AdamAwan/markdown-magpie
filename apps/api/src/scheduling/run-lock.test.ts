@@ -226,6 +226,43 @@ describe("withFlowRunLockWaiting", () => {
   it("runs unlocked when there is no pool", async () => {
     assert.equal(await withFlowRunLockWaiting(undefined, "verify_gap_closure", "p", async () => 3), 3);
   });
+
+  it("lets at most half the pool be pinned by lock holders, so holders can still run queries", async () => {
+    // Each holder pins a connection for its whole run and needs more from the same
+    // pool to do its work. Four continuations on DIFFERENT keys against a pool of
+    // four would pin every connection; only two may hold at once.
+    const pool = Object.assign(new FakeAdvisoryPool(), { options: { max: 4 } });
+    let holding = 0;
+    let peak = 0;
+    const releases: Array<() => void> = [];
+    const runs = ["a", "b", "c", "d"].map((key) =>
+      withFlowRunLockWaiting(
+        pool,
+        "correctness_patrol_verify",
+        key,
+        async () => {
+          holding += 1;
+          peak = Math.max(peak, holding);
+          await new Promise<void>((resolve) => releases.push(resolve));
+          holding -= 1;
+          return key;
+        },
+        { pollMs: 1 }
+      )
+    );
+    await new Promise((resolve) => setTimeout(resolve, 15));
+    assert.equal(holding, 2, "two hold a connection; the other two wait holding nothing");
+    assert.equal(pool.held.size, 2);
+
+    // As holders finish, the waiters take their turn.
+    while (releases.length > 0) {
+      releases.shift()?.();
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.deepEqual((await Promise.all(runs)).sort(), ["a", "b", "c", "d"]);
+    assert.equal(peak, 2);
+    assert.equal(pool.held.size, 0);
+  });
 });
 
 // Real-Postgres proof that the advisory-lock SQL serializes across *connections*

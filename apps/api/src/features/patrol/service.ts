@@ -10,7 +10,12 @@ import type {
   VerifyFinding,
   ChangeIntentTrace
 } from "@magpie/core";
-import { verifyDocumentInputSchema, verifyDocumentOutputSchema, type JobView } from "@magpie/jobs";
+import {
+  correctDocumentInputSchema,
+  verifyDocumentInputSchema,
+  verifyDocumentOutputSchema,
+  type JobView
+} from "@magpie/jobs";
 import { z } from "zod";
 import { selectFlow } from "../../platform/repositories.js";
 import { selectPatrolBatch } from "../../scheduling/patrol-cursor.js";
@@ -191,7 +196,7 @@ export type CorrectDocumentFn = (ctx: AppContext, input: CorrectDocumentJobInput
 // not their return value, so a shed is signalled out-of-band via this shared set.
 function makeDefaultCorrectDocument(budget: FanoutBudget, deferredPaths: Set<string>): CorrectDocumentFn {
   return async (ctx, input) => {
-    const admission = await budget.admit("correct_document", {
+    const jobInput = {
       path: input.path,
       content: input.content,
       claims: input.claims,
@@ -199,11 +204,54 @@ function makeDefaultCorrectDocument(budget: FanoutBudget, deferredPaths: Set<str
       destinationId: input.destinationId,
       flowId: input.flowId,
       provider: ctx.config.get().aiProvider
-    } satisfies CorrectDocumentJobInput & { provider: AiProviderName });
+    } satisfies CorrectDocumentJobInput & { provider: AiProviderName };
+    // Replay guard. A verify verdict is acted on from a job-completion
+    // continuation, which can be replayed: if the process dies after this enqueue
+    // but before the verify's follow-up row settles, the replay acts on the same
+    // verdict again. Without a guard that is a second PAID corrective generation
+    // for the identical correction. So a correction already queued, running or
+    // completed for exactly this document content and these claims is reused, not
+    // re-bought (and spends no budget). A failed or cancelled one does not count —
+    // that correction never happened.
+    const reuseKey = correctDocumentReuseKey(jobInput);
+    const { jobs } = await ctx.jobs.list({ type: "correct_document", limit: 200 });
+    const existing = jobs.find(
+      (job) =>
+        (IN_FLIGHT_JOB_STATES.has(job.state) || job.state === "completed") &&
+        correctDocumentReuseKey(job.input) === reuseKey
+    );
+    if (existing) {
+      logger.info(
+        { path: input.path, jobId: existing.id },
+        "fix-patrol: this correction is already enqueued; not enqueueing it again"
+      );
+      return;
+    }
+    const admission = await budget.admit("correct_document", jobInput);
     if (!admission.ok) {
       deferredPaths.add(input.path);
     }
   };
+}
+
+// Identity of one corrective job: the same provider correcting the same claims in
+// the same content of the same document (for the same flow/destination) is the
+// same piece of work. Content and claims are hashed, so any change to either is a
+// different correction.
+function correctDocumentReuseKey(input: unknown): string {
+  const parsed = correctDocumentInputSchema.safeParse(input);
+  if (!parsed.success) {
+    return "unknown";
+  }
+  const { provider, flowId, destinationId, path, content, claims } = parsed.data;
+  return [
+    provider,
+    flowId ?? "",
+    destinationId ?? "",
+    path,
+    hashDocumentContent(content),
+    hashDocumentContent(JSON.stringify(claims.map((claim) => [claim.claim, claim.reason])))
+  ].join(":");
 }
 
 // Default dedupe: enqueue a dedupe_documents AI job through the budget. Tests
@@ -885,9 +933,18 @@ async function applyVerifyVerdict(
 
 // Recomputes a run's status, summary and details from the tick's facts plus
 // every verify outcome settled so far, and completes it once none are pending.
-// Idempotent and safe to race: each caller settles its own row first and then
-// recomputes from what is stored, so whoever runs last writes the full picture.
+// Idempotent, and serialised per run. The read of the rows and the write of the
+// run must not interleave with another finaliser's: completion A could list the
+// rows while B is still pending, B then settle and write `completed`, and A
+// overwrite it with a stale `running` that nothing would ever correct. Under the
+// per-run lock each finaliser reads and writes as one step; since every caller
+// settles its own row BEFORE finalising, whoever runs last sees every row and
+// writes the full picture.
 async function finalizeFixPatrolRun(ctx: AppContext, runId: string): Promise<void> {
+  await withFlowRunLockWaiting(ctx.pool, "correctness_patrol_run", runId, () => recomputeFixPatrolRun(ctx, runId));
+}
+
+async function recomputeFixPatrolRun(ctx: AppContext, runId: string): Promise<void> {
   const run = await ctx.stores.maintenanceRuns.get(runId);
   if (!run || run.taskType !== "correctness_patrol") {
     return;
@@ -980,7 +1037,11 @@ async function settleStaleFixPatrolRuns(ctx: AppContext, flowId: string | undefi
       await settleFixPatrolRun(ctx, run.id);
     }
   }
+  // Only this orchestrator's rows, and only from runs with nothing left pending
+  // (the store enforces that): a gap-closure verification's answered re-asks are
+  // never pruned here — they are dropped when its verdict is recorded.
   await ctx.stores.orchestrationFollowups.pruneSettledBefore(
+    "correctness_patrol",
     new Date(Date.now() - FOLLOWUP_RETENTION_MS).toISOString()
   );
 }
