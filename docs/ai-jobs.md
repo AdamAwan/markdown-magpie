@@ -147,7 +147,7 @@ console pages and blind dedupe guards that double-enqueued paid AI work.
   fail); maintenance/non-interactive provider AI drops to `2` so a runaway patrol cannot
   triple its metered generations on retries; non-provider work is `2`. Provider work uses
   `retryDelay 15 / retryDelayMax 300`; non-provider `30 / 600`. All queues share
-  `heartbeatSeconds 60`, `retentionSeconds 14d`, `deleteAfterSeconds 30d`, `retryBackoff`.
+  `heartbeatSeconds 120` (J60), `retentionSeconds 14d` (a cron tick: one interval, J66), `deleteAfterSeconds 30d`, `retryBackoff`.
 
 ## Capabilities & routing
 
@@ -386,13 +386,95 @@ paid-for generation away and force pg-boss to redo the whole job; both are close
 - **J34** — Watcher-only surface, restricted to service principals when auth is on
   (a human `manage:jobs` holder gets 403 —
   [authorization.md](./authorization.md) AZ29): `POST /api/jobs/claim`
-  (J17); `POST /api/jobs/:id/heartbeat` (keep a claim alive; the response flags `cancelled`
-  so the runner aborts); `POST /api/jobs/:id/complete` (`{output, executor, usage?,
-  provider?, model?}` → the envelope of J18–J25; 500 `side_effects_failed`, 404
-  `job_not_found`, 409 `job_cancelled`, 400 `invalid_output`/`repair_enqueued` — under the
-  strict output policy an undeclared field is also a 400 `invalid_output`, the job failing
-  with error code `undeclared_output_fields`, J24); `POST
-  /api/jobs/:id/fail` (a structured `{error: {code, message, category}}`).
+  (J17); `POST /api/jobs/:id/heartbeat` (`{workerName?, attempt?}`; keep a claim alive;
+  the response carries `active` — false once this attempt no longer holds the job, J60 —
+  and the older `cancelled` flag, either of which makes the runner abort); `POST
+  /api/jobs/:id/complete` (`{output, executor, usage?, provider?, model?, attempt?}` → the
+  envelope of J18–J25; 500 `side_effects_failed`, 404 `job_not_found`, 409
+  `job_cancelled` / `job_not_active` (J62), 400 `invalid_output`/`repair_enqueued` — under
+  the strict output policy an undeclared field is also a 400 `invalid_output`, the job
+  failing with error code `undeclared_output_fields`, J24); `POST /api/jobs/:id/fail` (a
+  structured `{error: {code, message, category}, attempt?}`). On heartbeat/fail (and
+  cancel/retry/accept-failure) only an unknown job id is a 404; any other error is a 500
+  the watcher retries ([api.md](./api.md) API31).
+- **J67** — **`POST /api/jobs` accepts only hand-submittable types**:
+  `process_gaps_to_pull_requests`, `source_change_sync`, `correctness_patrol`,
+  `editorial_patrol`, `seed_bootstrap`, `refresh_flow_snapshot` (the scheduled
+  orchestrators — what a "run now" enqueues) and the standalone AI checks
+  `verify_document` and `summarize_gap`. Every other type is **internal-only** — enqueued
+  by API code that derives its ids, URLs and credential NAMES itself (e.g. the
+  `pullRequestUrl` + `tokenEnv` of `comment_pull_request` / `crosslink_pull_requests`,
+  which a caller could otherwise aim at an arbitrary PR with a different token) — and is
+  rejected with `400 job_type_not_submittable` before anything is parsed or stored. A
+  hand-submitted AI type is admission-controlled ([rate-limiting.md](./rate-limiting.md)
+  RL30). Nothing in the repo (console, MCP, scripts, e2e) calls `POST /api/jobs`.
+
+## Lost and stuck work
+
+- **J60** — **The attempt fence.** pg-boss bumps a job's `retryCount` on every claim after
+  the first, so the `retryCount` a watcher claimed at names its **attempt**. The watcher
+  sends it as `attempt` on heartbeat, complete and fail, and the broker passes it to
+  pg-boss's own fenced `touch`/`complete`/`fail` (`{ id, retryCount }`), which only act on
+  the row while it is `active` at that attempt. A watcher whose claim lapsed (heartbeats the
+  queue stopped seeing, an expiry) therefore cannot refresh, complete or fail the attempt
+  another watcher now holds, and a lapsed `failTerminal` cannot zero that attempt's retry
+  budget. The heartbeat reply's `active` is exactly "the fenced touch refreshed the row"; on
+  `active: false` the watcher aborts the run through its abort signal and reports nothing
+  further. `attempt` is optional end to end, so an older watcher keeps working, unfenced,
+  across a rolling upgrade. Margins: the catalog heartbeat window (`heartbeatSeconds`) is
+  **120 s**, the watcher beats every **quarter** window (30 s) with a **10 s** request cap,
+  so three lost beats in a row still keep the claim (it used to be a 60 s window, a 30 s
+  beat and a 30 s request timeout: one slow beat lapsed it). The worker loop keeps
+  heartbeating until the terminal report is done, including through completion retries.
+- **J61** — **Completion retries for minutes, and a lapsed attempt's result is salvaged.**
+  The watcher retries `complete()` (and `fail()`) on a network error/timeout, a 5xx, 408 or
+  429 with full-jittered exponential backoff (1 s doubling to a 60 s cap) for up to **8
+  minutes** — long enough to ride out an API restart or rolling deploy — instead of ~2 s.
+  Every other 4xx is permanent and thrown at once. If the claim lapsed meanwhile (all API
+  replicas were down, so heartbeats could not land) and pg-boss moved the job back to
+  `retry` **without anyone re-claiming it** (its `retryCount` still equals the attempt), the
+  broker completes it from that retry (`includeQueued`) rather than discarding a valid,
+  paid-for output. A re-claim racing that single statement is completed with the same
+  output; the re-claiming watcher's next heartbeat then reports `active: false`.
+- **J62** — **A completion that did not persist runs no side effects.** After
+  `ctx.jobs.complete()` the dispatcher checks the returned state; anything but `completed`
+  (the job was re-claimed by another attempt, failed, or expired past salvage) returns
+  `job_not_active` → **409**, which the watcher treats as final. The replay branch
+  (already-`completed` job) and the deliberate 500 on a side-effect failure are unchanged.
+- **J63** — **Terminal failures always run their side effects, whoever failed the job.** A
+  job reaching `failed` has side effects (fail a linked source-sync run, fail a
+  questionnaire item or import, enqueue a fold fallback, write off a patrol verify or a
+  gap-closure re-ask). They used to run only inside `POST /fail`, so a job **pg-boss**
+  failed by itself — active-state expiry, a lost heartbeat, a crashed claimant exhausting
+  its retries — never ran them, and its run/item/fold waited forever. Now the API runs a
+  **terminal-failure sweep** (`features/jobs/failure-sweep.ts`, every ~60 s jittered, 50
+  per pass, oldest failure first) over failed work-queue rows whose failure is not
+  settled, and settles each the same way the fail route does. pg-boss's own failure output
+  (`{value: {message}}`) is mapped to a structured error (`job_expired` /
+  `job_heartbeat_lost`, category `timeout`; anything else `queue_failure`), so the console
+  and the side effects show why.
+- **J64** — **Exactly once, across replicas and replays.** Every terminal failure — fail
+  route, terminal-fail backstop, sweep — settles through one ledger
+  (`job_failure_settlements`, migration 0075): an upsert **claims** the job id (succeeding
+  only if no row exists, or the existing row is an unsettled claim older than a 10-minute
+  lease — a settler that crashed), the side effects run with no connection held, and the row
+  is marked `settled_at`. A settled or live-claimed failure is skipped, so a duplicate fail,
+  a concurrent replica and the sweep can never run them twice; a run that throws deletes its
+  claim, leaving the failure for the next sweep (each side effect is idempotent on the job,
+  so repeating a partial run is safe). The sweep only considers failures at or after the
+  ledger's epoch (`job_failure_settlement_epoch`, set when the migration ran), so an upgrade
+  does not replay side effects for historical failures.
+- **J65** — A manual `POST /api/jobs/:id/retry` deletes the job's settlement, so its next
+  terminal failure settles (and runs its side effects) again.
+- **J66** — **Scheduled ticks do not pile up.** Each cron schedule's ticks are sent with a
+  queued lifetime (`retentionSeconds`) of **one cron interval** (the gap between the cron's
+  next two fire times, floored at 60 s, capped at pg-boss's 14-day default). pg-boss's
+  retention sweep deletes a still-queued tick once its successor exists, so a watcher
+  outage leaves at most one waiting tick per schedule (plus pg-boss's maintenance lag)
+  instead of a backlog that replayed as a storm of patrol passes — each fanning out paid AI
+  work — when a watcher returned. Hand-enqueued runs and `verify_gap_closure` are not cron
+  ticks and keep the queue default. (pg-boss's `missed: "skip"` default already prevents a
+  backlog when the *API* is down.)
 - **J35** — Answer-path callbacks the watcher makes while running `answer_question`:
   `POST /api/retrieve` (scoped context for a flow) and `POST /api/route` (embedding-similarity
   flow pick, abstaining on a low margin so the watcher falls back to the chat router). Both
@@ -402,8 +484,8 @@ paid-for generation away and force pg-boss to redo the whole job; both are close
 ## Watcher runtime & CLI isolation
 
 - **J36** — The worker loop runs **one job at a time**: claim → dispatch to the supporting
-  runner under an `AbortController` → heartbeat on half the job's window (aborting the runner
-  if the server reports the job cancelled) → report the single terminal outcome (complete or
+  runner under an `AbortController` → heartbeat on a quarter of the job's window (aborting the runner
+  if the server reports the job cancelled or no longer held by this attempt, J60) → report the single terminal outcome (complete or
   fail). A claim/transition error is logged and backed off, never crashes the process; a
   server-side cancellation is not re-reported as a failure. The job runs inside a span
   parented on the enqueueing request's `traceContext` carried across the queue.
@@ -563,8 +645,12 @@ paid-for generation away and force pg-boss to redo the whole job; both are close
 | --- | --- | --- |
 | `MAGPIE_AGENTIC_TIMEOUT_MS` | 600 000 ms (10 min) | `apps/watcher/src/runners/index.ts` |
 | `AGENT_API_TIMEOUT_MS` / `AGENT_CLI_TIMEOUT_MS` | 120 000 ms | `apps/watcher/src/runners/index.ts` |
-| default heartbeat interval | 30 000 ms (half the 60 s policy) | `apps/watcher/src/worker-loop.ts` |
-| queue `heartbeatSeconds` | 60 | `packages/jobs/src/catalog.ts` (`BASE_POLICY`) |
+| default heartbeat interval | 30 000 ms (a quarter of the 120 s policy) | `apps/watcher/src/worker-loop.ts` |
+| heartbeat request timeout | 10 000 ms | `apps/watcher/src/http-client.ts` (`HEARTBEAT_TIMEOUT_MS`) |
+| queue `heartbeatSeconds` | 120 | `packages/jobs/src/catalog.ts` (`BASE_POLICY`) |
+| complete/fail retry | 1 s → 60 s backoff, 8 min budget | `apps/watcher/src/http-client.ts` (`SETTLE_RETRY_POLICY`) |
+| terminal-failure sweep | ~60 s (jittered), 50 per pass, 10 min claim lease | `apps/api/src/features/jobs/failure-sweep.ts`, `apps/api/src/jobs/pg-boss-broker.ts` |
+| scheduled-tick retention | one cron interval (60 s – 14 d) | `apps/api/src/jobs/pg-boss-broker.ts` (`scheduledTickRetentionSeconds`) |
 | interactive vs maintenance `retryLimit` | 3 vs 2 | `packages/jobs/src/catalog.ts` (`policy`) |
 | `AI_ADMISSION_LOCK_KEY` | fixed advisory key | `apps/api/src/jobs/pg-boss-broker.ts` |
 
@@ -576,7 +662,8 @@ paid-for generation away and force pg-boss to redo the whole job; both are close
 | Output validation + undeclared-field policy, `buildJobOutput`, declared-path introspection | `packages/jobs/src/output-validation.ts` |
 | pg-boss broker (enqueue, claim, complete/fail, dead-letter, admission, SQL list/lookup/guard reads) | `apps/api/src/jobs/{broker,pg-boss-broker}.ts`, fake: `apps/api/src/jobs/fake-broker.ts` |
 | Schedule reconciliation | `apps/api/src/jobs/schedule-reconciler.ts` |
-| Jobs feature (routes, persist-first complete, replay, repair, `parseCompletedJobOutput`) | `apps/api/src/features/jobs/{routes,service,schema}.ts` |
+| Jobs feature (routes, persist-first complete, replay, repair, `parseCompletedJobOutput`, allowlist J67) | `apps/api/src/features/jobs/{routes,service,schema}.ts` |
+| Attempt fence, salvage, settlement ledger, tick retention (J60–J66) | `apps/api/src/jobs/{broker,pg-boss-broker,fake-broker}.ts`, `apps/api/src/features/jobs/{service,failure-sweep}.ts` (sweep started/stopped in `apps/api/src/main.ts`), migration `packages/db/migrations/0075_job_failure_settlements.sql` |
 | Orchestrator continuations (J22a) | state: `apps/api/src/stores/{orchestration-followup-store,postgres-orchestration-followup-store}.ts`; lock: `apps/api/src/scheduling/run-lock.ts`; resumed from `completeJob` into `features/proposals/service.ts`, `scheduling/gap-reconciler.ts`, `features/patrol/service.ts` |
 | AI capacity gate (interactive reserve) | `apps/api/src/platform/ai-capacity.ts` (see [rate-limiting.md](./rate-limiting.md)) |
 | Cost pricing (read-time) | `apps/api/src/platform/ai-pricing.ts` |
@@ -586,14 +673,16 @@ paid-for generation away and force pg-boss to redo the whole job; both are close
 | Generative loop, repair reshape | `apps/watcher/src/runners/{generative,repair}.ts`, `apps/watcher/src/job-prompts.ts` |
 | Source-grounded agent + workspaces + fetch | `apps/watcher/src/runners/source-agent.ts`, `apps/watcher/src/{source-workspace,source-tools,fetch-url}.ts` |
 | Maintenance / publication / refresh runners | `apps/watcher/src/runners/{maintenance,publication,refresh-flow-snapshot}.ts` |
-| Watcher HTTP client (complete retry) | `apps/watcher/src/http-client.ts` |
+| Watcher HTTP client (fenced lifecycle calls, complete/fail retry) | `apps/watcher/src/http-client.ts` |
 | Source-map store + route | `apps/api/src/features/source-map/routes.ts`, `apps/api/src/stores/{source-map-store,postgres-source-map-store,source-map-consensus}.ts` |
 
 ## Tests (behavioural contract)
 
 `packages/jobs/src/{catalog,schemas,output-validation}.test.ts`,
 `apps/api/src/jobs/{fake-broker,pg-boss-broker,pg-boss-broker.integration,schedule-reconciler}.test.ts`,
-`apps/api/src/features/jobs/{routes,service,fold-dispatch}.test.ts`,
+`apps/api/src/features/jobs/{routes,service,fold-dispatch,lifecycle}.test.ts` (J60–J65, J67),
+`apps/api/src/jobs/pg-boss-broker.integration.test.ts` "fences, salvages and settles lost
+work" (J60–J64, J66 against real pg-boss),
 `apps/watcher/src/{worker-loop,capabilities,config,http-client,usage,job-prompts,output-contract,source-tools,source-workspace,fetch-url,health-server}.test.ts`,
 `apps/watcher/src/runners/{chat,cli,generative,maintenance,publication,publication-comment,publication-crosslink,refresh-flow-snapshot,repair,source-agent}.test.ts`,
 `apps/api/src/features/source-map/routes.test.ts`,

@@ -73,7 +73,24 @@ the atomic enqueue lives in `JobBroker.createIfAdmitted`.
 - **RL8** — Both paths count AI jobs in flight (states `created | retry | active`, across
   every provider queue) via `broker.countInFlight`, aggregate SQL over pg-boss's job table,
   and MUST share the same class-aware block rule and the same `aiCapacityBounds`
-  limit/reserve computation so the two classes can never drift apart.
+  limit/reserve computation so the two classes can never drift apart. Which of those
+  rows count is narrowed by RL29.
+- **RL29** — **Queued work counts only where a live watcher can claim it.** An `active` AI
+  job always counts. A queued one (`created | retry`) counts only when its queue's
+  capability is advertised by a watcher the registry has seen within
+  `WATCHER_ACTIVE_WINDOW_MS` (default 15 min — the same window as the Jobs screen's
+  connected-watcher view). Both capacity builders (`aiInflightCapacity`,
+  `nonInteractiveAiCapacity`) read the live set and hand it to the broker as
+  `InFlightCapacity.servedCapabilities`; `countInFlight` takes the same set, so the pre-check
+  and the atomic gate agree. Root cause this fixes: queued jobs have a 14-day queue
+  retention, so jobs left on a provider queue the fleet no longer runs (the operator switched
+  `AI_PROVIDER`, or retired a watcher) held the ceiling shut for up to 14 days, 429ing every
+  ask while nothing ran. Queued work nobody can claim costs nothing; the moment a watcher for
+  that queue appears, its backlog counts again, so recovery is still admission-controlled. A
+  registry read failure falls back to counting every queued job (the stricter rule). Trade-off,
+  deliberately accepted: during a **total** watcher outage queued work does not count, so new
+  asks are admitted (they wait as 202 jobs) — the ceiling bounds spend in flight, and none is
+  in flight; a returning watcher re-applies the ceiling at once.
 - **RL9** — The gate is **class-aware** (#240). AI job types split into an *interactive*
   class — a live caller is waiting: `answer_question` (including gap-closure verification
   re-asks) and `outline_flow_seed`; see `INTERACTIVE_AI_JOB_TYPES` in
@@ -105,9 +122,14 @@ the atomic enqueue lives in `JobBroker.createIfAdmitted`.
 - **RL13** — Admission is enforced at the `POST /api/ask` enqueue, at the questionnaire
   drip's enqueue, **and at every maintenance fan-out enqueue** (#288b) — all through the
   reusable `createIfAdmitted` primitive and the one shared advisory lock, so interactive and
-  maintenance admissions contend on a single mutually-exclusive count. When
+  maintenance admissions contend on a single mutually-exclusive count. A hand-submitted AI job
+  (`POST /api/jobs`, [ai-jobs.md](./ai-jobs.md) J67) admits through the non-interactive
+  policy too, so that route cannot exceed the ceiling either (RL30). When
   `RATE_LIMIT_ENABLED=false`, the capacity policy is `undefined` (a pass-through) and the
   enqueue is uncapped.
+- **RL30** — `POST /api/jobs` admits an AI (metered) type through `createIfAdmitted` with
+  `nonInteractiveAiCapacity`, returning the same `429 ai_capacity` + `Retry-After` when full;
+  non-AI types are not capped.
 - **RL14** — This is deliberately **admission control, not backpressure**: at the ceiling
   new work is *rejected* (the client resubmits after `Retry-After`) rather than queued,
   because an unbounded queue would still eventually run and cost money. Jobs already enqueued
@@ -325,7 +347,8 @@ max_over_time({service="api"} | json | event="ai_capacity" | unwrap inFlight [$_
 | --- | --- |
 | L1 middleware, tiers, anon fallback (RL1–RL5) | `apps/api/src/http/rate-limit.ts` |
 | L1 tier application on routes | `apps/api/src/features/{ask,retrieve,route,source-sync,patrol,knowledge,scheduled-tasks,seed,questionnaires}/routes.ts` |
-| L2 capacity policy + pre-check + error (RL6–RL15) | `apps/api/src/platform/ai-capacity.ts` |
+| L2 capacity policy + pre-check + error (RL6–RL15), live-watcher set (RL29) | `apps/api/src/platform/ai-capacity.ts` (`servedCapabilities`); broker side: `inFlightCondition` / `queuedCountedQueueNames` in `apps/api/src/jobs/pg-boss-broker.ts` |
+| `POST /api/jobs` admission (RL30) | `apps/api/src/features/jobs/service.ts` (`submitJob`) |
 | Atomic admission primitive (advisory lock) | `apps/api/src/jobs/pg-boss-broker.ts` (`createIfAdmitted`, `countInFlight`, `failTerminal`), `apps/api/src/jobs/broker.ts` |
 | Class sets, repairable set, retry-limit split (RL9, RL16, RL20) | `packages/jobs/src/catalog.ts` (`AI_JOB_TYPES`, `INTERACTIVE_AI_JOB_TYPES`, `REPAIRABLE_JOB_TYPES`) |
 | Schema-invalid repair / terminal-fail (RL16–RL19) | `apps/api/src/jobs/*` (`completeJob`), `apps/api/src/stores/{job-repair-context-store,postgres-job-repair-context-store}.ts` |
@@ -337,7 +360,10 @@ max_over_time({service="api"} | json | event="ai_capacity" | unwrap inFlight [$_
 ## Tests (behavioural contract)
 
 `apps/api/src/http/rate-limit.test.ts`,
-`apps/api/src/platform/{ai-capacity,ai-pricing,maintenance-fanout,config}.test.ts`,
+`apps/api/src/platform/{ai-capacity,ai-pricing,maintenance-fanout,config}.test.ts`
+(RL29: the "counts queued work only where a live watcher can claim it" suite),
+`apps/api/src/jobs/pg-boss-broker.integration.test.ts` (RL29 against real pg-boss),
+`apps/api/src/features/jobs/routes.test.ts` (RL30),
 `apps/api/src/stores/{rate-limit-store,postgres-rate-limit-store,job-repair-context-store}.test.ts`,
 `packages/jobs/src/catalog.test.ts`.
 

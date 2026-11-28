@@ -133,6 +133,21 @@ The API is a [Hono](https://hono.dev) app served under `/api`. It listens on `PO
   (`/api/proposals/:id/verify-closure`). The watcher itself has **no database access**.
   With auth on, the job lifecycle callbacks accept **only** a service principal — a human
   `manage:jobs` holder gets 403 ([authorization.md](./authorization.md) AZ29).
+- **API31** — **Job lifecycle routes say 404 only when the job does not exist.**
+  `POST /api/jobs/:id/{heartbeat,fail,cancel,retry,accept-failure}` map exactly the
+  broker's `JobNotFoundError` to `404 job_not_found`; any other failure is a `500` (the
+  generic `internal_error` body), so a watcher can tell "this job is gone" (stop) from "the
+  API failed" (retry). They used to turn every error into a 404. The watcher retries
+  `fail()` on a 5xx, 408, 429 or network error exactly as it retries `complete()`
+  ([ai-jobs.md](./ai-jobs.md) J61).
+- **API32** — **`POST /api/jobs` takes an allowlist of types**; internal-only types are
+  `400 job_type_not_submittable` and a metered type is AI-admission-controlled
+  ([ai-jobs.md](./ai-jobs.md) J67, [rate-limiting.md](./rate-limiting.md) RL30).
+- **API33** — **Watcher lifecycle calls are fenced to the claimed attempt.** Heartbeat,
+  complete and fail take an optional `attempt` (the job's `retryCount` at claim); heartbeat
+  answers `{ job, cancelled, active }`, and a completion that did not persist (this attempt no
+  longer holds the job) is `409 job_not_active` with no side effects
+  ([ai-jobs.md](./ai-jobs.md) J60–J62).
 
 ## Mount map
 
@@ -984,8 +999,12 @@ maintenance jobs. Job states: `created`, `retry`, `active`, `completed`, `cancel
 Creates a job. Requires the `manage:jobs` scope.
 
 ```json
-{ "type": "draft_markdown_proposal", "input": { ... } }
+{ "type": "correctness_patrol", "input": { "flowId": "docs" } }
 ```
+
+Only the hand-submittable types are accepted (API32): `process_gaps_to_pull_requests`,
+`source_change_sync`, `correctness_patrol`, `editorial_patrol`, `seed_bootstrap`,
+`refresh_flow_snapshot`, `verify_document`, `summarize_gap`.
 
 `input` is validated against the job type's own `inputSchema` at creation (#285), so a
 payload that does not match the contract — including a source descriptor whose git `url`
@@ -993,6 +1012,8 @@ uses a disallowed transport (`ext::`, `git://`) or a `-`-prefixed value — is r
 before it is persisted or dispatched.
 
 - `400 invalid_job` — unknown/missing type, or a body that is not `{ type, input }`.
+- `400 job_type_not_submittable` — an internal-only type (API32).
+- `429 ai_capacity` (+ `Retry-After`) — a metered type while AI capacity is full (RL30).
 - `400 invalid_job_input` — `input` failed the job type's `inputSchema`.
 - `400 unconfigured_job_source` — `input.sources` contains a descriptor that is not exactly
   one the API builds from the operator's configured sources (an unknown id, or a different
@@ -1049,8 +1070,10 @@ service (client-credentials) principal: anyone else gets `403 forbidden` (AZ29).
 structured `error` object. Complete takes `{ "output", "executor"?, "usage"?, "provider"?,
 "model"? }` — usage is the run's summed provider-reported token spend (#241), and
 provider/model are the executing runner's identity so that spend can be priced per model;
-all three are best-effort telemetry (malformed values are dropped, never a 400). See
-[ai-jobs.md](ai-jobs.md).
+all three are best-effort telemetry (malformed values are dropped, never a 400). Heartbeat,
+complete and fail also take `attempt` (API33): heartbeat returns `{ "job", "cancelled",
+"active" }`, and complete answers `409 job_not_active` when this attempt no longer holds the
+job. Only an unknown id is a 404 (API31). See [ai-jobs.md](ai-jobs.md).
 
 ### `GET /api/workers`
 
