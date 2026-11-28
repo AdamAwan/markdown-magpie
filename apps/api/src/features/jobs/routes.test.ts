@@ -56,10 +56,56 @@ test("POST /api/jobs rejects an input missing a required contract field (400)", 
   const ctx = makeTestContext();
   const app = buildApp(ctx);
 
-  // answer_question requires provider + question; an empty input must not persist.
-  const res = await post(app, { type: "answer_question", input: {} });
+  // summarize_gap requires provider + questions; an empty input must not persist.
+  const res = await post(app, { type: "summarize_gap", input: {} });
   assert.equal(res.status, 400);
   assert.equal(((await res.json()) as { error: string }).error, "invalid_job_input");
+});
+
+// docs/ai-jobs.md J67: internal-only job types cannot be created by hand — e.g.
+// a comment/crosslink job whose caller-chosen pullRequestUrl + tokenEnv would aim
+// a github watcher's credential at an arbitrary PR.
+test("POST /api/jobs rejects internal-only job types (400 job_type_not_submittable)", async () => {
+  const internal: Array<[string, unknown]> = [
+    [
+      "comment_pull_request",
+      { pullRequestUrl: "https://github.com/victim/repo/pull/1", body: "hi", tokenEnv: "OTHER_TOKEN" }
+    ],
+    [
+      "crosslink_pull_requests",
+      {
+        pullRequestUrl: "https://github.com/victim/repo/pull/1",
+        relatedPullRequestUrl: "https://github.com/victim/repo/pull/2",
+        tokenEnv: "OTHER_TOKEN"
+      }
+    ],
+    ["answer_question", { provider: "codex", question: "q", flows: [], expectedOutput: "answer_result" }],
+    ["publish_proposal", { proposalId: "p1" }]
+  ];
+  for (const [type, input] of internal) {
+    const ctx = makeTestContext();
+    const res = await post(buildApp(ctx), { type, input });
+    assert.equal(res.status, 400, type);
+    assert.equal(((await res.json()) as { error: string }).error, "job_type_not_submittable", type);
+    assert.equal((await ctx.jobs.list({})).total, 0, `${type}: nothing enqueued`);
+  }
+});
+
+test("POST /api/jobs admits a hand-submitted AI job through the AI capacity gate (429 when full)", async () => {
+  const ctx = makeTestContext();
+  ctx.settings.rateLimit.enabled = true;
+  ctx.settings.rateLimit.aiMaxInflightJobs = 1;
+  ctx.settings.rateLimit.aiInteractiveReservedJobs = 0;
+  const submit = () =>
+    post(buildApp(ctx), {
+      type: "summarize_gap",
+      input: { provider: "codex", questions: ["Q?"], citedSections: [], expectedOutput: "gap_summary" }
+    });
+  assert.equal((await submit()).status, 202);
+  await ctx.jobs.claim("codex-watcher", ["codex"]); // now one ACTIVE job holds the only slot
+  const res = await submit();
+  assert.equal(res.status, 429);
+  assert.equal(((await res.json()) as { error: string }).error, "ai_capacity");
 });
 
 // The operator-configured source the accepted submissions below reference.

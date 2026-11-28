@@ -25,9 +25,14 @@ function partitionedQueueName(type: JobType, capability: JobCapability, multi: b
 }
 
 const DAY = 24 * 60 * 60;
+// heartbeatSeconds is the window pg-boss gives an active job between heartbeats
+// before failing it back to retry. The watcher beats every quarter window (30s)
+// with a 10s request cap, so a claim survives three lost beats in a row — the
+// old 60s window with a 30s beat and a 30s request timeout lapsed on ONE slow
+// beat (docs/ai-jobs.md J60).
 const BASE_POLICY = {
   retryBackoff: true,
-  heartbeatSeconds: 60,
+  heartbeatSeconds: 120,
   retentionSeconds: 14 * DAY,
   deleteAfterSeconds: 30 * DAY
 } as const;

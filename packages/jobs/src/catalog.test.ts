@@ -67,7 +67,7 @@ test("every job type is unique and has schemas and a valid policy", () => {
     assert.equal(definition.type, type);
     assert.equal(typeof definition.inputSchema.safeParse, "function");
     assert.equal(typeof definition.outputSchema.safeParse, "function");
-    assert.equal(definition.policy.heartbeatSeconds, 60);
+    assert.equal(definition.policy.heartbeatSeconds, 120);
     assert.equal(definition.policy.retentionSeconds, FOURTEEN_DAYS_SECONDS);
     assert.equal(definition.policy.expireInSeconds, EXPIRATION_SECONDS[type]);
     assert.ok(definition.policy.expireInSeconds > definition.policy.heartbeatSeconds);

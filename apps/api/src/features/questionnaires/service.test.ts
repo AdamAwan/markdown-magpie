@@ -226,6 +226,8 @@ test("drip stops and reverts the item + log when the atomic gate rejects at capa
   // is shed at the atomic gate.
   ctx.settings.rateLimit.aiMaxInflightJobs = 1;
   ctx.settings.rateLimit.aiInteractiveReservedJobs = 0;
+  // A live codex watcher makes the queued saturating job count (RL29).
+  await ctx.stores.watchers.touch({ name: "w", status: "idle", capabilities: ["codex"] });
   await ctx.jobs.create("summarize_gap", {
     provider: "codex",
     questions: ["saturating"],

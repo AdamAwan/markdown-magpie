@@ -85,7 +85,7 @@ export function createFanoutBudget(ctx: AppContext, taskType: string, flowId?: s
       // AI-admission advisory lock). Undefined capacity ⇒ rate limiting off ⇒
       // plain create pass-through, so local dev keeps enqueueing while still
       // honouring the per-tick budget.
-      const capacity = nonInteractiveAiCapacity(ctx);
+      const capacity = await nonInteractiveAiCapacity(ctx);
       if (!capacity) {
         const job = await ctx.jobs.create(type, input);
         remaining -= 1;

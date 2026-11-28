@@ -192,14 +192,21 @@ test("heartbeat, cancellation, and failed-only retry expose lifecycle state", as
   const ctx = makeTestContext();
   const created = await ctx.jobs.create("answer_question", answerInput());
   await claimJob(ctx, "worker", ["codex"]);
-  assert.equal((await heartbeatJob(ctx, created.id)).state, "active");
+  assert.deepEqual(await heartbeatJob(ctx, created.id), {
+    job: await ctx.jobs.get(created.id),
+    active: true
+  });
   assert.equal((await cancelJob(ctx, created.id)).state, "cancelled");
-  assert.equal((await heartbeatJob(ctx, created.id)).state, "cancelled");
+  const afterCancel = await heartbeatJob(ctx, created.id);
+  assert.equal(afterCancel.job.state, "cancelled");
+  assert.equal(afterCancel.active, false, "a cancelled job tells its watcher to stop");
   await assert.rejects(() => retryJob(ctx, created.id), /only "?failed/i);
 
   const failed = await ctx.jobs.create("answer_question", answerInput());
-  await claimJob(ctx, "worker", ["codex"]);
+  // As in pg-boss, each attempt is a claim; a failure only consumes the budget
+  // of the attempt that was claimed.
   for (let attempt = 0; attempt <= failed.retryLimit; attempt += 1) {
+    await claimJob(ctx, "worker", ["codex"]);
     await failJob(ctx, failed.id, { code: "provider", message: "failed", category: "provider" });
   }
   assert.equal((await retryJob(ctx, failed.id)).state, "created");

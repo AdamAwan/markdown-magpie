@@ -7,6 +7,7 @@ import { loadConfig } from "./platform/config.js";
 import { buildApp } from "./app.js";
 import * as configService from "./features/config/service.js";
 import { reconcileSchedules } from "./jobs/schedule-reconciler.js";
+import { startFailureSweep } from "./features/jobs/failure-sweep.js";
 import { preflightDataPaths } from "./platform/preflight.js";
 import { checkoutRoot, snapshotRoot } from "./platform/repositories.js";
 import { logger } from "./logger.js";
@@ -42,6 +43,9 @@ async function start(): Promise<void> {
     process.exitCode = 1;
     return;
   }
+  // Settle the side effects of jobs pg-boss fails by itself (expiry, lost
+  // heartbeat) — features/jobs/failure-sweep.ts. Stopped before the broker.
+  const failureSweep = startFailureSweep(ctx);
   // Non-fatal: warn loudly if a configured data directory is not writable, so an
   // unmounted/misowned path surfaces as one boot warning rather than a silent
   // per-run failure (issue #130). Resolved to absolute paths the same way the
@@ -71,6 +75,7 @@ async function start(): Promise<void> {
     logger.info({ signal }, "received signal; draining background work before exit");
     server.close();
     Promise.race([ctx.background.whenIdle(), new Promise((resolve) => setTimeout(resolve, config.apiShutdownDrainMs))])
+      .then(() => failureSweep.stop())
       .then(() => ctx.jobs.stop())
       // Close the shared store pool after the broker so no store query is mid-flight
       // when its connections are torn down. Best-effort: shutdown exits regardless.
