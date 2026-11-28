@@ -312,7 +312,7 @@ paid-for generation away and force pg-boss to redo the whole job; both are close
   > exclusion in `schemas.ts` (`QueuedSourceDescriptor`) rather than declared, because
   > `POST /api/jobs` used to accept caller-built descriptors: declaring it as-is would have
   > let a `manage:jobs` caller pair an arbitrary https url with an arbitrary watcher env-var
-  > name. `POST /api/jobs` now only accepts descriptors matching operator config (J49), so
+  > name. `POST /api/jobs` now only accepts descriptors matching operator config (J52), so
   > declaring it is unblocked but remains a deliberate follow-up.
 - **J25** — **Execution identity rides the envelope too.** Each AI runner exposes an
   `aiIdentity` — its provider plus the *configured* model (chat model / Azure deployment /
@@ -493,7 +493,7 @@ paid-for generation away and force pg-boss to redo the whole job; both are close
   (falling back to full re-derivation). A draft that omits provenance is warned about but
   still published — quality is enforced by review, never by rejecting drafts.
   `dedupe_documents`/`split_document` changesets carry no per-claim provenance by design.
-- **J49** — **Source descriptors come only from operator config.** A source descriptor is a
+- **J52** — **Source descriptors come only from operator config.** A source descriptor is a
   direct line to the watcher host: a `local` `path` picks the directory the agent reads, a
   `subpath` narrows (or, unchecked, escapes) the root, a git `url` picks what is cloned, and
   an `internet` `allowedHosts` list picks what the fetch tool may reach. So:

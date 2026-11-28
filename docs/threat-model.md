@@ -136,7 +136,7 @@ without realising it was load-bearing.
   that way, and the review gate remains the backstop for what the content says.
   The allowlist is operator config only: `POST /api/jobs` rejects descriptors that do not
   match a configured source, so a caller cannot widen it (SSRF; [ai-jobs.md](./ai-jobs.md)
-  J49). **Invariants to preserve:** fetching stays opt-in per descriptor, the allowlist check
+  J52). **Invariants to preserve:** fetching stays opt-in per descriptor, the allowlist check
   stays exact-host and https-only on every hop, and no fetch path is added that bypasses
   the logging.
 - **TM8** — **Git clone URLs are transport-allowlisted** (mitigates T5, #285). Every URL
@@ -154,7 +154,7 @@ without realising it was load-bearing.
      the transport check, an externally submitted job's source descriptors must match
      the operator's configured sources exactly, so a caller cannot supply any url,
      `local` path, `subpath` or fetch allowlist of their own
-     ([ai-jobs.md](./ai-jobs.md) J49).
+     ([ai-jobs.md](./ai-jobs.md) J52).
   2. **At clone time.** `ensureGitCheckout` calls `assertAllowedGitUrl`
      (`packages/git/src/index.ts`) and inserts a `--` argv terminator before the URL so it
      can never be read as an option.

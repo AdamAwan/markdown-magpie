@@ -82,7 +82,7 @@ test("POST /api/jobs accepts a valid input and enqueues it (202)", async () => {
   assert.equal(jobs[0]!.id, body.job.id);
 });
 
-// docs/ai-jobs.md J49: an externally submitted job's source descriptors must be
+// docs/ai-jobs.md J52: an externally submitted job's source descriptors must be
 // exactly what the API projects from operator config — a caller cannot choose a
 // host path, a subpath, a different url, or a fetch allowlist.
 function contextWithSources(): ReturnType<typeof makeTestContext> {

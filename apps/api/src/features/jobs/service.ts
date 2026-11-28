@@ -52,7 +52,7 @@ export async function createJob(ctx: AppContext, type: JobType, input: unknown):
 // The external job-submission boundary (POST /api/jobs). On top of the contract
 // check every caller gets, a source-grounded input's `sources` must be exactly
 // the descriptors the API itself projects from the operator's configured sources
-// (docs/ai-jobs.md J49): a caller-authored descriptor would otherwise choose
+// (docs/ai-jobs.md J52): a caller-authored descriptor would otherwise choose
 // which host directory the watcher's agent reads (`local` path), escape a
 // checkout (`subpath`), or widen the fetch allowlist (`internet` allowedHosts —
 // SSRF). Internal enqueues build their descriptors from config

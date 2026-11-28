@@ -131,7 +131,7 @@ describe("prepareSourceWorkspaces", () => {
     );
   });
 
-  // Defence in depth behind the API's configured-sources rule (docs/ai-jobs.md J49):
+  // Defence in depth behind the API's configured-sources rule (docs/ai-jobs.md J52):
   // a descriptor's subpath must stay inside its source root.
   describe("subpath confinement", () => {
     function sourceTree(): { root: string; outside: string } {

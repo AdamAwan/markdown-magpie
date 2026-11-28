@@ -997,7 +997,7 @@ before it is persisted or dispatched.
 - `400 unconfigured_job_source` — `input.sources` contains a descriptor that is not exactly
   one the API builds from the operator's configured sources (an unknown id, or a different
   path, url, subpath, name or fetch allowlist). Callers reference sources; they never
-  author them ([ai-jobs.md](ai-jobs.md) J49).
+  author them ([ai-jobs.md](ai-jobs.md) J52).
 - `202` — `{ "job": Job }`.
 
 With auth on and `AUTH_PROVIDER=entra`, a human caller also needs the `ops` capability

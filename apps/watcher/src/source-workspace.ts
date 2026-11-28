@@ -164,7 +164,7 @@ export async function prepareSourceWorkspaces(
 
 // Resolves a source's workspace root: the checkout (or local path) itself, or the
 // descriptor's `subpath` inside it. Defence in depth behind the API's rule that
-// job sources must match operator config (docs/ai-jobs.md J49): a subpath MUST
+// job sources must match operator config (docs/ai-jobs.md J52): a subpath MUST
 // stay inside the source root, so an absolute subpath, one that climbs out with
 // `..`, or one that reaches outside through a symlink (checked on the real,
 // symlink-resolved paths) is rejected. The rejection degrades that one source to

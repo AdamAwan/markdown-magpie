@@ -93,7 +93,7 @@ function contract<Domain>() {
 // descriptors: declaring it would have let a `manage:jobs` caller pair an
 // arbitrary https url with an arbitrary watcher env var name and have the watcher
 // send that variable's value as a git credential. POST /api/jobs now rejects any
-// descriptor that does not match operator config (docs/ai-jobs.md J49), so
+// descriptor that does not match operator config (docs/ai-jobs.md J52), so
 // declaring it is unblocked — but it remains a deliberate follow-up, so the
 // contract excludes exactly this one field and still checks every other one.
 type QueuedSourceDescriptor = SourceDescriptor extends infer Descriptor
@@ -292,7 +292,7 @@ const sourceDescriptorSchema = z.discriminatedUnion("kind", [
 ]);
 // The `sources` carried by any source-grounded job input, for callers that must
 // inspect them without knowing the job type — the API's external job-submission
-// boundary checks each one against operator config (docs/ai-jobs.md J49). A job
+// boundary checks each one against operator config (docs/ai-jobs.md J52). A job
 // input without a `sources` array does not match.
 export const jobInputSourcesSchema = z.object({ sources: z.array(sourceDescriptorSchema) });
 // Mirrors @magpie/core SourceMapUpdate — an optional, agent-contributed

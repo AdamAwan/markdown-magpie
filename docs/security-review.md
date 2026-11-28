@@ -104,7 +104,7 @@ and opens pull requests to the configured destination repositories.
   may only reference operator-configured sources — a caller cannot point the watcher's
   agent at a host path, a different repository, or extra fetch hosts — and the watcher
   confines every source `subpath` to its root, including through symlinks
-  ([ai-jobs.md](ai-jobs.md) J49).
+  ([ai-jobs.md](ai-jobs.md) J52).
 - **Mandatory human review of AI output.** No AI-generated content reaches a
   destination repository's default branch without a human merging a pull
   request. See [threat-model.md](threat-model.md) (control C4) and the operator
