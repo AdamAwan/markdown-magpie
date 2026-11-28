@@ -35,7 +35,7 @@
     "test:timings": "node scripts/test-timings.mjs",
     "test:slow": "node scripts/test-timings.mjs --verify",
     "test:db": "node scripts/test-db.mjs npm run test",
-    "test:integration": "RUN_PG_INTEGRATION=1 node --import tsx --test apps/api/src/jobs/pg-boss-broker.integration.test.ts",
+    "test:integration": "node scripts/test-db.mjs node --import tsx --test apps/api/src/jobs/pg-boss-broker.integration.test.ts",
     "test:coverage": "npm run test:coverage --workspaces --if-present",
     "test:db:coverage": "node scripts/test-db.mjs npm run test:coverage",
     "test:e2e:web": "npm run build:libs && npm run build -w @magpie/web && npm run test:e2e -w @magpie/web",
