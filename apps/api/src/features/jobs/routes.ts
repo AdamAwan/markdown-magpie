@@ -27,7 +27,7 @@ export function jobRoutes(ctx: AppContext): Hono {
     }),
     async (c) => {
       const { type, input } = c.req.valid("json");
-      return c.json({ job: await jobsService.createJob(ctx, type, input) }, 202);
+      return c.json({ job: await jobsService.submitJob(ctx, type, input) }, 202);
     }
   );
 

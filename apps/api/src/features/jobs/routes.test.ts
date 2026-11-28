@@ -62,8 +62,11 @@ test("POST /api/jobs rejects an input missing a required contract field (400)", 
   assert.equal(((await res.json()) as { error: string }).error, "invalid_job_input");
 });
 
+// The operator-configured source the accepted submissions below reference.
+const configuredRepo = { id: "src-1", name: "Repo", kind: "git" as const, url: "https://example.com/repo.git" };
+
 test("POST /api/jobs accepts a valid input and enqueues it (202)", async () => {
-  const ctx = makeTestContext();
+  const ctx = makeTestContext({ knowledgeConfig: { ...makeTestContext().knowledgeConfig, sources: [configuredRepo] } });
   const app = buildApp(ctx);
 
   const res = await post(app, {
@@ -77,4 +80,79 @@ test("POST /api/jobs accepts a valid input and enqueues it (202)", async () => {
   const { jobs } = await ctx.jobs.list({ type: "verify_document" });
   assert.equal(jobs.length, 1);
   assert.equal(jobs[0]!.id, body.job.id);
+});
+
+// docs/ai-jobs.md J49: an externally submitted job's source descriptors must be
+// exactly what the API projects from operator config — a caller cannot choose a
+// host path, a subpath, a different url, or a fetch allowlist.
+function contextWithSources(): ReturnType<typeof makeTestContext> {
+  const base = makeTestContext();
+  return makeTestContext({
+    knowledgeConfig: {
+      ...base.knowledgeConfig,
+      sources: [
+        configuredRepo,
+        { id: "notes", name: "Notes", kind: "local", path: "knowledge-bases/notes", subpath: "docs" },
+        {
+          id: "web",
+          name: "Vendor docs",
+          kind: "internet",
+          url: "https://docs.example.com",
+          allowedHosts: ["docs.example.com"]
+        },
+        { id: "agent", name: "Agent Knowledge", kind: "agent" }
+      ]
+    }
+  });
+}
+
+const configuredNotes = { id: "notes", name: "Notes", kind: "local", path: "knowledge-bases/notes", subpath: "docs" };
+const configuredWeb = {
+  id: "web",
+  name: "Vendor docs",
+  kind: "internet",
+  url: "https://docs.example.com",
+  allowedHosts: ["docs.example.com"]
+};
+
+function verifyWith(sources: unknown[]) {
+  return { type: "verify_document", input: { provider: "codex", path: "kb/a.md", content: "x", sources } };
+}
+
+test("POST /api/jobs rejects caller-authored source descriptors that differ from operator config", async () => {
+  const forged: Array<[string, unknown]> = [
+    ["local path pointed at the host root", { ...configuredNotes, path: "/" }],
+    ["subpath climbing out of the checkout", { ...configuredRepo, subpath: "../../.." }],
+    ["subpath dropped (widens the root)", { id: "notes", name: "Notes", kind: "local", path: "knowledge-bases/notes" }],
+    ["a different url for a configured id", { ...configuredRepo, url: "https://attacker.example/repo.git" }],
+    ["an injected fetch allowlist (SSRF)", { ...configuredWeb, allowedHosts: ["169.254.169.254"] }],
+    [
+      "a configured id re-kinded as fetchable",
+      { id: "agent", name: "Agent Knowledge", kind: "internet", allowedHosts: ["x.test"] }
+    ],
+    ["an unknown source id", { id: "ghost", name: "Ghost", kind: "local", path: "/etc" }]
+  ];
+  for (const [label, descriptor] of forged) {
+    const ctx = contextWithSources();
+    const res = await post(buildApp(ctx), verifyWith([configuredRepo, descriptor]));
+    assert.equal(res.status, 400, label);
+    assert.equal(((await res.json()) as { error: string }).error, "unconfigured_job_source", label);
+    const { jobs } = await ctx.jobs.list({ type: "verify_document" });
+    assert.equal(jobs.length, 0, `${label}: nothing enqueued`);
+  }
+});
+
+test("POST /api/jobs accepts descriptors that exactly match operator config", async () => {
+  const ctx = contextWithSources();
+  const agent = { id: "agent", name: "Agent Knowledge", kind: "agent" };
+  const res = await post(buildApp(ctx), verifyWith([configuredRepo, configuredNotes, configuredWeb, agent]));
+  assert.equal(res.status, 202);
+});
+
+test("POST /api/jobs leaves jobs without sources unaffected", async () => {
+  const res = await post(buildApp(makeTestContext()), {
+    type: "summarize_gap",
+    input: { provider: "codex", questions: ["Q?"], citedSections: [], expectedOutput: "gap_summary" }
+  });
+  assert.equal(res.status, 202);
 });

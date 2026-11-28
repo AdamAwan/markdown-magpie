@@ -100,7 +100,11 @@ and opens pull requests to the configured destination repositories.
   capabilities, AZ27), and the API refuses to start without role grants (AZ28).
   The watcher's job claim/heartbeat/complete/fail endpoints accept only service
   (client-credentials) principals, so a human operator cannot read job inputs by
-  claiming jobs or forge job results (AZ29).
+  claiming jobs or forge job results (AZ29). Jobs submitted through `POST /api/jobs`
+  may only reference operator-configured sources — a caller cannot point the watcher's
+  agent at a host path, a different repository, or extra fetch hosts — and the watcher
+  confines every source `subpath` to its root, including through symlinks
+  ([ai-jobs.md](ai-jobs.md) J49).
 - **Mandatory human review of AI output.** No AI-generated content reaches a
   destination repository's default branch without a human merging a pull
   request. See [threat-model.md](threat-model.md) (control C4) and the operator

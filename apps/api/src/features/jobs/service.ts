@@ -4,7 +4,13 @@ import { handleImportVerificationCompletion } from "../questionnaires/import-esc
 import { applyColumnMapping, handleColumnMappingFailure } from "../questionnaire-imports/service.js";
 import { logger } from "../../logger.js";
 import type { JobCapability, JobError, JobType, JobView } from "@magpie/jobs";
-import { isRepairableJobType, jobDefinition, undeclaredFieldsMessage, validateJobOutput } from "@magpie/jobs";
+import {
+  isRepairableJobType,
+  jobDefinition,
+  jobInputSourcesSchema,
+  undeclaredFieldsMessage,
+  validateJobOutput
+} from "@magpie/jobs";
 import type { AppContext } from "../../context.js";
 import { HttpError } from "../../http/errors.js";
 import type { JobListFilters } from "../../jobs/broker.js";
@@ -25,6 +31,7 @@ import { applyPullRequestTransition, continueReconcileFromCompletedReshape } fro
 import * as foldService from "../../scheduling/fold.js";
 import { snapshotRoot } from "../../platform/repositories.js";
 import { retrievalMode } from "../../platform/providers.js";
+import { unconfiguredSourceDescriptorIds } from "../../platform/source-descriptors.js";
 
 // answer_question (live /api/ask) and answer_question_batch (the questionnaire
 // drip, #288c) share the IDENTICAL answer contract. Everything that routes an
@@ -39,17 +46,45 @@ function isAnswerJobType(type: JobType): boolean {
 }
 
 export async function createJob(ctx: AppContext, type: JobType, input: unknown): Promise<JobView> {
-  // Validate the input against the job's own contract at creation (#285). Without
-  // this an untrusted `manage:jobs` caller could persist and dispatch a malformed
-  // input — e.g. a draft/verify job whose source descriptor carries an `ext::sh`
-  // (RCE) or `-`-prefixed (argument-injection) git url, which the source-descriptor
-  // schema now rejects. Enforcing the contract here also covers internal enqueues
-  // (e.g. the gap-closure re-asks), whose inputs are already built to the schema.
+  return ctx.jobs.create(type, parseJobInput(type, input));
+}
+
+// The external job-submission boundary (POST /api/jobs). On top of the contract
+// check every caller gets, a source-grounded input's `sources` must be exactly
+// the descriptors the API itself projects from the operator's configured sources
+// (docs/ai-jobs.md J49): a caller-authored descriptor would otherwise choose
+// which host directory the watcher's agent reads (`local` path), escape a
+// checkout (`subpath`), or widen the fetch allowlist (`internet` allowedHosts —
+// SSRF). Internal enqueues build their descriptors from config
+// (projectSourceDescriptors) and go through createJob directly.
+export async function submitJob(ctx: AppContext, type: JobType, input: unknown): Promise<JobView> {
+  const parsed = parseJobInput(type, input);
+  const carried = jobInputSourcesSchema.safeParse(parsed);
+  if (carried.success) {
+    const rejected = unconfiguredSourceDescriptorIds(ctx.knowledgeConfig.sources, carried.data.sources);
+    if (rejected.length > 0) {
+      throw new HttpError(
+        400,
+        "unconfigured_job_source",
+        `Job sources must match operator-configured sources exactly; rejected: ${rejected.join(", ")}`
+      );
+    }
+  }
+  return ctx.jobs.create(type, parsed);
+}
+
+// Validate the input against the job's own contract at creation (#285). Without
+// this an untrusted `manage:jobs` caller could persist and dispatch a malformed
+// input — e.g. a draft/verify job whose source descriptor carries an `ext::sh`
+// (RCE) or `-`-prefixed (argument-injection) git url, which the source-descriptor
+// schema now rejects. Enforcing the contract here also covers internal enqueues
+// (e.g. the gap-closure re-asks), whose inputs are already built to the schema.
+function parseJobInput(type: JobType, input: unknown): unknown {
   const parsed = jobDefinition(type).inputSchema.safeParse(input ?? {});
   if (!parsed.success) {
     throw new HttpError(400, "invalid_job_input", `Job input does not match the ${type} contract`);
   }
-  return ctx.jobs.create(type, parsed.data);
+  return parsed.data;
 }
 
 export async function claimJob(
