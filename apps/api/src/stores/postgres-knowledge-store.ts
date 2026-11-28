@@ -7,6 +7,7 @@ import type {
   KnowledgePersistence,
   LoadedKnowledge,
   LoadedRepository,
+  SectionEmbeddingSkip,
   SectionEmbeddingToSave,
   SectionKeywordSearch,
   SectionToEmbed,
@@ -283,6 +284,26 @@ export class PostgresKnowledgeStore
                   AND document_sections.heading = EXCLUDED.heading
                 THEN document_sections.content_changed_at
                 ELSE now()
+              END,
+              -- An embedding skip (0073) is a verdict on the exact text the
+              -- provider rejected: changed text gets a fresh attempt.
+              embedding_skipped_at = CASE
+                WHEN document_sections.content = EXCLUDED.content
+                  AND document_sections.heading = EXCLUDED.heading
+                THEN document_sections.embedding_skipped_at
+                ELSE NULL
+              END,
+              embedding_skipped_model = CASE
+                WHEN document_sections.content = EXCLUDED.content
+                  AND document_sections.heading = EXCLUDED.heading
+                THEN document_sections.embedding_skipped_model
+                ELSE NULL
+              END,
+              embedding_skip_reason = CASE
+                WHEN document_sections.content = EXCLUDED.content
+                  AND document_sections.heading = EXCLUDED.heading
+                THEN document_sections.embedding_skip_reason
+                ELSE NULL
               END
         `,
         batch.flatMap((section) => [
@@ -494,7 +515,9 @@ export class PostgresKnowledgeStore
   // when its vector was produced by a different model than the configured one —
   // a model change re-embeds exactly like a content change, via the same
   // background-embedder path. On an unversioned store ($3 NULL) only vectorless
-  // sections qualify, preserving the original behaviour.
+  // sections qualify, preserving the original behaviour. A section the embedder
+  // skipped under this same model (0073, IN31) is not pending: it would only be
+  // rejected again, and at the head of the id-ordered page it blocked the rest.
   async listSectionsNeedingEmbedding(limit: number, repositoryId?: string): Promise<SectionToEmbed[]> {
     const result = await this.pool.query<{ id: string; heading: string; content: string }>(
       `
@@ -502,6 +525,7 @@ export class PostgresKnowledgeStore
         FROM document_sections s
         JOIN documents d ON d.id = s.document_id
         WHERE (s.embedding IS NULL OR ($3::text IS NOT NULL AND s.embedding_model IS DISTINCT FROM $3))
+          AND ${notSkippedUnderModel("$3")}
           AND ($1::text IS NULL OR d.repository_id = $1)
         ORDER BY s.id
         LIMIT $2
@@ -521,11 +545,27 @@ export class PostgresKnowledgeStore
         FROM document_sections s
         JOIN documents d ON d.id = s.document_id
         WHERE (s.embedding IS NULL OR ($2::text IS NOT NULL AND s.embedding_model IS DISTINCT FROM $2))
+          AND ${notSkippedUnderModel("$2")}
           AND ($1::text IS NULL OR d.repository_id = $1)
       `,
       [repositoryId ?? null, this.embeddingModel ?? null]
     );
     return Number(result.rows[0]?.count ?? 0);
+  }
+
+  async markSectionsEmbeddingSkipped(entries: SectionEmbeddingSkip[]): Promise<void> {
+    if (entries.length === 0) {
+      return;
+    }
+    await this.pool.query(
+      `
+        UPDATE document_sections AS s
+        SET embedding_skipped_at = now(), embedding_skipped_model = $3, embedding_skip_reason = v.reason
+        FROM unnest($1::text[], $2::text[]) AS v(id, reason)
+        WHERE s.id = v.id
+      `,
+      [entries.map((entry) => entry.id), entries.map((entry) => entry.reason), this.embeddingModel ?? null]
+    );
   }
 
   // One-time upgrade grace for vectors that predate embedding-model versioning:
@@ -590,6 +630,12 @@ export class PostgresKnowledgeStore
       );
     }
   }
+}
+
+// True unless the section was skipped by the embedder under the model bound at
+// `modelParam` (NULL on an unversioned store, which IS NOT DISTINCT matches).
+function notSkippedUnderModel(modelParam: string): string {
+  return `NOT (s.embedding_skipped_at IS NOT NULL AND s.embedding_skipped_model IS NOT DISTINCT FROM ${modelParam}::text)`;
 }
 
 // Serializes index writes for one repository across every API replica sharing

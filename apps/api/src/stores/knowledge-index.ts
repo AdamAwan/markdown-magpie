@@ -105,6 +105,15 @@ export interface EmbeddingPersistence {
   // Saves every embedding from one provider batch in a single multi-row
   // statement instead of one round-trip per section.
   saveSectionEmbeddings(entries: SectionEmbeddingToSave[]): Promise<void>;
+  // Records sections the provider rejected even after truncation, so they stop
+  // being listed (and counted) as pending under the current model until their
+  // text changes (docs/ingestion.md IN31).
+  markSectionsEmbeddingSkipped(entries: SectionEmbeddingSkip[]): Promise<void>;
+}
+
+export interface SectionEmbeddingSkip {
+  id: string;
+  reason: string;
 }
 
 export interface MarkdownUpload {

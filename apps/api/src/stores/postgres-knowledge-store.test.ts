@@ -612,5 +612,33 @@ describe(
       // Adoption on an unversioned store is a no-op by definition.
       assert.equal(await unversioned.adoptUnversionedEmbeddings(), 0);
     });
+
+    it("a skipped section stops being pending under that model until its text or the model changes", async () => {
+      const pool = makeTestPool(databaseUrl as string);
+      const storeA = new PostgresKnowledgeStore(pool, MODEL_A);
+      const repositoryId = `embed-skip-${Date.now()}`;
+      const { sectionId } = await seedRepo(storeA, repositoryId);
+      assert.equal(await storeA.countSectionsNeedingEmbedding(repositoryId), 1);
+
+      await storeA.markSectionsEmbeddingSkipped([{ id: sectionId, reason: "400: input too long" }]);
+      assert.equal(await storeA.countSectionsNeedingEmbedding(repositoryId), 0, "skipped is not pending");
+      assert.deepEqual(await storeA.listSectionsNeedingEmbedding(10, repositoryId), []);
+      const stamped = await pool.query<{ model: string; reason: string }>(
+        "SELECT embedding_skipped_model AS model, embedding_skip_reason AS reason FROM document_sections WHERE id = $1",
+        [sectionId]
+      );
+      assert.deepEqual(stamped.rows[0], { model: MODEL_A, reason: "400: input too long" });
+
+      // A different model never rejected it: pending again there.
+      const storeB = new PostgresKnowledgeStore(pool, MODEL_B);
+      assert.equal(await storeB.countSectionsNeedingEmbedding(repositoryId), 1);
+
+      // Re-indexing the SAME text keeps the skip; changed text clears it.
+      await seedRepo(storeA, repositoryId);
+      assert.equal(await storeA.countSectionsNeedingEmbedding(repositoryId), 0, "unchanged text stays skipped");
+      await pool.query("UPDATE document_sections SET content = 'stale' WHERE id = $1", [sectionId]);
+      await seedRepo(storeA, repositoryId);
+      assert.equal(await storeA.countSectionsNeedingEmbedding(repositoryId), 1, "edited text gets a fresh attempt");
+    });
   }
 );
