@@ -26,7 +26,8 @@ with Docker Compose they all share `.env.compose.example` + `.env.compose`, so t
 automatic; on separately deployed watchers it is not.
 
 **Blank means unset.** The API and watcher loaders treat `FOO=` exactly like an absent
-`FOO`. Integer knobs validated by those loaders fail startup on a non-numeric value;
+`FOO`. Integer knobs validated by those loaders fail startup on a non-numeric value, as
+do the knowledge/authorization JSON values described below;
 the float knobs and the knobs read outside the loaders fall back to their default on a
 bad value instead (noted per variable).
 
@@ -106,6 +107,14 @@ See [authorization.md](./authorization.md). Auth **fails closed**: it is on unle
 ## Knowledge sources, destinations and flows
 
 See [ingestion.md](./ingestion.md) and [flows-and-seeding.md](./flows-and-seeding.md).
+
+The API validates these at startup (`knowledgeConfigIssues`,
+`apps/api/src/stores/knowledge-repositories.ts`) and refuses to boot, naming the variable,
+when a sources/destinations/flows/repositories value starts with `[` or `{` but is not
+valid JSON, when a configured flow entry lacks a `destinationId` or any `sourceIds`, or
+when a flow references a source or destination id that is not configured. (Such values
+used to be silently re-read as a plain string or the flow silently dropped.) The
+plain-string forms — a bare path, a git URL, `agent`, `internet` — are unaffected.
 
 | Variable | Read by | Default | Class | Notes |
 | --- | --- | --- | --- | --- |

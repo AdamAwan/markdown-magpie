@@ -1,6 +1,6 @@
 ---
 name: magpie-local-troubleshooting
-description: Diagnose and fix common failures when running Markdown Magpie locally, especially on Windows/PowerShell — Docker not starting, private-repo clone auth, silent knowledge-config parsing, the web app's blank/hanging UI, watcher ECONNREFUSED, and CLI-provider spawn errors (ENAMETOOLONG / ENOENT). Use when the local stack won't start, a service crashes, or the console/browser shows errors. Pairs with run-magpie (the launch recipe).
+description: Diagnose and fix common failures when running Markdown Magpie locally, especially on Windows/PowerShell — Docker not starting, private-repo clone auth, knowledge-config parsing and startup errors, the web app's blank/hanging UI, watcher ECONNREFUSED, and CLI-provider spawn errors (ENAMETOOLONG / ENOENT). Use when the local stack won't start, a service crashes, or the console/browser shows errors. Pairs with run-magpie (the launch recipe).
 ---
 
 # Troubleshooting Markdown Magpie locally
@@ -47,19 +47,20 @@ and misses root deps like `pg`. Run `npm install`, then retry.
   isn't writable locally) → override it to a local dir (see `run-magpie`).
 
 ### `knowledge/stats` empty / "syncing configured git checkouts count: 0"
-The knowledge-config parsers are **deliberately defensive — they never throw, they
-silently drop malformed entries** (`apps/api/src/stores/knowledge-repositories.ts`). So a
-typo yields "0 sources" instead of an error. Check `KNOWLEDGE_SOURCES` /
-`KNOWLEDGE_DESTINATIONS` / `KNOWLEDGE_FLOWS`:
+The API now **refuses to start** (naming the variable) when a `KNOWLEDGE_SOURCES` /
+`KNOWLEDGE_DESTINATIONS` / `KNOWLEDGE_FLOWS` / `KNOWLEDGE_REPOSITORIES` value starts with
+`[`/`{` but isn't valid JSON, when a flow references an unknown source/destination id, or
+when `KNOWLEDGE_ROLE_GRANTS` is malformed (`knowledgeConfigIssues`,
+`apps/api/src/stores/knowledge-repositories.ts`). Individual entries can still be dropped
+silently, so a booting API with "0 sources" is worth checking:
 
-- **A stray `==`** (`KNOWLEDGE_SOURCES==[…]`) makes the value `=[…]`, which fails
-  `JSON.parse` and is dropped. Use a single `=`.
+- **A stray `==`** (`KNOWLEDGE_SOURCES==[…]`) makes the value `=[…]`, which does not start
+  with `[`, so it is read as a plain path rather than rejected. Use a single `=`.
 - **A source `url` ⇒ `kind: "git"`** (gets cloned, bumps the checkout `count`); a `path`
   ⇒ `kind: "local"`. A `count: 0` with a configured source usually means the source line
   didn't parse.
 - **Flow ids must line up.** A flow's `sourceIds` must reference **source** ids and
-  `destinationId` a **destination** id. A flow whose `sourceIds` don't all match a
-  configured source is **filtered out entirely** — so `flowId` won't exist to index/ask.
+  `destinationId` a **destination** id; a mismatch is now a startup error naming the flow.
 
 ### Web UI: blank page, all `_next/static/chunks/*.js` fail, script requests hang
 **The web dev server does not read the repo-root `.env`.** `next dev` only loads env from

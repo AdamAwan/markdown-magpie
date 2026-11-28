@@ -105,10 +105,15 @@ After deploying the Action **into the Login flow**, a decoded access token carri
   grant any bypass.
 - **AZ10** — The product half is `KNOWLEDGE_ROLE_GRANTS`: a JSON map of **role name →
   flow id (or `"*"`) → capabilities**, colocated with the flow config and parsed at
-  startup by `getConfiguredRoleGrants`
-  (`apps/api/src/stores/knowledge-repositories.ts`). Parsing MUST be **defensive** —
-  malformed entries and unknown capabilities are dropped rather than thrown, and an
-  unset/blank value yields an empty map (feature inactive, see AZ11).
+  startup by `parseRoleGrants` (`apps/api/src/stores/knowledge-repositories.ts`).
+  Parsing MUST be **strict**: only an unset/blank value yields an empty map (feature
+  inactive, see AZ11); unparseable JSON, a non-object, a role or flow entry of the
+  wrong shape, an unknown or non-string capability, or `admin`/`ops` granted on a
+  specific flow is a startup error naming `KNOWLEDGE_ROLE_GRANTS`
+  (`knowledgeConfigIssues`, reported by `loadConfig`). Duplicate capabilities are
+  de-duplicated. (Before this, malformed values were silently dropped — and a value
+  that failed to parse read as "no grants", switching flow-scoping **off**: a typo
+  failed authorization open.)
 
 ```jsonc
 KNOWLEDGE_ROLE_GRANTS = {

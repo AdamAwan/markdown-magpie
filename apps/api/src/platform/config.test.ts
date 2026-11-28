@@ -280,6 +280,32 @@ describe("loadConfig — valid configs", () => {
     assertThrowsNaming({ ...entraEnv, KNOWLEDGE_ROLE_GRANTS: "  " }, "KNOWLEDGE_ROLE_GRANTS");
   });
 
+  it("refuses to boot on a malformed KNOWLEDGE_ROLE_GRANTS instead of failing open", () => {
+    assertThrowsNaming({ ...minimalEnv, KNOWLEDGE_ROLE_GRANTS: "{not json" }, "KNOWLEDGE_ROLE_GRANTS");
+    assertThrowsNaming(
+      { ...minimalEnv, KNOWLEDGE_ROLE_GRANTS: JSON.stringify({ "kb-hr": { hr: ["read", "bogus"] } }) },
+      "KNOWLEDGE_ROLE_GRANTS",
+      "bogus"
+    );
+    // On Entra a malformed value is reported once, as itself (not also as "missing").
+    const error = assertThrowsNaming({ ...entraEnv, KNOWLEDGE_ROLE_GRANTS: "[]" }, "KNOWLEDGE_ROLE_GRANTS");
+    assert.doesNotMatch(error.message, /is required when AUTH_PROVIDER/);
+  });
+
+  it("refuses to boot on unparseable knowledge JSON or flows referencing unknown ids", () => {
+    assertThrowsNaming({ ...minimalEnv, KNOWLEDGE_SOURCES: "[{" }, "KNOWLEDGE_SOURCES");
+    assertThrowsNaming(
+      {
+        ...minimalEnv,
+        KNOWLEDGE_SOURCES: JSON.stringify([{ id: "src", path: "knowledge-bases/src" }]),
+        KNOWLEDGE_DESTINATIONS: JSON.stringify([{ id: "kb", path: "knowledge-bases/kb" }]),
+        KNOWLEDGE_FLOWS: JSON.stringify([{ id: "f", sourceIds: ["src"], destinationId: "typo" }])
+      },
+      "KNOWLEDGE_FLOWS",
+      "typo"
+    );
+  });
+
   it("boots Entra without role grants when auth is explicitly disabled", () => {
     const config = loadConfig({ ...entraEnv, AUTH_REQUIRED: "false" });
     assert.equal(config.auth.provider, "entra");

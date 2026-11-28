@@ -22,8 +22,11 @@ import {
   getConfiguredKnowledgeRepositories,
   getConfiguredKnowledgeSources,
   getConfiguredRoleGrants,
+  knowledgeConfigIssues,
+  parseRoleGrants,
   type ConfiguredKnowledgeFlow,
   type ConfiguredKnowledgeRepository,
+  type KnowledgeConfigIssue,
   type KnowledgeRoleGrants
 } from "../stores/knowledge-repositories.js";
 
@@ -474,24 +477,21 @@ function parseAllowedOrigins(value: string | undefined): "*" | string[] {
   return origins.length > 0 ? origins : "*";
 }
 
-interface ConfigIssue {
-  variable: string;
-  message: string;
-}
-
 // Authorization config that must cohere at boot. On a provider whose user-token
 // scopes are NOT per-user (Entra: every consented delegated scope reaches every
 // user who can sign in), privileged actions are authorized from app roles via
 // KNOWLEDGE_ROLE_GRANTS (docs/authorization.md AZ27). Booting such a deployment
 // with auth on and no grants would leave no human able to administer it — and,
 // before AZ27, left every signed-in user effectively an admin — so it fails loud.
-function authorizationConfigIssues(env: NodeJS.ProcessEnv): ConfigIssue[] {
+function authorizationConfigIssues(env: NodeJS.ProcessEnv): KnowledgeConfigIssue[] {
   const provider = parseAuthProvider(env.AUTH_PROVIDER);
   // An unrecognised provider is already reported by the schema's auth check.
   if (provider === undefined || !isAuthRequired(env.AUTH_REQUIRED) || providerProfile(provider).perUserScopes) {
     return [];
   }
-  if (Object.keys(getConfiguredRoleGrants(env)).length > 0) {
+  const { grants, errors } = parseRoleGrants(env.KNOWLEDGE_ROLE_GRANTS);
+  // An invalid value is reported by knowledgeConfigIssues; don't pile on.
+  if (errors.length > 0 || Object.keys(grants).length > 0) {
     return [];
   }
   return [
@@ -518,7 +518,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
         const name = issue.path.join(".") || "(root)";
         return `  - ${name}: ${issue.message}`;
       });
-  for (const issue of authorizationConfigIssues(env)) {
+  for (const issue of [...knowledgeConfigIssues(env), ...authorizationConfigIssues(env)]) {
     lines.push(`  - ${issue.variable}: ${issue.message}`);
   }
   if (!result.success || lines.length > 0) {
