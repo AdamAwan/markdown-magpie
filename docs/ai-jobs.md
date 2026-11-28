@@ -43,6 +43,39 @@ spec owns the **contract** they all share.
   when pg-boss marks a `created`/`retry` row `blocked`). `JobView.output` is populated only
   in the `completed` state; `error` only in `retry`/`failed`.
 
+## Reading jobs: listing, lookup & in-flight guards
+
+pg-boss 12 keeps every job, whatever its state, in one `job` table (partitioned by queue
+name; there is no archive table — the retention sweep deletes rows). Its public
+`findJobs(queue)` is a list read capped at `LIMIT 1000` ordered **oldest**-first, so the
+broker does not read through it: with 14–30 days of retained completed jobs a busy queue
+passes 1000 rows, and a `findJobs`-based listing then saw only the oldest 1000 — stale
+console pages and blind dedupe guards that double-enqueued paid AI work.
+
+- **J49** — `JobBroker.list` is **direct SQL** over the job table: the job type maps to its
+  queue-name set (provider/destination fan-out + dead letters), and the `state` /
+  `createdAfter` filters, `ORDER BY created_on DESC`, `LIMIT`/`OFFSET`, and an exact
+  `COUNT` for `total` all run in Postgres. The page is therefore the true newest `limit`
+  (≤ 200) jobs and `total` is exact, however large the queue. `state=blocked` selects
+  `created`/`retry` rows pg-boss flags `blocked`; `created`/`retry` exclude them (matching
+  the state the returned `JobView` reports). `list` is a console/report read — no "already
+  in flight?" guard may be built on a page of it.
+- **J50** — `JobBroker.findMatchingJobs({type, inFlight?, input?})` is the guard primitive:
+  every job of the type on its **work** queues (a dead-lettered copy is finished work, not a
+  second job), optionally only in-flight states (`created`/`retry`/`active`, incl.
+  `blocked`), optionally only those whose input carries each given field verbatim (`data @>
+  {"input": …}` containment), newest first and **unpaged**. Every dedupe/overlap guard uses
+  it: the patrol's `verify_document` reuse and `correct_document` replay guard, the
+  reconciler's in-flight reshape reuse and in-flight-draft cluster set, the manual
+  scheduled-task overlap check, the seed outline reuse, and the proposals service's
+  verify-closure / regeneration / publish dedupes. Where the reuse key is a function of the
+  whole input, the caller narrows in SQL (in-flight state and/or a field such as `path`)
+  and matches the key in code over the complete candidate set.
+- **J51** — `JobBroker.get(id)` (and so heartbeat/complete/fail/cancel/retry and the
+  `waitForJob` poll) resolves a job with **one** query over the job table pinned to the
+  catalog's queue names — the `(name, id)` primary key serves it — rather than probing
+  each queue in turn. A non-uuid id is simply not found.
+
 ## Client flow
 
 - **J6** — The standard request/await pattern for any job-backed endpoint is: (1) `POST` the
@@ -511,7 +544,6 @@ paid-for generation away and force pg-boss to redo the whole job; both are close
 | queue `heartbeatSeconds` | 60 | `packages/jobs/src/catalog.ts` (`BASE_POLICY`) |
 | interactive vs maintenance `retryLimit` | 3 vs 2 | `packages/jobs/src/catalog.ts` (`policy`) |
 | `AI_ADMISSION_LOCK_KEY` | fixed advisory key | `apps/api/src/jobs/pg-boss-broker.ts` |
-| `LOCATE_CONCURRENCY` | 8 | `apps/api/src/jobs/pg-boss-broker.ts` |
 
 ## Code map
 
@@ -519,7 +551,7 @@ paid-for generation away and force pg-boss to redo the whole job; both are close
 | --- | --- |
 | Job contract (types, catalog, I/O schemas) | `packages/jobs/src/{types,catalog,schemas}.ts` |
 | Output validation + undeclared-field policy, `buildJobOutput`, declared-path introspection | `packages/jobs/src/output-validation.ts` |
-| pg-boss broker (enqueue, claim, complete/fail, dead-letter, admission) | `apps/api/src/jobs/{broker,pg-boss-broker}.ts`, fake: `apps/api/src/jobs/fake-broker.ts` |
+| pg-boss broker (enqueue, claim, complete/fail, dead-letter, admission, SQL list/lookup/guard reads) | `apps/api/src/jobs/{broker,pg-boss-broker}.ts`, fake: `apps/api/src/jobs/fake-broker.ts` |
 | Schedule reconciliation | `apps/api/src/jobs/schedule-reconciler.ts` |
 | Jobs feature (routes, persist-first complete, replay, repair, `parseCompletedJobOutput`) | `apps/api/src/features/jobs/{routes,service,schema}.ts` |
 | Orchestrator continuations (J22a) | state: `apps/api/src/stores/{orchestration-followup-store,postgres-orchestration-followup-store}.ts`; lock: `apps/api/src/scheduling/run-lock.ts`; resumed from `completeJob` into `features/proposals/service.ts`, `scheduling/gap-reconciler.ts`, `features/patrol/service.ts` |
