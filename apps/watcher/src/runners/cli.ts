@@ -301,7 +301,10 @@ export class CliRunner {
     descriptors: SourceDescriptor[],
     signal: AbortSignal
   ): Promise<unknown> {
-    const prepared = await this.prepareWorkspaces(descriptors, { checkoutRoot: this.checkoutRoot });
+    const prepared = await this.prepareWorkspaces(descriptors, {
+      checkoutRoot: this.checkoutRoot,
+      signal
+    });
     // prepareSourceWorkspaces throws when no fs source resolved, so a first
     // workspace always exists on this path.
     const primary = prepared.workspaces[0];

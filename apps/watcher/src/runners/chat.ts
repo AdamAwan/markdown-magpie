@@ -92,7 +92,8 @@ export class ChatRunner {
     if (hasFsSources(descriptors) || hasFetchableSources(descriptors)) {
       if (this.agentModel) {
         const { workspaces, notes, fetchable } = await this.prepareWorkspaces(descriptors, {
-          checkoutRoot: this.checkoutRoot
+          checkoutRoot: this.checkoutRoot,
+          signal
         });
         logger.info(
           { jobId: job.id, workspaceCount: workspaces.length, fetchableCount: fetchable.length },

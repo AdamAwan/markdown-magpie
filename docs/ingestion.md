@@ -100,9 +100,7 @@ must never leave a checkout every later sync trips over.
   promptly, and `prepareSourceWorkspaces` propagates it rather than degrading the source
   to an "unavailable" note. An unavailable source's note — which reaches both a log line
   and the model's prompt — is credential-redacted.
-  > ⚠️ The source-grounded runners (`runners/chat.ts`, `runners/cli.ts`) do not yet pass
-  > their job signal to `prepareSourceWorkspaces`; until they do, a source checkout in an
-  > AI job is bounded only by the git timeouts.
+  Both source-grounded runners (`runners/chat.ts`, `runners/cli.ts`) pass their job signal.
 
 ## What gets indexed
 
