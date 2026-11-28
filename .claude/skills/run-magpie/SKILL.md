@@ -34,7 +34,12 @@ overwrite already-set vars), which is how the local overrides below work. The co
   sends an Authorization header when its M2M creds are set, so clear those locally too
   (see `apps/watcher/src/main.ts`).
 - `MAGPIE_CHECKOUT_ROOT=/data/checkouts` is a **production path that is not writable
-  locally** — override it (see below) or bootstrap fails cloning the knowledge repos.
+  locally** — override it (see below): the API refuses to start when its checkout or
+  snapshot root (`MAGPIE_SNAPSHOT_ROOT`, if your `.env` sets one) is not writable.
+- If your `.env` sets `NODE_ENV=production`, also override `NODE_ENV=development`:
+  in production the API refuses `AUTH_REQUIRED=false` (and in-memory stores, and an
+  open CORS policy) unless a `MAGPIE_ALLOW_*` override is set (docs/configuration.md,
+  "Production safety").
 
 So a local run = **Postgres (docker) → migrate → API → Watcher → Web**.
 

@@ -220,11 +220,17 @@ describe("loadConfig — valid configs", () => {
       AZURE_OPENAI_API_VERSION: "2025-01-01",
       GIT_PROVIDER: "github",
       GITHUB_TOKEN: "ghp_test",
-      MAGPIE_CHECKOUT_ROOT: "/data/checkouts"
+      MAGPIE_CHECKOUT_ROOT: "/data/checkouts",
+      // Production with auth off, an in-memory store and CORS "*" only boots
+      // with each posture's explicit override (see "production safety" below).
+      MAGPIE_ALLOW_UNAUTHENTICATED_PRODUCTION: "true",
+      MAGPIE_ALLOW_MEMORY_STORAGE_IN_PRODUCTION: "true",
+      MAGPIE_ALLOW_ANY_CORS_ORIGIN_IN_PRODUCTION: "true"
     });
 
     assert.equal(config.port, 5000);
     assert.equal(config.nodeEnv, "production");
+    assert.deepEqual(config.productionOverrides, { unauthenticated: true, memoryStorage: true, anyCorsOrigin: true });
     assert.equal(config.logStartupConfig, false);
     assert.equal(config.storage.default, "postgres");
     assert.equal(config.storage.overrides.QUESTION_LOG_STORE, "memory");
@@ -457,6 +463,100 @@ describe("loadConfig — auth fails closed", () => {
     assert.equal(loadConfig({ ...authEnabledEnv, AUTH_REQUIRED: "false" }).auth.required, false);
     // A typo does NOT disable auth; it stays required and thus needs Auth0 config.
     assertThrowsNaming({ ...authEnabledEnv, AUTH_REQUIRED: "nope" }, "AUTH0_AUDIENCE");
+  });
+});
+
+describe("loadConfig — production safety (NODE_ENV=production)", () => {
+  // A production deployment with every safety check satisfied: auth on, every
+  // store in Postgres, CORS restricted.
+  const secureProductionEnv = {
+    DATABASE_URL: minimalEnv.DATABASE_URL,
+    AI_PROVIDER: "codex",
+    NODE_ENV: "production",
+    AUTH_AUDIENCE: "https://real-tenant/api",
+    AUTH_ISSUER: "https://tenant.eu.auth0.com/",
+    STORAGE_BACKEND: "postgres",
+    CORS_ALLOWED_ORIGINS: "https://magpie.example.com"
+  } satisfies NodeJS.ProcessEnv;
+
+  it("boots a secure production config with no overrides in effect", () => {
+    const config = loadConfig(secureProductionEnv);
+    assert.equal(config.auth.required, true);
+    assert.deepEqual(config.productionOverrides, {
+      unauthenticated: false,
+      memoryStorage: false,
+      anyCorsOrigin: false
+    });
+  });
+
+  it("refuses AUTH_REQUIRED=false in production without the override", () => {
+    const error = assertThrowsNaming(
+      { ...secureProductionEnv, AUTH_REQUIRED: "false" },
+      "AUTH_REQUIRED",
+      "MAGPIE_ALLOW_UNAUTHENTICATED_PRODUCTION"
+    );
+    assert.match(error.message, /NODE_ENV=production/);
+  });
+
+  it("boots unauthenticated production only with MAGPIE_ALLOW_UNAUTHENTICATED_PRODUCTION=true exactly", () => {
+    const config = loadConfig({
+      ...secureProductionEnv,
+      AUTH_REQUIRED: "false",
+      MAGPIE_ALLOW_UNAUTHENTICATED_PRODUCTION: "TRUE"
+    });
+    assert.equal(config.auth.required, false);
+    assert.equal(config.productionOverrides.unauthenticated, true);
+    // A typo'd override keeps the check on (fail closed, like AUTH_REQUIRED).
+    assertThrowsNaming(
+      { ...secureProductionEnv, AUTH_REQUIRED: "false", MAGPIE_ALLOW_UNAUTHENTICATED_PRODUCTION: "yes" },
+      "AUTH_REQUIRED"
+    );
+  });
+
+  it("refuses in-memory storage in production, naming every memory-backed store", () => {
+    // STORAGE_BACKEND unset defaults to memory for every store.
+    const { STORAGE_BACKEND: _unset, ...defaultStorage } = secureProductionEnv;
+    assertThrowsNaming(
+      defaultStorage,
+      "STORAGE_BACKEND",
+      "KNOWLEDGE_STORE",
+      "MAGPIE_ALLOW_MEMORY_STORAGE_IN_PRODUCTION"
+    );
+    // A single per-store memory override is caught too.
+    const error = assertThrowsNaming({ ...secureProductionEnv, QUESTION_LOG_STORE: "memory" }, "QUESTION_LOG_STORE");
+    assert.doesNotMatch(error.message, /KNOWLEDGE_STORE/);
+    assert.ok(
+      loadConfig({
+        ...secureProductionEnv,
+        QUESTION_LOG_STORE: "memory",
+        MAGPIE_ALLOW_MEMORY_STORAGE_IN_PRODUCTION: "true"
+      }).productionOverrides.memoryStorage
+    );
+  });
+
+  it("refuses CORS any-origin in production (unset, blank or *) without the override", () => {
+    const { CORS_ALLOWED_ORIGINS: _unset, ...anyOrigin } = secureProductionEnv;
+    assertThrowsNaming(anyOrigin, "CORS_ALLOWED_ORIGINS", "MAGPIE_ALLOW_ANY_CORS_ORIGIN_IN_PRODUCTION");
+    assertThrowsNaming({ ...secureProductionEnv, CORS_ALLOWED_ORIGINS: " " }, "CORS_ALLOWED_ORIGINS");
+    assertThrowsNaming({ ...secureProductionEnv, CORS_ALLOWED_ORIGINS: "*" }, "CORS_ALLOWED_ORIGINS");
+    const config = loadConfig({ ...anyOrigin, MAGPIE_ALLOW_ANY_CORS_ORIGIN_IN_PRODUCTION: "true" });
+    assert.equal(config.cors.allowedOrigins, "*");
+  });
+
+  it("reports every unsafe posture at once", () => {
+    assertThrowsNaming(
+      { DATABASE_URL: minimalEnv.DATABASE_URL, AI_PROVIDER: "codex", NODE_ENV: "production", AUTH_REQUIRED: "false" },
+      "AUTH_REQUIRED",
+      "STORAGE_BACKEND",
+      "CORS_ALLOWED_ORIGINS"
+    );
+  });
+
+  it("does not apply outside production, and overrides are inert there", () => {
+    const config = loadConfig({ ...minimalEnv, MAGPIE_ALLOW_UNAUTHENTICATED_PRODUCTION: "true" });
+    assert.equal(config.auth.required, false);
+    assert.equal(config.productionOverrides.unauthenticated, false);
+    assert.equal(loadConfig({ ...minimalEnv, NODE_ENV: "test" }).storage.default, "memory");
   });
 });
 

@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
-import { chmod, mkdtemp, rm, stat } from "node:fs/promises";
+import { chmod, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, it } from "node:test";
-import { checkPathWritable, preflightDataPaths } from "./preflight.js";
+import { assertDataPathsWritable, checkPathWritable } from "./preflight.js";
 
 describe("checkPathWritable", () => {
   it("creates a missing directory and reports it writable", async () => {
@@ -44,31 +44,37 @@ describe("checkPathWritable", () => {
   });
 });
 
-describe("preflightDataPaths", () => {
-  it("warns once per unwritable path, naming the path and env var", async () => {
+describe("assertDataPathsWritable", () => {
+  it("throws one error naming every unwritable path and its env var, and only those", async () => {
     const base = await mkdtemp(path.join(tmpdir(), "magpie-preflight-"));
     try {
       const blocker = path.join(base, "blocker");
-      await (await import("node:fs/promises")).writeFile(blocker, "");
-      const warnings: Array<{ fields: Record<string, unknown>; message: string }> = [];
-      const log = {
-        warn: (fields: Record<string, unknown>, message: string) => warnings.push({ fields, message })
-      };
+      await writeFile(blocker, "");
 
-      await preflightDataPaths(
-        [
+      await assert.rejects(
+        assertDataPathsWritable([
           { label: "Snapshot directory", envVar: "MAGPIE_SNAPSHOT_ROOT", dir: path.join(blocker, "child") },
           { label: "Checkout directory", envVar: "MAGPIE_CHECKOUT_ROOT", dir: path.join(base, "checkouts") }
-        ],
-        log as unknown as Parameters<typeof preflightDataPaths>[1]
+        ]),
+        (error: Error) => {
+          assert.match(error.message, /Snapshot directory is not writable/);
+          assert.match(error.message, /MAGPIE_SNAPSHOT_ROOT/);
+          assert.ok(error.message.includes(path.join(blocker, "child")));
+          assert.doesNotMatch(error.message, /MAGPIE_CHECKOUT_ROOT/, "the writable path is not reported");
+          return true;
+        }
       );
+    } finally {
+      await rm(base, { recursive: true, force: true });
+    }
+  });
 
-      assert.equal(warnings.length, 1, "only the unwritable path should warn");
-      const [warning] = warnings;
-      assert.match(warning.message, /Snapshot directory is not writable/);
-      assert.match(warning.message, /MAGPIE_SNAPSHOT_ROOT/);
-      assert.equal(warning.fields.envVar, "MAGPIE_SNAPSHOT_ROOT");
-      assert.equal(warning.fields.path, path.join(blocker, "child"));
+  it("resolves when every path is writable", async () => {
+    const base = await mkdtemp(path.join(tmpdir(), "magpie-preflight-"));
+    try {
+      await assertDataPathsWritable([
+        { label: "Checkout directory", envVar: "MAGPIE_CHECKOUT_ROOT", dir: path.join(base, "checkouts") }
+      ]);
     } finally {
       await rm(base, { recursive: true, force: true });
     }

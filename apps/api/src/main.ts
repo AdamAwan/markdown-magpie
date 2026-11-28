@@ -7,7 +7,8 @@ import { loadConfig } from "./platform/config.js";
 import { buildApp } from "./app.js";
 import * as configService from "./features/config/service.js";
 import { reconcileSchedules } from "./jobs/schedule-reconciler.js";
-import { preflightDataPaths } from "./platform/preflight.js";
+import { assertDataPathsWritable } from "./platform/preflight.js";
+import { logSecurityPosture } from "./platform/security-posture.js";
 import { checkoutRoot, snapshotRoot } from "./platform/repositories.js";
 import { logger } from "./logger.js";
 
@@ -25,6 +26,19 @@ async function start(): Promise<void> {
   // here (caught below) before the broker connects or the server listens.
   const config = loadConfig();
   const port = config.port;
+  // Always say how this instance is secured (auth on/off, storage, CORS, any
+  // production overrides) — the one line an operator checks after a deploy.
+  logSecurityPosture(config, logger);
+  // Fail fast if a configured data directory is not writable: an unmounted or
+  // misowned checkout/snapshot root otherwise only surfaces as every clone,
+  // publish and snapshot refresh failing at run time (issue #130). Resolved to
+  // absolute paths the same way the stores do, so the error names exactly the
+  // directory the app would use. Throws to start()'s caller, which logs it and
+  // exits non-zero.
+  await assertDataPathsWritable([
+    { label: "Snapshot directory", envVar: "MAGPIE_SNAPSHOT_ROOT", dir: snapshotRoot(config) },
+    { label: "Checkout directory", envVar: "MAGPIE_CHECKOUT_ROOT", dir: checkoutRoot(config) }
+  ]);
   // Start telemetry before any HTTP/pg client is created so the auto-instrumentation
   // can patch them. A no-op (and never throws) when telemetry is disabled.
   const telemetry: TelemetryHandle = await initTelemetry(config.telemetry, logger);
@@ -42,17 +56,6 @@ async function start(): Promise<void> {
     process.exitCode = 1;
     return;
   }
-  // Non-fatal: warn loudly if a configured data directory is not writable, so an
-  // unmounted/misowned path surfaces as one boot warning rather than a silent
-  // per-run failure (issue #130). Resolved to absolute paths the same way the
-  // stores do, so the message names exactly the directory the app will use.
-  await preflightDataPaths(
-    [
-      { label: "Snapshot directory", envVar: "MAGPIE_SNAPSHOT_ROOT", dir: snapshotRoot(config) },
-      { label: "Checkout directory", envVar: "MAGPIE_CHECKOUT_ROOT", dir: checkoutRoot(config) }
-    ],
-    logger
-  );
   const app = buildApp(ctx);
   const server = serve({ fetch: app.fetch, port }, () => {
     logger.info({ port }, "Markdown Magpie API listening");

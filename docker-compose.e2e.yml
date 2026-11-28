@@ -22,6 +22,7 @@ services:
   api:
     environment:
       MAGPIE_JOB_OUTPUT_STRICT: "true"
+      MAGPIE_ALLOW_UNAUTHENTICATED_PRODUCTION: "true"
   watcher:
     environment:
       MAGPIE_JOB_OUTPUT_STRICT: "true"
