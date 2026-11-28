@@ -30,6 +30,11 @@ export interface WatcherConfig {
   // polls — which can outlast the hot-path request timeout on a large flow.
   // Defaults to 15 minutes.
   maintenanceTimeoutMs: number;
+  // The longest a graceful stop (abort the runner, release its job, close the
+  // health server, flush telemetry) may take after SIGTERM/SIGINT before the
+  // watcher force-exits (J54). Keep it under the container's stop grace period.
+  // Defaults to 20 seconds.
+  shutdownTimeoutMs: number;
   auth: {
     required: boolean;
     // Legacy static token; used as a fallback when the client-credentials quad
@@ -76,6 +81,7 @@ const schema = z
     WATCHER_NAME: optionalString,
     WATCHER_POLL_INTERVAL_MS: optionalPositiveInt,
     WATCHER_MAINTENANCE_TIMEOUT_MS: optionalPositiveInt,
+    WATCHER_SHUTDOWN_TIMEOUT_MS: optionalPositiveInt,
 
     API_TOKEN: optionalString,
     WATCHER_API_CLIENT_ID: optionalString,
@@ -175,6 +181,7 @@ export function loadWatcherConfig(env: NodeJS.ProcessEnv = process.env): Watcher
     watcherName: parsed.WATCHER_NAME ?? "local-dev-watcher",
     pollIntervalMs: parsed.WATCHER_POLL_INTERVAL_MS ?? 2000,
     maintenanceTimeoutMs: parsed.WATCHER_MAINTENANCE_TIMEOUT_MS ?? 15 * 60_000,
+    shutdownTimeoutMs: parsed.WATCHER_SHUTDOWN_TIMEOUT_MS ?? 20_000,
     auth: {
       required: authSettings.required,
       staticToken: parsed.API_TOKEN,

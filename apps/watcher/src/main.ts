@@ -15,6 +15,7 @@ import { createHealthServer, loadHealthConfig, TickTracker } from "./health-serv
 import { HttpWatcherApi } from "./http-client.js";
 import { logger } from "./logger.js";
 import { createConfiguredRunners } from "./runners/index.js";
+import { installShutdownSignals } from "./shutdown-signals.js";
 import { WorkerLoop } from "./worker-loop.js";
 
 // Composition root for the watcher: build the API client and the runners the
@@ -111,16 +112,22 @@ const loop = new WorkerLoop(api, runners, capabilities, watcherName, logger, {
   onTick: () => tickTracker.tick()
 });
 
-// SIGTERM/SIGINT only abort the in-flight runner and stop the poll loop here;
-// the health server is closed once, after loop.run() resolves below, so there
-// is a single shutdown path regardless of which signal (or neither) triggered it.
-process.once("SIGTERM", () => {
-  logger.info("Received SIGTERM, shutting down...");
-  void loop.stop();
-});
-process.once("SIGINT", () => {
-  logger.info("Received SIGINT, shutting down...");
-  void loop.stop();
+// The first SIGTERM/SIGINT only stops the poll loop, which aborts the in-flight
+// runner and releases its job back to the queue (J53); the health server is
+// closed once, after loop.run() resolves below, so there is a single shutdown
+// path regardless of which signal (or neither) triggered it. A second signal, or
+// the whole stop overrunning WATCHER_SHUTDOWN_TIMEOUT_MS, exits at once (J54).
+installShutdownSignals({
+  signals: process,
+  timeoutMs: config.shutdownTimeoutMs,
+  onShutdown: (signal) => {
+    logger.info({ signal }, "received signal; releasing any in-flight job and shutting down");
+    void loop.stop();
+  },
+  onForcedExit: (reason, signal) => {
+    logger.error({ signal, reason, timeoutMs: config.shutdownTimeoutMs }, "forcing watcher exit");
+    process.exit(1);
+  }
 });
 
 await healthServer.start();
@@ -131,6 +138,10 @@ await healthServer.stop();
 // Flush and stop telemetry last so any span/metric from the final iteration is exported.
 await telemetry.shutdown();
 logger.info({ watcherName }, `Markdown Magpie watcher '${watcherName}' stopped`);
+// Exit explicitly: a runner abandoned after ignoring its shutdown abort (J53)
+// may still hold the event loop open (a child process, a socket), and the job it
+// was running has already been released.
+process.exit(0);
 
 // Logs, per capability, whether each required env var is set or MISSING — never
 // the secret values themselves — so a misconfiguration is visible at startup.
