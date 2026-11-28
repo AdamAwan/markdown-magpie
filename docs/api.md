@@ -133,6 +133,33 @@ The API is a [Hono](https://hono.dev) app served under `/api`. It listens on `PO
   (`/api/proposals/:id/verify-closure`). The watcher itself has **no database access**.
   With auth on, the job lifecycle callbacks accept **only** a service principal — a human
   `manage:jobs` holder gets 403 ([authorization.md](./authorization.md) AZ29).
+- **API36** — **Release.** `POST /api/jobs/:id/release` (`{ "workerName"? }`) is the
+  watcher's shutdown hand-back and belongs to the same service-only lifecycle set as
+  API16: it returns an `active` job to the queue, claimable at once, **without spending a
+  retry**, and marks the named watcher idle ([ai-jobs.md](./ai-jobs.md) J53). It is a
+  no-op `200` (the job unchanged) on a job that is not `active`, so it can never resurrect
+  a cancelled, completed or failed job; `404 job_not_found` for an unknown id.
+
+### Process lifecycle (shutdown)
+
+- **API37** — **SIGTERM drains in-flight HTTP requests before teardown.** On the first
+  SIGTERM or SIGINT the server stops accepting connections, closes idle keep-alive sockets,
+  and lets every request already being handled finish; each such response is sent with
+  `Connection: close` so the client reconnects elsewhere rather than reusing a socket on a
+  stopping process. The drain is bounded by `API_SHUTDOWN_DRAIN_MS` (default 10 s); a
+  handler still running at the deadline — e.g. a `GET /api/jobs/:id/wait` long-poll,
+  which can wait up to `JOB_WAIT_TIMEOUT_MS` (25 s) — has its connection force-closed. In-process
+  background work (merge cascades, manual task runs) is then awaited within **the same**
+  window, so the total drain stays bounded by `API_SHUTDOWN_DRAIN_MS`.
+- **API38** — **Teardown order, and forced exit.** Only after the drain: stop the job
+  broker, then end the shared store pool (after the broker, so no store query is
+  mid-flight when its connections go), then flush telemetry (last, so spans from the drain
+  export). Each step runs even if an earlier one failed; the process then exits 0. A
+  **second** SIGTERM/SIGINT exits 1 at once, and a backstop exits 1 if teardown has not
+  finished 10 s after the drain window. The container's stop grace period MUST exceed
+  `API_SHUTDOWN_DRAIN_MS` + that backstop (compose: `stop_grace_period: 30s`), and node
+  MUST receive the signal directly — the image runs `tini` as PID 1 and execs node in exec
+  form, never under `npm run` or a shell.
 
 ## Mount map
 
@@ -1049,7 +1076,9 @@ service (client-credentials) principal: anyone else gets `403 forbidden` (AZ29).
 structured `error` object. Complete takes `{ "output", "executor"?, "usage"?, "provider"?,
 "model"? }` — usage is the run's summed provider-reported token spend (#241), and
 provider/model are the executing runner's identity so that spend can be priced per model;
-all three are best-effort telemetry (malformed values are dropped, never a 400). See
+all three are best-effort telemetry (malformed values are dropped, never a 400).
+`POST /api/jobs/:id/release` (`{ "workerName"? }` → `{ "job": Job }`) is the same
+service-only set: a shutting-down watcher's hand-back of its claim (API36). See
 [ai-jobs.md](ai-jobs.md).
 
 ### `GET /api/workers`
@@ -1359,6 +1388,7 @@ defined in `packages/core/src/index.ts`. The `Job` shape (`JobView`) is defined 
 | Concern | Code |
 | --- | --- |
 | App assembly & mount map | `apps/api/src/app.ts` |
+| Server + graceful shutdown (API37/API38) | `apps/api/src/shutdown.ts`, wired in `apps/api/src/main.ts`; container signals: `Dockerfile`, `docker-compose*.yml` |
 | Endpoint modules | `apps/api/src/features/<name>/routes.ts` (+ `service.ts`, `schema.ts`) |
 | Error model & `onError` | `apps/api/src/http/errors.ts` |
 | JSON body reading (`invalid_json`) | `apps/api/src/http/body.ts` |
@@ -1381,7 +1411,9 @@ Representative route-level tests (`apps/api/src/features/**/routes*.test.ts`):
 `jobs/routes.test.ts`, `source-map/routes.test.ts`, `source-sync/routes.test.ts`,
 `snapshots/routes.test.ts`, `scheduled-tasks/routes.test.ts`, `insights/routes.test.ts`,
 `config/routes.flow-scope.test.ts`. Cross-cutting HTTP concerns:
-`apps/api/src/http/{errors,logging,rate-limit}.test.ts`.
+`apps/api/src/http/{errors,logging,rate-limit}.test.ts`. Release (API36):
+`apps/api/src/features/jobs/release.test.ts`. Shutdown drain (API37/API38):
+`apps/api/src/shutdown.test.ts`.
 
 ## Provenance (design history)
 

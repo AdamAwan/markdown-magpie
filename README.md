@@ -278,6 +278,8 @@ docker compose down
 
 Use `docker compose down -v` only when you want to delete the local Postgres volume.
 
+Stops and restarts are graceful: the image runs `tini` as PID 1 and each service execs `node` directly (never `npm run start`, which swallows SIGTERM), so on `docker compose stop`/`restart` the API finishes in-flight requests before closing its database pool and the watcher hands its running job back to the queue without spending a retry. Each app service has `stop_grace_period: 30s`, which must stay above `API_SHUTDOWN_DRAIN_MS` + 10 s and `WATCHER_SHUTDOWN_TIMEOUT_MS`. If you run the image some other way, keep its `ENTRYPOINT` and override `CMD` in exec form, e.g. `["node", "apps/watcher/dist/main.js"]` (see [docs/api.md](docs/api.md) API37/API38 and [docs/ai-jobs.md](docs/ai-jobs.md) J53/J54).
+
 ## MCP
 
 The MCP server lets agent clients call the indexed knowledge base through tools such as `kb_ask`, `kb_search`, and `kb_feedback`.

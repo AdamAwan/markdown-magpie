@@ -56,7 +56,7 @@ bad value instead (noted per variable).
 | `NODE_ENV` | api, watcher, mcp, web | `development` | common | `production` selects JSON logs at `info` and the `.next-build` output dir. The Docker image sets it. |
 | `LOG_LEVEL` | api, watcher, mcp | `info` in production, else `debug` | common | `trace` \| `debug` \| `info` \| `warn` \| `error` \| `fatal`. |
 | `LOG_STARTUP_CONFIG` | api | on | tuning | Set exactly `false` to skip the resolved-configuration log at startup. Secrets are always masked. |
-| `API_SHUTDOWN_DRAIN_MS` | api | `10000` | tuning | Longest the API waits for in-flight background work on SIGTERM/SIGINT. |
+| `API_SHUTDOWN_DRAIN_MS` | api | `10000` | tuning | One drain window on SIGTERM/SIGINT, shared by in-flight HTTP requests (force-closed at the deadline) and background work, before the broker stops and the pool ends ([api.md](./api.md) API37/API38). Keep the container stop grace period above this + 10 s. |
 | `DB_POOL_MAX` | api | `10` | tuning | Connections in the shared store pool (pg-boss keeps its own pool). |
 | `DB_IDLE_TIMEOUT_MS` | api | `30000` | tuning | Idle connection lifetime. |
 | `DB_CONNECTION_TIMEOUT_MS` | api | `10000` | tuning | Fail if a connection cannot be acquired in time. |
@@ -241,7 +241,8 @@ See [questionnaires.md](./questionnaires.md). All read by the API; bad values fa
 | `WATCHER_MAINTENANCE_TIMEOUT_MS` | watcher | `900000` | tuning | Abort deadline for the long maintenance orchestration callbacks. |
 | `WATCHER_HEALTH_PORT` | watcher | `4002` | common | Health server port. An invalid port fails startup. |
 | `WATCHER_HEALTH_HOST` | watcher | `0.0.0.0` | tuning | Health server bind address. |
-| `WATCHER_HEALTH_STALE_AFTER_MS` | watcher | `120000` | tuning | `/health` returns 503 if the poll loop has not ticked within this window. |
+| `WATCHER_HEALTH_STALE_AFTER_MS` | watcher | `120000` | tuning | `/health` returns 503 if neither the poll loop nor a running job's heartbeat has ticked within this window ([ai-jobs.md](./ai-jobs.md) J55). Keep it above the heartbeat cadence (30 s by default). |
+| `WATCHER_SHUTDOWN_TIMEOUT_MS` | watcher | `20000` | tuning | Longest a graceful stop (abort the runner, release its job back to the queue, close health, flush telemetry) may take before the watcher force-exits 1 ([ai-jobs.md](./ai-jobs.md) J53/J54). Keep the container stop grace period above it. |
 | `WATCHER_ACTIVE_WINDOW_MS` | api | `900000` | tuning | How long a silent watcher is still listed as connected. |
 
 ## Git and publishing
