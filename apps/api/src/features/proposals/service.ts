@@ -92,6 +92,14 @@ export async function updateStatus(
 // before its gap is flagged for a human instead of auto-redrafting.
 const CLOSURE_RETRY_CAP = 2;
 
+// How many re-ask JOBS one triggering question gets within a single verification
+// (each with its own pg-boss retry budget) before the verification stops
+// re-driving it. This bounds INFRASTRUCTURE failure — a re-ask that failed, was
+// cancelled, expired in the queue or vanished — and is unrelated to
+// CLOSURE_RETRY_CAP, which counts real still_open verdicts. Mirrors the three
+// attempts the verify_gap_closure job used to get when it bounded-waited.
+const REASK_ATTEMPT_CAP = 3;
+
 type VerifyGapClosureOutput = z.infer<typeof verifyGapClosureOutputSchema>;
 
 // The per-question outcome Phase 1 of verifyGapClosure produces before anything is
@@ -104,6 +112,11 @@ type QuestionOutcome =
   | { kind: "settled"; questionId: string }
   | { kind: "missing-log"; questionId: string }
   | { kind: "pending"; questionId: string }
+  // Every re-ask this question was allowed has ended without an answer (failed,
+  // cancelled, expired, or vanished). Still NOT a content verdict — nothing is
+  // known about the merged document — but no longer worth waiting for either:
+  // the question is handed to a human instead of being re-asked forever.
+  | { kind: "exhausted"; questionId: string; original: QuestionLog; attempts: number }
   | {
       kind: "reasked";
       questionId: string;
@@ -372,6 +385,7 @@ async function verifyGapClosureLocked(
   // countPriorStillOpen reads rows written by earlier iterations of this same loop.
   const perQuestion: VerifyGapClosureOutput["perQuestion"] = [];
   let needsAttention = false;
+  let unverifiable = false;
 
   for (const outcome of outcomes) {
     const { questionId } = outcome;
@@ -432,6 +446,32 @@ async function verifyGapClosureLocked(
       continue;
     }
 
+    if (outcome.kind === "exhausted") {
+      // The re-ask never produced an answer and its attempts are spent. This is an
+      // infrastructure outcome, so — the #150 invariant — NO verdict is recorded:
+      // no gap_closure_verification row, nothing counted against
+      // CLOSURE_RETRY_CAP, no reopened gap that would re-draft a possibly-correct
+      // document, and no entry in perQuestion. What it must not be is silent, so
+      // the question is PARKED for a human (the same surface a capped still_open
+      // lands on) with a note saying verification could not run. Dismissing it
+      // accepts the merge; retrying it re-admits the gap.
+      unverifiable = true;
+      const summary = await reopenSummaryFor(ctx, outcome.original, proposal, questionId);
+      await ctx.stores.questionLogs.recordVerificationGap(questionId, {
+        summary,
+        note:
+          `Could not verify: ${outcome.attempts} re-ask attempt(s) ended without an answer ` +
+          "(an infrastructure failure, not a verdict on the merged document). " +
+          "Dismiss if the merged document answers the question; retry to re-draft.",
+        parked: true
+      });
+      logger.error(
+        { proposalId: proposal.id, questionId, attempts: outcome.attempts },
+        "gap-closure verification gave up on a re-ask that never answered; question parked for a human (no verdict recorded)"
+      );
+      continue;
+    }
+
     // outcome.kind === "reasked": a real re-ask that reached a completed answer.
     await ctx.stores.gapClosureVerifications.record({
       proposalId: proposal.id,
@@ -472,13 +512,15 @@ async function verifyGapClosureLocked(
     }
   }
 
-  const closureStatus: NonNullable<Proposal["closureStatus"]> = perQuestion.some(
-    (question) => question.verdict === "still_open"
-  )
-    ? needsAttention
-      ? "needs_attention"
-      : "reopened"
-    : "verified_closed";
+  // A question that could not be verified at all (re-asks exhausted) always
+  // escalates the proposal: it is neither verified_closed nor an ordinary reopen.
+  const closureStatus: NonNullable<Proposal["closureStatus"]> = unverifiable
+    ? "needs_attention"
+    : perQuestion.some((question) => question.verdict === "still_open")
+      ? needsAttention
+        ? "needs_attention"
+        : "reopened"
+      : "verified_closed";
 
   if (closureStatus === "verified_closed") {
     // Verified: now (and only now) resolve the gaps the proposal set out to close.
@@ -517,12 +559,49 @@ export async function continueGapClosureFromCompletedJob(ctx: AppContext, job: J
   await verifyGapClosure(ctx, proposal, { enqueue: false });
 }
 
+// THE SWEEPER'S ENTRY POINT. Re-drives a verification that has stalled: a merged
+// proposal with no verdict whose re-asks were enqueued but whose continuation
+// will never fire by itself. Called for each such proposal on every reconcile
+// tick (gap-reconciler's sweepStalledGapClosureVerifications). Every stuck path
+// ends here:
+//   - the re-ask COMPLETED but its completion-side continuation was lost (the
+//     watcher exhausted its complete() retries, the API restarted, the lock wait
+//     timed out three times) → its persisted answer is read off the job and the
+//     verdict committed;
+//   - the re-ask FAILED terminally, was CANCELLED, EXPIRED/dead-lettered inside
+//     the queue without failJob ever running, or is simply GONE → a replacement
+//     is enqueued, up to REASK_ATTEMPT_CAP per question, after which the question
+//     is parked and the proposal marked needs_attention.
+// A re-ask still queued or running is left alone. It is exactly the orchestrator
+// call (verifyGapClosure, enqueue: true) — re-entrant, locked per proposal, and
+// bound by the same rule that only a `completed` re-ask is ever a verdict.
+//
+// Returns false (and does nothing) for a proposal that is not a stalled
+// verification: not merged, already has a verdict, or has no re-ask rows — the
+// last being a cascade that never started, which is mergeCascadeIncomplete's
+// business (#282), not this sweep's.
+export async function redriveStalledGapClosure(ctx: AppContext, proposal: Proposal): Promise<boolean> {
+  if (proposal.status !== "merged" || proposal.closureStatus) {
+    return false;
+  }
+  if ((proposal.triggeringQuestionIds ?? []).length === 0) {
+    return false;
+  }
+  const reasks = await ctx.stores.orchestrationFollowups.listByScope("verify_gap_closure", proposal.id);
+  if (reasks.length === 0) {
+    return false;
+  }
+  const result = await verifyGapClosure(ctx, proposal);
+  return result.closureStatus !== "pending";
+}
+
 // A gap-closure re-ask that failed TERMINALLY (its own pg-boss retry budget is
 // spent). Nothing is recorded — an infrastructure failure is never a verdict
 // (#150) — so the proposal simply stays unverified, exactly as it did when a
-// verify_gap_closure job exhausted its retries. Said loudly, because nothing else
-// will resume this verification on its own: retrying the failed job (Jobs
-// console) or re-running verify_gap_closure for the proposal does.
+// verify_gap_closure job exhausted its retries. Nothing is re-enqueued from here
+// (a failure hook that re-asks would loop as fast as the provider fails): the
+// next reconcile tick's sweep (redriveStalledGapClosure) replaces the re-ask, up
+// to REASK_ATTEMPT_CAP. Retrying the failed job from the Jobs console also works.
 export async function noteGapClosureReaskFailed(ctx: AppContext, job: JobView, reason: string): Promise<void> {
   if (job.type !== "answer_question") {
     return;
@@ -533,8 +612,8 @@ export async function noteGapClosureReaskFailed(ctx: AppContext, job: JobView, r
   }
   logger.error(
     { proposalId: followup.scopeKey, jobId: job.id, err: reason },
-    "gap-closure re-ask failed terminally; the proposal stays unverified (no verdict recorded). " +
-      "Retry the job, or re-run verify_gap_closure for the proposal, to resume verification"
+    "gap-closure re-ask failed terminally; no verdict recorded. " +
+      "The next reconcile tick re-asks it (bounded), or retry the job to resume verification sooner"
   );
 }
 
@@ -588,6 +667,16 @@ async function planQuestion(
 
   let state = await resolveReasks(ctx, reask.reasks);
   if (state.kind === "none" && reask.enqueue) {
+    if (reask.reasks.length >= REASK_ATTEMPT_CAP) {
+      // Every allowed re-ask ended without an answer. Stop re-driving; the caller
+      // escalates to a human rather than buying a fourth attempt or going quiet.
+      return { kind: "exhausted", questionId, original, attempts: reask.reasks.length };
+    }
+    // Enqueue, then look at the new re-ask straight away. This is what closes the
+    // window between createJob and register: a re-ask that completes in between
+    // finds no row, so its completion-side continuation does nothing — but the
+    // job is `completed` by the time we read it back here (the dispatcher persists
+    // before it runs continuations), so its answer is picked up in this same call.
     state = await resolveReasks(ctx, [await enqueueReask(ctx, proposal, original)]);
   }
   if (state.kind !== "answered") {

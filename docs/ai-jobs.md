@@ -219,8 +219,11 @@ paid-for generation away and force pg-boss to redo the whole job; both are close
   against whatever it could race (`withFlowRunLockWaiting` — it waits rather than skips, so
   an outcome is never dropped); it is **idempotent** (a settled row is a no-op, and paid
   enqueues precede the settle); and it is **self-healing** — the broker stays the source of
-  truth for job state, so the orchestrator's next tick applies any `completed` follow-up
-  whose continuation never ran and writes off any that failed. A job with no row is not an
+  truth for job state, so a periodic tick applies any `completed` follow-up whose
+  continuation never ran and writes off or replaces any that died (the patrol and the
+  reshape on their own tick; gap-closure re-asks on the reconcile tick, bounded — see
+  gaps-and-maintenance G23b). A continuation pins one pooled connection while it holds its
+  lock, so at most half the pool may be held this way per process; the rest wait. A job with no row is not an
   orchestrated follow-up and every continuation ignores it. **One watcher is enough.**
   (Design: `superpowers/specs/2026-11-27-non-blocking-orchestrators-design.md`.)
 

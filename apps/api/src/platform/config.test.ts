@@ -43,7 +43,6 @@ describe("loadConfig — valid configs", () => {
     assert.deepEqual(config.storage.overrides, {});
     assert.equal(config.jobs.waitTimeoutMs, 25_000);
     assert.equal(config.jobs.waitPollMs, 250);
-    assert.equal(config.jobs.runToCompletionTimeoutMs, undefined);
     assert.equal(config.jobs.scheduleTimezone, "UTC");
     assert.equal(config.watcher.activeWindowMs, 15 * 60 * 1000);
     assert.equal(config.embeddings.azureOpenAi.apiVersion, "2024-10-21");
@@ -212,7 +211,6 @@ describe("loadConfig — valid configs", () => {
       STORAGE_BACKEND: "postgres",
       QUESTION_LOG_STORE: "memory",
       JOB_WAIT_TIMEOUT_MS: "30000",
-      JOB_RUN_TO_COMPLETION_TIMEOUT_MS: "60000",
       JOB_SCHEDULE_TIMEZONE: "Europe/London",
       WATCHER_ACTIVE_WINDOW_MS: "60000",
       EMBEDDING_TIMEOUT_MS: "9000",
@@ -231,7 +229,6 @@ describe("loadConfig — valid configs", () => {
     assert.equal(config.storage.default, "postgres");
     assert.equal(config.storage.overrides.QUESTION_LOG_STORE, "memory");
     assert.equal(config.jobs.waitTimeoutMs, 30_000);
-    assert.equal(config.jobs.runToCompletionTimeoutMs, 60_000);
     assert.equal(config.jobs.scheduleTimezone, "Europe/London");
     assert.equal(config.watcher.activeWindowMs, 60_000);
     assert.equal(config.embeddings.timeoutMs, 9000);

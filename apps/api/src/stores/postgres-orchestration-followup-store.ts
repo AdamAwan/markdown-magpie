@@ -81,8 +81,20 @@ export class PostgresOrchestrationFollowupStore implements OrchestrationFollowup
     ]);
   }
 
-  async pruneSettledBefore(before: string): Promise<void> {
-    await this.pool.query("DELETE FROM orchestration_followups WHERE status = 'settled' AND settled_at < $1", [before]);
+  async pruneSettledBefore(orchestrator: FollowupOrchestrator, before: string): Promise<void> {
+    await this.pool.query(
+      `DELETE FROM orchestration_followups f
+        WHERE f.orchestrator = $1
+          AND f.status = 'settled'
+          AND f.settled_at < $2
+          AND NOT EXISTS (
+            SELECT 1 FROM orchestration_followups p
+             WHERE p.orchestrator = f.orchestrator
+               AND p.scope_key = f.scope_key
+               AND p.status = 'pending'
+          )`,
+      [orchestrator, before]
+    );
   }
 
   async reset(): Promise<void> {

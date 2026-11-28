@@ -112,20 +112,53 @@ function runContract(name: string, makeStore: () => OrchestrationFollowupStore):
       assert.ok(await store.get(kept));
     });
 
-    it("prunes old settled rows but never a pending one", async () => {
+    it("prunes old settled rows of finished scopes only, and only for the named orchestrator", async () => {
       const store = makeStore();
-      const settled = `job-${randomUUID()}`;
+      const finishedScope = `run-${randomUUID()}`;
+      const unfinishedScope = `run-${randomUUID()}`;
+      const finished = `job-${randomUUID()}`;
+      const answeredSibling = `job-${randomUUID()}`;
       const pending = `job-${randomUUID()}`;
-      await store.register({ jobId: settled, orchestrator: "correctness_patrol", scopeKey: "run", context: {} });
-      await store.register({ jobId: pending, orchestrator: "correctness_patrol", scopeKey: "run", context: {} });
-      await store.settle(settled, {});
+      const otherOrchestrator = `job-${randomUUID()}`;
+      await store.register({
+        jobId: finished,
+        orchestrator: "correctness_patrol",
+        scopeKey: finishedScope,
+        context: {}
+      });
+      await store.register({
+        jobId: answeredSibling,
+        orchestrator: "correctness_patrol",
+        scopeKey: unfinishedScope,
+        context: {}
+      });
+      await store.register({
+        jobId: pending,
+        orchestrator: "correctness_patrol",
+        scopeKey: unfinishedScope,
+        context: {}
+      });
+      await store.register({
+        jobId: otherOrchestrator,
+        orchestrator: "verify_gap_closure",
+        scopeKey: finishedScope,
+        context: {}
+      });
+      await store.settle(finished, {});
+      await store.settle(answeredSibling, {});
+      await store.settle(otherOrchestrator, {});
 
-      await store.pruneSettledBefore(new Date(Date.now() - 60_000).toISOString());
-      assert.ok(await store.get(settled), "a recently settled row survives");
+      await store.pruneSettledBefore("correctness_patrol", new Date(Date.now() - 60_000).toISOString());
+      assert.ok(await store.get(finished), "a recently settled row survives");
 
-      await store.pruneSettledBefore(new Date(Date.now() + 60_000).toISOString());
-      assert.equal(await store.get(settled), undefined);
+      await store.pruneSettledBefore("correctness_patrol", new Date(Date.now() + 60_000).toISOString());
+      assert.equal(await store.get(finished), undefined, "an old settled row of a finished scope is pruned");
       assert.ok(await store.get(pending), "a pending row is an outcome still owed and is never pruned");
+      assert.ok(
+        await store.get(answeredSibling),
+        "a settled row is kept while its scope still waits on a sibling — it is work already paid for"
+      );
+      assert.ok(await store.get(otherOrchestrator), "another orchestrator's rows are untouched");
     });
   });
 }

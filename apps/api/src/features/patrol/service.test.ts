@@ -847,6 +847,70 @@ test("a replayed verify completion enqueues no second correction", async () => {
   assert.equal((run?.details.findings as unknown[]).length, 1, "the finding is counted once");
 });
 
+test("a completion that died after enqueueing the correction but before settling does not buy it twice", async () => {
+  // The paid correct_document enqueue happened; then the settle failed. The
+  // watcher re-POSTs the completion and the verdict is acted on a second time.
+  const ctx = makeTestContext();
+  await indexDocs(ctx, ["a.md"]);
+  const outcome = await patrol.runFixPatrol(ctx, { trigger: "scheduled" }, QUIET_LENS_DEPS);
+  assert.ok(outcome.ok);
+  if (!outcome.ok) return;
+  const [job] = await verifyJobs(ctx);
+  const store = ctx.stores.orchestrationFollowups;
+  const realSettle = store.settle.bind(store);
+  let failures = 1;
+  store.settle = async (jobId, result) => {
+    if (failures > 0) {
+      failures -= 1;
+      throw new Error("database blip");
+    }
+    return realSettle(jobId, result);
+  };
+
+  assert.deepEqual(await completeJob(ctx, job!.id, UNPROVABLE_OUTPUT), { ok: false, code: "side_effects_failed" });
+  assert.equal((await ctx.jobs.list({ type: "correct_document" })).jobs.length, 1, "enqueued before the failure");
+
+  assert.equal((await completeJob(ctx, job!.id, UNPROVABLE_OUTPUT)).ok, true);
+
+  assert.equal(
+    (await ctx.jobs.list({ type: "correct_document" })).jobs.length,
+    1,
+    "the replay reused the correction already enqueued"
+  );
+  const run = await ctx.stores.maintenanceRuns.get(outcome.runId);
+  assert.equal(run?.status, "completed");
+  assert.equal((run?.details.findings as unknown[]).length, 1);
+  assert.ok((await cursorEntry(ctx, "a.md"))?.contentHash, "and the doc is stamped as verified");
+});
+
+test("the correction reuse key tells different corrections apart and ignores a failed one", async () => {
+  const ctx = makeTestContext();
+  await indexDocs(ctx, ["a.md", "b.md"]);
+  await patrol.runFixPatrol(ctx, { trigger: "scheduled" }, QUIET_LENS_DEPS);
+  const jobs = await verifyJobs(ctx);
+
+  // An identical correction for a.md already exists but FAILED: it never
+  // happened, so the verdict must still buy one.
+  const failed = await ctx.jobs.create("correct_document", {
+    provider: "codex",
+    path: "a.md",
+    content: "# a.md",
+    claims: UNPROVABLE_OUTPUT.claims,
+    sources: [],
+    destinationId: "docs"
+  });
+  await failJob(ctx, failed.id, { code: "provider_down", message: "down", category: "provider" }, { terminal: true });
+
+  await completeJob(ctx, verifyJobFor(jobs, "a.md").id, UNPROVABLE_OUTPUT);
+  const afterA = (await ctx.jobs.list({ type: "correct_document" })).jobs;
+  assert.equal(afterA.filter((job) => job.state === "created").length, 1, "a fresh correction replaces the failed one");
+
+  // A different document with the same claims text is a different correction.
+  await completeJob(ctx, verifyJobFor(jobs, "b.md").id, UNPROVABLE_OUTPUT);
+  const live = (await ctx.jobs.list({ type: "correct_document" })).jobs.filter((job) => job.state === "created");
+  assert.deepEqual(live.map((job) => (job.input as { path: string }).path).sort(), ["a.md", "b.md"]);
+});
+
 test("a verify that FAILS leaves its document unchecked and re-checkable, and the run stops waiting", async () => {
   const ctx = makeTestContext();
   await indexDocs(ctx, ["a.md"]);

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { describe, it, mock } from "node:test";
 import type { EmbeddingProvider } from "@magpie/core";
 import type { JobType, JobView } from "@magpie/jobs";
 import { reconcileGapClustersOutputSchema } from "@magpie/jobs";
@@ -10,7 +10,8 @@ import { FakeJobBroker } from "../jobs/fake-broker.js";
 import { makeTestContext } from "../test-support/context.js";
 import type { GapClusterMembershipRecord, GapClusterRecord } from "../stores/gap-cluster-store.js";
 import { completeJob, failJob } from "../features/jobs/service.js";
-import { reconcileGaps, reshapeCompositionHash } from "./gap-reconciler.js";
+import * as proposalsService from "../features/proposals/service.js";
+import { reconcileGaps, reshapeCompositionHash, RESHAPE_STALL_MS } from "./gap-reconciler.js";
 
 function cluster(id: string): GapClusterRecord {
   return { id, title: id, status: "active", reconciliationRevision: 1, createdAt: "t", updatedAt: "t" };
@@ -1075,6 +1076,7 @@ describe("reconcileGaps audit", () => {
       pullRequestsChecked: 0,
       pullRequestTransitions: 0,
       mergedCascadesRecovered: 0,
+      stalledVerificationsRedriven: 0,
       overlapsDetected: 0,
       clustersCreated: 0,
       mergeDecisions: 0,
@@ -1481,6 +1483,185 @@ describe("reconcileGaps non-blocking reshape", () => {
 
     assert.equal((await ctx.stores.gapClusters.listActiveClusters()).length, 1, "the next tick applied the verdicts");
     assert.equal((await ctx.stores.reconciliations.list(50)).length, 1);
+  });
+
+  it("a replayed completion that died before the row settled records each decision once", async () => {
+    // The verdicts were applied and their audit rows written, then the settle
+    // failed. The watcher re-POSTs the completion, which re-applies the reshape.
+    const ctx = newContext();
+    await seedTwoClustersWithGaps(ctx);
+    await reconcileGaps(ctx, undefined, deps);
+    const [reshape] = await reshapeJobs(ctx);
+    const output = {
+      merges: [{ clusterIds: clusterIdsOf(reshape!), rationale: "same topic", confirmed: true }],
+      splits: [],
+      dismissals: []
+    };
+    const store = ctx.stores.orchestrationFollowups;
+    const realSettle = store.settle.bind(store);
+    let failures = 1;
+    store.settle = async (jobId, result) => {
+      if (failures > 0) {
+        failures -= 1;
+        throw new Error("database blip");
+      }
+      return realSettle(jobId, result);
+    };
+
+    assert.deepEqual(await completeJob(ctx, reshape!.id, output), { ok: false, code: "side_effects_failed" });
+    assert.equal((await completeJob(ctx, reshape!.id, output)).ok, true);
+
+    assert.equal((await ctx.stores.reconciliations.list(50)).length, 1, "the merge decision is on record once");
+    assert.equal((await ctx.stores.gapClusters.listActiveClusters()).length, 1);
+    // The replay sees a composition that no longer matches what was judged (its
+    // own first attempt merged it) and takes the safe branch: it does not draft,
+    // and leaves the merged set to the next tick to judge and draft.
+    assert.equal(await draftCount(ctx), 0);
+    await reconcileGaps(ctx, undefined, deps);
+    assert.equal((await reshapeJobs(ctx)).length, 2, "the next tick re-judges the merged set");
+  });
+
+  it("applies a reshape that completed between enqueue and register in the same tick", async () => {
+    // The completion-side continuation found no follow-up row and did nothing. The
+    // tick reads the job back after registering, so it does not wait a whole tick.
+    class RacingBroker extends FakeJobBroker {
+      override async create(type: JobType, input: unknown): Promise<JobView> {
+        const job = await super.create(type, input);
+        if (type === "reconcile_gap_clusters") {
+          // Completed behind the caller's back; it still holds the `created` view.
+          await super.complete(job.id, {
+            result: {
+              merges: [
+                {
+                  clusterIds: (input as { clusters: Array<{ id: string }> }).clusters.map((c) => c.id),
+                  rationale: "same topic",
+                  confirmed: true
+                }
+              ],
+              splits: [],
+              dismissals: []
+            },
+            executor: "watcher"
+          });
+        }
+        return job;
+      }
+    }
+    const ctx = makeTestContext({
+      jobs: new RacingBroker(),
+      config: new RuntimeConfigHolder({ aiProvider: "openai-compatible" })
+    });
+    await seedTwoClustersWithGaps(ctx);
+
+    await reconcileGaps(ctx, undefined, deps);
+
+    assert.equal((await ctx.stores.gapClusters.listActiveClusters()).length, 1, "applied in the same tick");
+    assert.equal(await draftCount(ctx), 1);
+  });
+
+  it("writes off a reshape nobody claims: cancels it and drafts without it", async () => {
+    // No capable watcher. Waiting forever would freeze this flow's clustering and
+    // drafting; a reshape that cannot be obtained has always meant "draft anyway".
+    const ctx = newContext();
+    await seedTwoClustersWithGaps(ctx);
+    const start = Date.now();
+    mock.timers.enable({ apis: ["Date"], now: start });
+    try {
+      await reconcileGaps(ctx, undefined, deps);
+      const [reshape] = await reshapeJobs(ctx);
+
+      // Still inside the deadline: the tick keeps waiting.
+      mock.timers.setTime(start + RESHAPE_STALL_MS - 1);
+      await reconcileGaps(ctx, undefined, deps);
+      assert.equal((await ctx.jobs.get(reshape!.id))?.state, "created");
+      assert.equal(await draftCount(ctx), 0);
+
+      // Past it: written off.
+      mock.timers.setTime(start + RESHAPE_STALL_MS);
+      await reconcileGaps(ctx, undefined, deps);
+      assert.equal(
+        (await ctx.jobs.get(reshape!.id))?.state,
+        "cancelled",
+        "cancelled, so a watcher that turns up later runs no paid generation nobody reads"
+      );
+      assert.equal(await draftCount(ctx), 2, "the un-reshaped clusters are drafted");
+      assert.equal((await reshapeJobs(ctx)).length, 1, "and the same composition is not immediately re-bought");
+      assert.equal(await ctx.stores.gapClusters.getReshapeCompositionHash(undefined), undefined);
+      assert.equal(
+        await ctx.stores.gapClusters.getProcessedRevision(undefined),
+        await ctx.stores.questionLogs.getGapCatalogRevision(undefined),
+        "the flow is unblocked"
+      );
+    } finally {
+      mock.timers.reset();
+    }
+  });
+
+  it("never writes off a reshape a watcher is actually running", async () => {
+    const ctx = newContext();
+    await seedTwoClustersWithGaps(ctx);
+    const start = Date.now();
+    mock.timers.enable({ apis: ["Date"], now: start });
+    try {
+      await reconcileGaps(ctx, undefined, deps);
+      const claimed = await ctx.jobs.claim("watcher", ["openai-compatible"]);
+      mock.timers.setTime(start + RESHAPE_STALL_MS * 2);
+      await reconcileGaps(ctx, undefined, deps);
+
+      assert.equal((await ctx.jobs.get(claimed!.id))?.state, "active");
+      assert.equal(await draftCount(ctx), 0);
+    } finally {
+      mock.timers.reset();
+    }
+  });
+
+  it("the tick re-drives a stalled gap-closure verification (lost continuation) to a verdict", async () => {
+    const ctx = newContext();
+    const log = await ctx.stores.questionLogs.record({
+      question: "How do I configure X?",
+      chatProvider: "codex",
+      retrievedSectionIds: []
+    });
+    await ctx.stores.questionLogs.recordManualGap(log.id, "How to configure X");
+    const proposal = await ctx.stores.proposals.create({
+      title: "Configure X",
+      targetPath: "configure-x.md",
+      markdown: "# Configure X",
+      rationale: "r",
+      evidence: [],
+      gapSummary: "How to configure X",
+      triggeringQuestionIds: [log.id]
+    });
+    await ctx.stores.proposals.updateStatus(proposal.id, "merged");
+    const merged = await ctx.stores.proposals.get(proposal.id);
+    assert.ok(merged);
+    assert.equal((await proposalsService.verifyGapClosure(ctx, merged)).closureStatus, "pending");
+    // The re-ask completed in the broker, but its continuation never ran.
+    const [reask] = (await ctx.jobs.list({ type: "answer_question" })).jobs;
+    await ctx.jobs.complete(reask!.id, {
+      result: {
+        answer: "Set the X flag.",
+        confidence: "high",
+        citations: [
+          {
+            documentId: "d",
+            sectionId: "s",
+            path: "configure-x.md",
+            heading: "h",
+            anchor: "a",
+            excerpt: "e",
+            relevance: 0.9
+          }
+        ]
+      },
+      executor: "watcher"
+    });
+
+    await reconcileGaps(ctx, undefined, deps);
+
+    assert.equal((await ctx.stores.proposals.get(merged.id))?.closureStatus, "verified_closed");
+    const [run] = await ctx.stores.maintenanceRuns.list({ taskType: "process_gaps_to_pull_requests", limit: 5 });
+    assert.equal(run?.details.stalledVerificationsRedriven, 1);
   });
 
   it("a reshape with no follow-up row (created by hand) completes without touching the reconciler", async () => {

@@ -46,9 +46,13 @@ export interface OrchestrationFollowupStore {
   // made the transition, so a replayed continuation can tell it was already applied.
   settle(jobId: string, result: unknown): Promise<boolean>;
   deleteScope(orchestrator: FollowupOrchestrator, scopeKey: string): Promise<void>;
-  // Drops settled rows older than `before` (ISO timestamp). Pending rows are never
-  // pruned: they are outcomes still owed to an orchestration.
-  pruneSettledBefore(before: string): Promise<void>;
+  // Drops one orchestrator's settled rows older than `before` (ISO timestamp) —
+  // but only from scopes that have FINISHED, i.e. hold no pending row. A settled
+  // row in a scope that is still waiting on a sibling is that orchestration's
+  // memory of work already paid for (an answered re-ask, a verdict already
+  // applied); pruning it would make a later re-drive buy it again. Pending rows
+  // are never pruned: they are outcomes still owed.
+  pruneSettledBefore(orchestrator: FollowupOrchestrator, before: string): Promise<void>;
   reset(): Promise<void>;
 }
 
@@ -98,9 +102,16 @@ export class InMemoryOrchestrationFollowupStore implements OrchestrationFollowup
     }
   }
 
-  async pruneSettledBefore(before: string): Promise<void> {
-    for (const row of [...this.rows.values()]) {
-      if (row.status === "settled" && row.settledAt !== undefined && row.settledAt < before) {
+  async pruneSettledBefore(orchestrator: FollowupOrchestrator, before: string): Promise<void> {
+    const all = [...this.rows.values()].filter((row) => row.orchestrator === orchestrator);
+    const unfinishedScopes = new Set(all.filter((row) => row.status === "pending").map((row) => row.scopeKey));
+    for (const row of all) {
+      if (
+        row.status === "settled" &&
+        row.settledAt !== undefined &&
+        row.settledAt < before &&
+        !unfinishedScopes.has(row.scopeKey)
+      ) {
         this.rows.delete(row.jobId);
       }
     }
