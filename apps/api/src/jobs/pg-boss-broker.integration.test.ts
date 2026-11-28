@@ -293,6 +293,154 @@ test("pg-boss broker implements the durable job lifecycle", { skip: !runIntegrat
   assert.equal((await broker.list({})).total, 0);
 });
 
+// Listing and guard reads at a realistic queue size. pg-boss's public findJobs is
+// capped at LIMIT 1000 ordered oldest-first, so a findJobs-based list() saw only
+// the oldest 1000 rows of a busy queue (30-day retention keeps far more), and the
+// in-flight guards built on it went blind. This pins the SQL-backed reads: with
+// >1000 retained jobs in ONE queue, list() returns the true newest page with an
+// exact total, state filters run over every row, the newest in-flight job is
+// found by findMatchingJobs, and get() is a single by-id lookup.
+test("pg-boss broker lists and matches correctly past 1000 jobs in one queue", { skip: !runIntegration }, async (t) => {
+  const listSchema = `${schema}_list`;
+  const pool = new Pool({ connectionString: databaseUrl });
+  const broker = new PgBossJobBroker({ connectionString: databaseUrl, pool, schema: listSchema });
+  const retained = 1100;
+  const queue = "verify_gap_closure";
+
+  t.before(async () => {
+    await broker.start();
+    await broker.reset();
+    // Enqueue through the broker (real envelopes, real queue routing), in small
+    // concurrent batches to keep setup quick.
+    for (let start = 0; start < retained; start += 50) {
+      await Promise.all(
+        Array.from({ length: Math.min(50, retained - start) }, (_unused, offset) =>
+          broker.create("verify_gap_closure", { proposalId: `p-${start + offset}` })
+        )
+      );
+    }
+    // Age that backlog into retained, finished history — the shape a month of
+    // completed jobs leaves behind. Claiming/completing 1100 rows one at a time
+    // would only slow the test down without exercising anything list() reads.
+    await pool.query(
+      `UPDATE "${listSchema}".job
+          SET state = 'completed', started_on = created_on, completed_on = created_on,
+              created_on = created_on - interval '1 hour'
+        WHERE name = $1`,
+      [queue]
+    );
+  });
+  t.after(async () => {
+    await broker.reset();
+    await broker.stop();
+    try {
+      await pool.query(`DROP SCHEMA IF EXISTS "${listSchema}" CASCADE`);
+    } finally {
+      await pool.end();
+    }
+  });
+
+  await t.test("list() returns the newest jobs first with an exact total", async () => {
+    const target = await broker.create("verify_gap_closure", { proposalId: "target" });
+
+    const firstPage = await broker.list({ type: "verify_gap_closure", limit: 200 });
+    assert.equal(firstPage.total, retained + 1);
+    assert.equal(firstPage.jobs.length, 200);
+    assert.equal(firstPage.jobs[0]?.id, target.id, "the job created last heads the page");
+    const createdAts = firstPage.jobs.map((job) => job.createdAt);
+    assert.deepEqual(createdAts, [...createdAts].sort().reverse(), "newest first");
+
+    // OFFSET pages over the whole set, not a 1000-row prefix of it.
+    const lastPage = await broker.list({ type: "verify_gap_closure", limit: 200, offset: 1000 });
+    assert.equal(lastPage.total, retained + 1);
+    assert.equal(lastPage.jobs.length, retained + 1 - 1000);
+
+    // Untyped listing sees the same rows.
+    assert.equal((await broker.list({ limit: 1 })).total, retained + 1);
+  });
+
+  await t.test("the state filter runs over every row, not a page", async () => {
+    const completed = await broker.list({ type: "verify_gap_closure", state: "completed", limit: 200 });
+    assert.equal(completed.total, retained);
+    assert.equal(completed.jobs.length, 200);
+    assert.ok(completed.jobs.every((job) => job.state === "completed"));
+
+    const created = await broker.list({ type: "verify_gap_closure", state: "created" });
+    assert.equal(created.total, 1);
+    assert.deepEqual(
+      created.jobs.map((job) => job.input),
+      [{ proposalId: "target" }]
+    );
+
+    const recent = await broker.list({
+      type: "verify_gap_closure",
+      createdAfter: new Date(Date.now() - 10 * 60_000).toISOString()
+    });
+    assert.equal(recent.total, 1, "only the un-aged job is newer than ten minutes");
+  });
+
+  await t.test("findMatchingJobs finds the in-flight job created last behind the backlog", async () => {
+    const [target] = (await broker.list({ type: "verify_gap_closure", state: "created" })).jobs;
+    assert.ok(target);
+
+    const inFlight = await broker.findMatchingJobs({ type: "verify_gap_closure", inFlight: true });
+    assert.deepEqual(
+      inFlight.map((job) => job.id),
+      [target.id]
+    );
+    const byInput = await broker.findMatchingJobs({
+      type: "verify_gap_closure",
+      inFlight: true,
+      input: { proposalId: "target" }
+    });
+    assert.deepEqual(
+      byInput.map((job) => job.id),
+      [target.id]
+    );
+
+    // A retained, finished job matches by input only when in-flight isn't asked for
+    // — including one from the very oldest end of the backlog.
+    assert.equal(
+      (await broker.findMatchingJobs({ type: "verify_gap_closure", input: { proposalId: "p-0" } })).length,
+      1
+    );
+    assert.deepEqual(
+      await broker.findMatchingJobs({ type: "verify_gap_closure", inFlight: true, input: { proposalId: "p-0" } }),
+      []
+    );
+
+    // A dead-lettered copy (created on the dead-letter queue) is finished work,
+    // not a second in-flight job.
+    const doomed = await broker.create("verify_gap_closure", { proposalId: "doomed" });
+    await broker.failTerminal(doomed.id, providerError);
+    assert.deepEqual(
+      await broker.findMatchingJobs({ type: "verify_gap_closure", inFlight: true, input: { proposalId: "doomed" } }),
+      []
+    );
+    assert.equal(
+      (await broker.findMatchingJobs({ type: "verify_gap_closure", input: { proposalId: "doomed" } }))[0]?.state,
+      "failed"
+    );
+  });
+
+  await t.test("get() resolves a job by id in a single query, without probing queues", async () => {
+    const target = await broker.create("verify_gap_closure", { proposalId: "lookup" });
+    const query = t.mock.method(pool, "query");
+    const found = await broker.get(target.id);
+    assert.equal(query.mock.callCount(), 1, "one by-id query, not one per queue");
+    query.mock.restore();
+    assert.equal(found?.id, target.id);
+    assert.equal(found?.queueName, queue);
+    assert.equal(found?.state, "created");
+
+    assert.equal(await broker.get("00000000-0000-4000-8000-000000000000"), undefined);
+    assert.equal(await broker.get("not-a-uuid"), undefined);
+
+    // The by-id lookup also backs the mutators.
+    assert.equal((await broker.cancel(target.id)).state, "cancelled");
+  });
+});
+
 // The atomic admission primitive (#288a). A separate schema keeps its own
 // throwaway state; each sub-test resets first.
 test("createIfAdmitted enforces the in-flight ceiling atomically", { skip: !runIntegration }, async (t) => {
@@ -332,7 +480,10 @@ test("createIfAdmitted enforces the in-flight ceiling atomically", { skip: !runI
     // Rejection enqueued nothing — still exactly 2 in flight.
     assert.equal(await broker.countInFlight(globalTypes), 2);
 
-    // Freeing a slot lets the next admission through.
+    // Freeing a slot lets the next admission through. pg-boss (12.39+) only
+    // completes an ACTIVE job (its attempt fence), so claim it first as a watcher
+    // would — completing a still-queued job is a silent no-op.
+    assert.equal((await broker.claim("codex-worker", ["codex"]))?.id, first.job!.id);
     await broker.complete(first.job!.id, { answer: "done", confidence: "high", citations: [] });
     const fourth = await broker.createIfAdmitted("answer_question", codexAnswer("a4"), capacity);
     assert.equal(fourth.admitted, true);
