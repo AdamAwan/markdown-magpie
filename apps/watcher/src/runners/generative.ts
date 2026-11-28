@@ -1,7 +1,8 @@
 import type { ChatProvider, KnowledgeChangeCause } from "@magpie/core";
-import type { JobType, JobView } from "@magpie/jobs";
+import type { JobType, JobView, UndeclaredOutputFieldPolicy } from "@magpie/jobs";
 import {
   JOB_TYPES,
+  buildJobOutput,
   jobDefinition,
   answerQuestionInputSchema,
   reconcileGapClustersInputSchema,
@@ -27,6 +28,7 @@ import { logger } from "../logger.js";
 import { stampSourceMapUpdates } from "../source-workspace.js";
 import {
   applyGroundingVerdict,
+  DEFAULT_UNDECLARED_OUTPUT_FIELDS,
   buildAnswerOutput,
   buildEmptySearchNote,
   buildFlowSelectionRequiredOutput,
@@ -52,6 +54,8 @@ export interface GenerativeJobOptions {
   api: WatcherApi;
   signal: AbortSignal;
   buildPromptOverride?: (job: JobView) => string;
+  // See ChatRunnerOptions.undeclaredOutputFields. Strict when omitted.
+  undeclaredOutputFields?: UndeclaredOutputFieldPolicy;
 }
 
 export const PROVIDER_JOB_TYPES: ReadonlySet<JobType> = new Set(
@@ -95,7 +99,10 @@ export async function runGenerativeJob(options: GenerativeJobOptions): Promise<u
   // the stamp/strip contract). Source-grounded job types that fall back here
   // (non-fs sources, or fs sources without an agent model) cannot smuggle a sha
   // the watcher didn't observe.
-  return stampSourceMapUpdates(parseJobOutput(job, response.content), []);
+  return stampSourceMapUpdates(
+    parseJobOutput(job, response.content, options.undeclaredOutputFields ?? DEFAULT_UNDECLARED_OUTPUT_FIELDS),
+    []
+  );
 }
 
 // The agentic answer loop. After routing + a seed retrieval the model assesses
@@ -870,7 +877,7 @@ async function reconcileGapClusters({ job, model, signal }: GenerativeJobOptions
     confirmed: verdicts.get(`dismissal-${index}`) === true
   }));
 
-  return reconcileGapClustersOutputSchema.parse({ merges, splits, dismissals });
+  return buildJobOutput(reconcileGapClustersOutputSchema, { merges, splits, dismissals });
 }
 
 // One line describing a cluster for the propose/critic prompts, including the scope

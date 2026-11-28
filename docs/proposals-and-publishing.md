@@ -125,7 +125,8 @@ Mounted at `/api/proposals`. Mutating routes require `manage:knowledge`;
 - `POST /bulk` (`ready | publish | merge | reject` across ≤100 ids; always 200 with
   per-id results).
 - `POST /:id/status`, `POST /:id/merge`, `POST /:id/reject`, `POST /:id/publish`,
-  `POST /:id/verify-closure` (503 on incomplete/aborted re-ask), `GET /:id/execution-context`.
+  `POST /:id/verify-closure` (`closureStatus: "pending"` while re-asks are outstanding),
+  `GET /:id/execution-context`.
 - There is **no** `/:id/regenerate` endpoint — regeneration is internal-only (P13).
 
 ## Key constants

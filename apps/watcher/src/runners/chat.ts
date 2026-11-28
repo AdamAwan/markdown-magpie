@@ -1,7 +1,8 @@
 import type { AiExecutionIdentity, AiUsage, ChatProvider } from "@magpie/core";
-import type { JobCapability, JobType, JobView } from "@magpie/jobs";
+import type { JobCapability, JobType, JobView, UndeclaredOutputFieldPolicy } from "@magpie/jobs";
 import type { LanguageModel } from "ai";
 import type { WatcherApi } from "../http-client.js";
+import { DEFAULT_UNDECLARED_OUTPUT_FIELDS } from "../job-prompts.js";
 import { logger } from "../logger.js";
 import {
   fetchSourceMapEntries,
@@ -32,10 +33,17 @@ export interface ChatRunnerOptions {
   checkoutRoot?: string;
   // Test seam: substitute workspace preparation (no real checkouts in tests).
   prepareWorkspaces?: typeof prepareSourceWorkspaces;
+  // What an undeclared field in a parsed job output does (see
+  // UndeclaredOutputFieldPolicy). Defaults to the STRICT policy, so anything that
+  // does not come through the composition root — i.e. every test — fails on an
+  // undeclared field; createConfiguredRunners passes the operator's policy,
+  // which is lenient unless MAGPIE_JOB_OUTPUT_STRICT=true.
+  undeclaredOutputFields?: UndeclaredOutputFieldPolicy;
 }
 
 export class ChatRunner {
   readonly aiIdentity: AiExecutionIdentity;
+  readonly undeclaredOutputFields: UndeclaredOutputFieldPolicy;
   private readonly agentModel?: LanguageModel;
   private readonly checkoutRoot: string;
   private readonly prepareWorkspaces: typeof prepareSourceWorkspaces;
@@ -50,6 +58,7 @@ export class ChatRunner {
     this.agentModel = options.agentModel;
     this.checkoutRoot = options.checkoutRoot ?? process.env.MAGPIE_CHECKOUT_ROOT ?? ".magpie/checkouts";
     this.prepareWorkspaces = options.prepareWorkspaces ?? prepareSourceWorkspaces;
+    this.undeclaredOutputFields = options.undeclaredOutputFields ?? DEFAULT_UNDECLARED_OUTPUT_FIELDS;
   }
 
   supports(type: JobType): boolean {
@@ -64,7 +73,12 @@ export class ChatRunner {
     // repairable, so this never intercepts an agentic run).
     if (job.repair) {
       const repairModel = onUsage ? withUsageReporting(this.chat, onUsage) : this.chat;
-      return runRepairReprompt({ job, model: repairModel, signal });
+      return runRepairReprompt({
+        job,
+        model: repairModel,
+        signal,
+        undeclaredOutputFields: this.undeclaredOutputFields
+      });
     }
     const descriptors = sourceDescriptorsOf(job);
     // The agent loop runs whenever there is anything real to ground in: a
@@ -89,6 +103,7 @@ export class ChatRunner {
             mapEntries,
             fetchable,
             signal,
+            undeclaredOutputFields: this.undeclaredOutputFields,
             ...(onUsage ? { onUsage } : {})
           }),
           workspaces
@@ -102,6 +117,12 @@ export class ChatRunner {
     // Every provider call a generative run makes (routing, search rounds,
     // grounding verification, critic passes) reports through the same wrapper.
     const model = onUsage ? withUsageReporting(this.chat, onUsage) : this.chat;
-    return runGenerativeJob({ job, model, api: this.api, signal });
+    return runGenerativeJob({
+      job,
+      model,
+      api: this.api,
+      signal,
+      undeclaredOutputFields: this.undeclaredOutputFields
+    });
   }
 }

@@ -1,0 +1,69 @@
+name: Dependabot auto-merge
+
+# Turns on GitHub's NATIVE auto-merge (squash) for Dependabot pull requests whose
+# highest semver change is a patch or a minor. This workflow never merges
+# anything itself: `gh pr merge --auto` only asks GitHub to merge once the
+# branch-protection requirements on the base branch are satisfied, so the merge
+# happens if and only if the required status checks (Verify, Security) pass.
+# Semver-major updates are deliberately left alone for human review.
+#
+# REQUIRED REPOSITORY SETTINGS — see docs/security-scanning.md. Without a branch
+# protection rule (or ruleset) that REQUIRES status checks on the base branch,
+# GitHub has nothing to wait for and auto-merge merges the pull request
+# immediately. Do not enable "Allow auto-merge" before the required checks exist.
+
+on:
+  pull_request:
+    types:
+      - opened
+      - reopened
+      - synchronize
+
+# Nothing by default; the single job below opts in to exactly what it needs.
+permissions: {}
+
+concurrency:
+  group: dependabot-auto-merge-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  enable-auto-merge:
+    name: Enable auto-merge (patch/minor)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # github.actor is whoever triggered THIS run. Requiring the PR author too
+    # means a human pushing to (or re-running on) a Dependabot branch, or anyone
+    # opening a look-alike PR, never gets auto-merge armed by this workflow.
+    if: github.actor == 'dependabot[bot]' && github.event.pull_request.user.login == 'dependabot[bot]'
+    permissions:
+      # `gh pr merge --auto` enables auto-merge through the GraphQL API, which
+      # needs both: pull-requests to set it, contents because the eventual merge
+      # writes to the base branch.
+      contents: write
+      pull-requests: write
+    steps:
+      # No checkout: this job never runs code from the pull request.
+      - name: Fetch Dependabot metadata
+        id: metadata
+        uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3.1.0
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      # For a grouped PR `update-type` is the HIGHEST bump in the group, so a
+      # group containing any major update is left for a human.
+      - name: Enable auto-merge for patch and minor updates
+        if: >-
+          steps.metadata.outputs.update-type == 'version-update:semver-patch' ||
+          steps.metadata.outputs.update-type == 'version-update:semver-minor'
+        run: gh pr merge --auto --squash "$PR_URL"
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Leave major (or unclassified) updates for human review
+        if: >-
+          steps.metadata.outputs.update-type != 'version-update:semver-patch' &&
+          steps.metadata.outputs.update-type != 'version-update:semver-minor'
+        run: echo "Update type '$UPDATE_TYPE' is not patch/minor - auto-merge not enabled; a human must review and merge."
+        env:
+          UPDATE_TYPE: ${{ steps.metadata.outputs.update-type }}

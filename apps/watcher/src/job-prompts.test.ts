@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 import type { JobView } from "@magpie/jobs";
 import { UNTRUSTED_CONTENT_OPEN, UNTRUSTED_CONTENT_CLOSE } from "@magpie/prompts";
 import type { RetrievedSection } from "./http-client.js";
+import { logger } from "./logger.js";
 import {
   applyGroundingVerdict,
   buildAnswerOutput,
@@ -714,20 +715,50 @@ describe("parseJobOutput", () => {
   it("validates summarize_gap output against the job contract", () => {
     const parsed = parseJobOutput(
       job("summarize_gap", {}),
-      JSON.stringify({ summary: "s", priority: 2, rationale: "r" })
+      JSON.stringify({ summary: "s", priority: 2, rationale: "r" }),
+      "reject"
     );
     assert.deepEqual(parsed, { summary: "s", priority: 2, rationale: "r" });
   });
 
   it("rejects output that does not match the contract", () => {
-    assert.throws(() => parseJobOutput(job("summarize_gap", {}), JSON.stringify({ summary: "s" })));
+    for (const policy of ["strip", "reject"] as const) {
+      assert.throws(
+        () => parseJobOutput(job("summarize_gap", {}), JSON.stringify({ summary: "s" }), policy),
+        /does not match the job contract/
+      );
+    }
   });
 
   it("extracts a JSON object embedded in surrounding prose", () => {
     const parsed = parseJobOutput(
       job("summarize_gap", {}),
-      `Sure! Here is the result:\n{"summary":"s","priority":1,"rationale":"r"}\nThanks.`
+      `Sure! Here is the result:\n{"summary":"s","priority":1,"rationale":"r"}\nThanks.`,
+      "reject"
     );
     assert.deepEqual(parsed, { summary: "s", priority: 1, rationale: "r" });
+  });
+
+  // The model's reply is parsed HERE, before the API sees it, so this is where a
+  // field the schema forgot to declare is dropped. The two policies decide how.
+  const withUndeclared = JSON.stringify({ summary: "s", priority: 1, rationale: "r", sentiment: "grumpy" });
+
+  it("strict policy: throws on a field the job contract does not declare, naming it and the fix", () => {
+    assert.throws(
+      () => parseJobOutput(job("summarize_gap", {}), withUndeclared, "reject"),
+      /summarize_gap output carries fields the job contract does not declare: sentiment\..*schemas\.ts/
+    );
+  });
+
+  it("production policy: strips the undeclared field and warns with its path", (t) => {
+    const warn = t.mock.method(logger, "warn");
+    const parsed = parseJobOutput(job("summarize_gap", {}), withUndeclared, "strip");
+    assert.deepEqual(parsed, { summary: "s", priority: 1, rationale: "r" });
+    assert.equal(warn.mock.callCount(), 1);
+    assert.deepEqual(warn.mock.calls[0]?.arguments[0], {
+      jobId: "j",
+      jobType: "summarize_gap",
+      strippedKeys: ["sentiment"]
+    });
   });
 });

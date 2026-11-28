@@ -46,7 +46,51 @@ Two harnesses in `apps/web/src/test`, both under `node:test`:
   state persistence through prop-identity changes. `rerender` simulates a parent (e.g. the
   ConsoleProvider poll tick) handing down fresh callback identities — panels must not treat
   that as a data change and reset UI state (the seed-panel collapse regression test is the
-  model).
+  model). `changeValue` works on selects, inputs and textareas; `buttonByText` /
+  `buttonsByText` find buttons by label.
+
+Supporting pieces, same directory:
+
+- **`fakeApi.ts`** — `installFakeApi({ "GET /jobs": () => ({ jobs: [] }) })` replaces
+  `globalThis.fetch` with a route table (`"METHOD /path"`, no `/api` prefix or query
+  string), so `lib/api` runs unmodified. Throw `FakeApiError(status, message)` from a
+  handler for an error response; an unrouted request answers 404 naming the route.
+  `deferred()` holds a route open to test races.
+- **`console.tsx`** — `mountConsole({ routes, ui })` mounts the real `ConsoleProvider`
+  over the fake API with a fake Next router and **mocked `setTimeout`/`setInterval`**.
+  Read state/actions with `m.console()`, drive actions with `m.run(...)`, and advance
+  polls / toast expiry / the search debounce with `m.tick(ms)`. Pass a page component
+  as `ui` to test provider + page + panel together (`ConsoleProvider.test.tsx` is the
+  model). Always `t.after(() => m.unmount())` — it restores fetch and the timers.
+- **`fixtures.ts`** — typed builders (`jobFixture`, `questionFixture`, `documentFixture`,
+  `configFixture`, …). Extend these rather than hand-rolling objects per test file.
+
+Two traps the harness exists to avoid:
+
+- **Any test file whose components call `lib/api` under happy-dom needs
+  `after(closeDom)`.** Each request arms happy-dom's `AbortSignal.timeout(30s)`, a ref'd
+  timer that otherwise holds the test process open for 30 seconds after the last test.
+- **Never import `react-dom/client` statically in test code.** It decides at module load
+  whether a DOM exists; loaded before happy-dom registers, it silently ignores typed
+  edits to text fields. `renderDom` imports it lazily for this reason.
+
+## Browser smoke tests (apps/web, Playwright)
+
+`apps/web/e2e/*.spec.ts` is a small Playwright suite that drives the built console in
+Chromium with the API mocked in the browser (`e2e/mockApi.ts`, via `page.route`) — no
+Postgres, API or watcher. It is the **one exception** to "no other framework", and it is
+**not** part of `npm test` or CI:
+
+```bash
+npm run test:e2e:web             # build libs + web, then run the suite (trace off)
+npm run test:e2e -w @magpie/web  # re-run against the existing build
+```
+
+Keep it a smoke suite (load, navigation, one end-to-end ask): logic belongs in the
+`node:test` component tests above. A page that starts calling a new endpoint must get a
+default response in `mockApi.ts` — unmocked requests fail the spec. `@playwright/test` is
+pinned exactly to match one Chromium build; set `E2E_CHROMIUM_PATH` to use a different
+binary. See `docs/web-testing.md`.
 
 ## Postgres-backed integration tests
 
@@ -110,6 +154,14 @@ npm run test:db           # when you touched SQL, stores, or the broker
 
 ## Gotchas
 
+- **Job outputs are validated strictly in tests.** `makeTestContext()` sets
+  `MAGPIE_JOB_OUTPUT_STRICT=true` and every watcher runner you construct defaults to the
+  strict policy, so a fixture output (or canned model reply) carrying a field the job's
+  schema does not declare fails the job / throws — production would have silently stripped
+  it. Declare the field on the schema; only a test *about* the lenient production policy
+  should opt out (`settings.jobs.undeclaredOutputFields: "strip"` /
+  `{ undeclaredOutputFields: "strip" }`). The golden eval and the e2e compose stack run
+  strict too.
 - **Don't add a test framework.** If a helper seems missing, it's usually a `node:test`
   feature (`t.mock`, subtests, `{ skip }`, `{ only }`) — use those.
 - **Integration tests silently skip without the flag.** A green `npm test` does **not** mean

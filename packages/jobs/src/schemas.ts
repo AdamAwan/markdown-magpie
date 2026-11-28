@@ -36,11 +36,73 @@ import type {
   SourceConflictPosition,
   DetectedSourceConflict,
   KnownSourceConflict,
-  ResolvedSourceConflict
+  ResolvedSourceConflict,
+  SourceDescriptor
 } from "@magpie/core";
 import { AI_PROVIDERS, type AiProviderName, type JobError, type JobRepairContext } from "./types.js";
 
 type ProviderInput<T> = T & { provider: AiProviderName };
+
+// --- Compile-time link between a domain type and its schema -----------------
+//
+// `schema satisfies z.ZodType<Domain>` only proves the schema's output is
+// ASSIGNABLE to the domain type. An optional domain field the schema forgot is
+// still assignable — and a z.object parse then silently strips that field at
+// runtime. That one-directional check is how `mapUpdates`, `uncoveredPoints` and
+// `provenance` were each added to a @magpie/core job type, emitted by the
+// watcher, and dropped by the broker.
+//
+// `contract<Domain>()(schema)` closes the other direction: every field the domain
+// type declares (at any depth, through arrays and unions) must also be declared
+// on the schema, or the call does not compile — the error names the missing
+// path(s) in an `undeclaredDomainFields` property.
+type KeysOf<T> = T extends unknown ? keyof T & string : never;
+type ValueAt<T, K extends string> = T extends unknown ? (K extends keyof T ? T[K] : never) : never;
+type ElementOf<T> = T extends readonly (infer Element)[] ? Element : never;
+type JoinPath<Prefix extends string, Key extends string> = Prefix extends "" ? Key : `${Prefix}.${Key}`;
+type UndeclaredDomainFields<Domain, Parsed, Prefix extends string = ""> = Domain extends readonly (infer Element)[]
+  ? UndeclaredDomainFields<Element, ElementOf<Parsed>, `${Prefix}[]`>
+  : Domain extends object
+    ? {
+        [K in KeysOf<Domain>]: K extends KeysOf<Extract<Parsed, object>>
+          ? UndeclaredDomainFields<
+              NonNullable<ValueAt<Domain, K>>,
+              NonNullable<ValueAt<Parsed, K>>,
+              JoinPath<Prefix, K>
+            >
+          : JoinPath<Prefix, K>;
+      }[KeysOf<Domain>]
+    : never;
+type DeclaresEveryDomainField<Domain, Schema extends z.ZodType> = [
+  UndeclaredDomainFields<Domain, z.output<Schema>>
+] extends [never]
+  ? unknown
+  : { undeclaredDomainFields: UndeclaredDomainFields<Domain, z.output<Schema>> };
+
+function contract<Domain>() {
+  return <Schema extends z.ZodType<Domain>>(schema: Schema & DeclaresEveryDomainField<Domain, Schema>): Schema =>
+    schema;
+}
+
+// A source-grounded job input as it travels on the queue. KNOWN GAP, pinned here
+// rather than hidden: @magpie/core's git SourceDescriptor carries `tokenEnv` (the
+// NAME of a per-source PAT env var) and the API's descriptor builder sets it, but
+// sourceDescriptorSchema below does not declare it — so it is stripped at enqueue
+// and the watcher clones the source with the host-default token only. It is NOT
+// simply declared here because POST /api/jobs accepts caller-built descriptors:
+// declaring it would let a `manage:jobs` caller pair an arbitrary https url with
+// an arbitrary watcher env var name and have the watcher send that variable's
+// value as a git credential. Declaring it needs a deliberate decision (e.g. only
+// honouring names the operator configured), so the contract excludes exactly
+// this one field and still checks every other one.
+type QueuedSourceDescriptor = SourceDescriptor extends infer Descriptor
+  ? Descriptor extends unknown
+    ? Omit<Descriptor, "tokenEnv">
+    : never
+  : never;
+type SourceGroundedInput<T extends { sources: SourceDescriptor[] }> = ProviderInput<
+  Omit<T, "sources"> & { sources: QueuedSourceDescriptor[] }
+>;
 
 const providerSchema = z.enum(AI_PROVIDERS);
 const confidenceSchema = z.enum(["high", "medium", "low", "unknown"]);
@@ -63,14 +125,16 @@ const gapSchema = z.object({
 });
 const documentSchema = z.object({ path: z.string(), content: z.string() });
 
-export const jobErrorSchema = z.object({
-  code: z.string(),
-  message: z.string(),
-  category: z.enum(["provider", "validation", "configuration", "timeout", "external", "internal"]),
-  provider: z.string().optional(),
-  details: z.record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.null()])).optional(),
-  executor: z.string().optional()
-}) satisfies z.ZodType<JobError>;
+export const jobErrorSchema = contract<JobError>()(
+  z.object({
+    code: z.string(),
+    message: z.string(),
+    category: z.enum(["provider", "validation", "configuration", "timeout", "external", "internal"]),
+    provider: z.string().optional(),
+    details: z.record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.null()])).optional(),
+    executor: z.string().optional()
+  })
+);
 
 const flowSelectionRequiredSchema = z.object({
   availableFlows: z.array(z.object({ id: z.string(), name: z.string() }))
@@ -85,7 +149,11 @@ const answerTraceSchema = z.object({
   routing: z.object({
     mode: z.enum(["requested", "routed", "unscoped", "unknown"]),
     flowId: z.string().optional(),
-    confidence: confidenceSchema.optional()
+    confidence: confidenceSchema.optional(),
+    // Which router decided a "routed" outcome. The watcher has always emitted it;
+    // it was undeclared here, so it was stripped before reaching the question log
+    // (found by the contract<AnswerQuestionJobOutput>() check below).
+    method: z.enum(["embedding", "chat"]).optional()
   }),
   seedSectionCount: z.number().int().nonnegative(),
   searches: z.array(
@@ -115,69 +183,77 @@ const reconcileResultSchema = z.object({
   basisItemIds: z.array(z.string())
 });
 
-export const answerQuestionInputSchema = z.object({
-  provider: providerSchema,
-  questionLogId: z.string().optional(),
-  question: z.string(),
-  flows: z.array(
-    z.object({
-      id: z.string(),
-      name: z.string(),
-      persona: z.string().optional()
-    })
-  ),
-  requestedFlowId: z.string().optional(),
-  // Multi-turn conversation context (#239). Declared here so the broker does not
-  // strip it from the enqueued input (the schema-stripping gotcha).
-  priorTurns: z.array(z.object({ question: z.string(), answer: z.string() })).optional(),
-  conversationFlowId: z.string().optional(),
-  // Prior approved items the watcher's reconciler can reuse/adapt/merge from
-  // instead of answering fresh (questionnaire trust). Declared so the broker
-  // preserves them from the enqueued input.
-  candidates: z.array(answerCandidateSchema).optional(),
-  // The questionnaire's answering direction. Declared so the broker preserves it
-  // from the enqueued input (the schema-stripping gotcha).
-  direction: z.string().optional(),
-  // The previously-given answer this item adjudicates (questionnaire ingestion).
-  // UNTRUSTED external content — the watcher wraps it in the user turn and never
-  // system-prompts it. Declared so the broker preserves it from the enqueued
-  // input (the schema-stripping gotcha).
-  importedAnswer: z.string().optional(),
-  expectedOutput: z.literal("answer_result")
-}) satisfies z.ZodType<ProviderInput<CoreAnswerQuestionJobInput>>;
-export const answerQuestionOutputSchema = z.object({
-  answer: z.string(),
-  confidence: confidenceSchema,
-  citations: z.array(citationSchema),
-  gaps: z.array(gapSchema).optional(),
-  flowId: z.string().optional(),
-  flowSelectionRequired: flowSelectionRequiredSchema.optional(),
-  outOfScope: outOfScopeSchema.optional(),
-  trace: answerTraceSchema.optional(),
-  // The condensed standalone form of a follow-up (#239). Declared so the broker
-  // preserves it on completion for the API to persist on the question log.
-  standaloneQuestion: z.string().optional(),
-  // The reconciler's verdict when the job was given candidates to reconcile
-  // against (questionnaire trust). Declared so the broker preserves it on
-  // completion for the API to persist.
-  reuse: reconcileResultSchema.optional(),
-  // Stage-1 adjudication of importedAnswer against the answer this job just
-  // produced from the KB. Declared so the broker preserves it on completion for
-  // the API to persist. Absent when the job carried no imported answer.
-  importVerdict: z.enum(["confirmed", "divergent", "uncovered"]).optional()
-}) satisfies z.ZodType<AnswerQuestionJobOutput>;
+export const answerQuestionInputSchema = contract<ProviderInput<CoreAnswerQuestionJobInput>>()(
+  z.object({
+    provider: providerSchema,
+    questionLogId: z.string().optional(),
+    question: z.string(),
+    flows: z.array(
+      z.object({
+        id: z.string(),
+        name: z.string(),
+        persona: z.string().optional()
+      })
+    ),
+    requestedFlowId: z.string().optional(),
+    // Multi-turn conversation context (#239). Declared here so the broker does not
+    // strip it from the enqueued input (the schema-stripping gotcha).
+    priorTurns: z.array(z.object({ question: z.string(), answer: z.string() })).optional(),
+    conversationFlowId: z.string().optional(),
+    // Prior approved items the watcher's reconciler can reuse/adapt/merge from
+    // instead of answering fresh (questionnaire trust). Declared so the broker
+    // preserves them from the enqueued input.
+    candidates: z.array(answerCandidateSchema).optional(),
+    // The questionnaire's answering direction. Declared so the broker preserves it
+    // from the enqueued input (the schema-stripping gotcha).
+    direction: z.string().optional(),
+    // The previously-given answer this item adjudicates (questionnaire ingestion).
+    // UNTRUSTED external content — the watcher wraps it in the user turn and never
+    // system-prompts it. Declared so the broker preserves it from the enqueued
+    // input (the schema-stripping gotcha).
+    importedAnswer: z.string().optional(),
+    expectedOutput: z.literal("answer_result")
+  })
+);
+export const answerQuestionOutputSchema = contract<AnswerQuestionJobOutput>()(
+  z.object({
+    answer: z.string(),
+    confidence: confidenceSchema,
+    citations: z.array(citationSchema),
+    gaps: z.array(gapSchema).optional(),
+    flowId: z.string().optional(),
+    flowSelectionRequired: flowSelectionRequiredSchema.optional(),
+    outOfScope: outOfScopeSchema.optional(),
+    trace: answerTraceSchema.optional(),
+    // The condensed standalone form of a follow-up (#239). Declared so the broker
+    // preserves it on completion for the API to persist on the question log.
+    standaloneQuestion: z.string().optional(),
+    // The reconciler's verdict when the job was given candidates to reconcile
+    // against (questionnaire trust). Declared so the broker preserves it on
+    // completion for the API to persist.
+    reuse: reconcileResultSchema.optional(),
+    // Stage-1 adjudication of importedAnswer against the answer this job just
+    // produced from the KB. Declared so the broker preserves it on completion for
+    // the API to persist. Absent when the job carried no imported answer.
+    importVerdict: z.enum(["confirmed", "divergent", "uncovered"]).optional()
+  })
+);
 
-export const summarizeGapInputSchema = z.object({
-  provider: providerSchema,
-  questions: z.array(z.string()),
-  citedSections: z.array(citationSchema),
-  expectedOutput: z.literal("gap_summary")
-}) satisfies z.ZodType<ProviderInput<CoreSummarizeGapJobInput>>;
-export const summarizeGapOutputSchema = z.object({
-  summary: z.string(),
-  priority: z.number(),
-  rationale: z.string()
-}) satisfies z.ZodType<SummarizeGapJobOutput>;
+export const summarizeGapInputSchema = contract<ProviderInput<CoreSummarizeGapJobInput>>()(
+  z.object({
+    provider: providerSchema,
+    questions: z.array(z.string()),
+    citedSections: z.array(citationSchema),
+    expectedOutput: z.literal("gap_summary")
+  })
+);
+export const summarizeGapOutputSchema = contract<SummarizeGapJobOutput>()(
+  z.object({
+    summary: z.string(),
+    priority: z.number(),
+    rationale: z.string()
+  })
+);
 
 // A git source url the watcher will hand to `git clone`. Restricted to the
 // permitted transports (#285) so a caller crossing the POST /api/jobs boundary
@@ -216,31 +292,35 @@ const sourceDescriptorSchema = z.discriminatedUnion("kind", [
 // Mirrors @magpie/core SourceMapUpdate — an optional, agent-contributed
 // source-map hint on source-grounded outputs. Must be on the schema or the
 // broker strips it from the completed output before the API can apply it.
-const sourceMapUpdateSchema = z.object({
-  sourceId: z.string(),
-  topic: z.string(),
-  paths: z.array(z.string().min(1)).min(1),
-  description: z.string(),
-  observedSha: z.string().optional()
-}) satisfies z.ZodType<SourceMapUpdate>;
+const sourceMapUpdateSchema = contract<SourceMapUpdate>()(
+  z.object({
+    sourceId: z.string(),
+    topic: z.string(),
+    paths: z.array(z.string().min(1)).min(1),
+    description: z.string(),
+    observedSha: z.string().optional()
+  })
+);
 const mapUpdatesField = z.array(sourceMapUpdateSchema).optional();
 // Mirrors @magpie/core ProvenanceClaim — per-claim source grounding on draft
 // outputs (#214). Must be on the schema or the broker strips it from the
 // completed output before the API can persist it (same trap as mapUpdates).
-const provenanceClaimSchema = z.object({
-  claim: z.string().min(1),
-  anchor: z.string().optional(),
-  sources: z
-    .array(
-      z.object({
-        sourceId: z.string(),
-        path: z.string().optional(),
-        lines: z.string().optional(),
-        url: z.string().optional()
-      })
-    )
-    .min(1)
-}) satisfies z.ZodType<ProvenanceClaim>;
+const provenanceClaimSchema = contract<ProvenanceClaim>()(
+  z.object({
+    claim: z.string().min(1),
+    anchor: z.string().optional(),
+    sources: z
+      .array(
+        z.object({
+          sourceId: z.string(),
+          path: z.string().optional(),
+          lines: z.string().optional(),
+          url: z.string().optional()
+        })
+      )
+      .min(1)
+  })
+);
 const provenanceField = z.array(provenanceClaimSchema).optional();
 // Mirrors @magpie/core OpenPullRequestContext. status reuses the core
 // PROPOSAL_STATUSES tuple so the enum can't drift from the type it validates.
@@ -250,75 +330,83 @@ const openPullRequestContextSchema = z.object({
   targetPath: z.string().optional(),
   status: z.enum(PROPOSAL_STATUSES)
 });
-export const draftMarkdownProposalInputSchema = z.object({
-  provider: providerSchema,
-  gapSummaries: z.array(z.string()),
-  triggeringQuestions: z.array(z.string()),
-  evidence: z.array(citationSchema),
-  // Why a prior merged proposal failed to close these gaps, carried on a
-  // resubmission so the drafter can address the specific shortfall (see the
-  // gap `note` set by verify_gap_closure).
-  resubmissionNotes: z.array(z.string()).optional(),
-  // Mirrors @magpie/core SourceDescriptor. References only — no file content; the
-  // watcher resolves git/local to traversable workspaces. Same schema the seed
-  // input uses.
-  sources: z.array(sourceDescriptorSchema),
-  // The drafter's awareness of the flow's in-flight work, so it can avoid
-  // duplicating a doc already being drafted or in an open PR.
-  openPullRequests: z.array(openPullRequestContextSchema).optional(),
-  destinationId: z.string().optional(),
-  targetPath: z.string().optional(),
-  // Read back off the stored job input to link the created proposal to its
-  // triggering questions; must be on the schema or the broker strips it.
-  triggeringQuestionIds: z.array(z.string()).optional(),
-  gapClusterId: z.string().optional(),
-  // Set when this draft regenerates an already-published proposal whose PR went
-  // stale; the completion handler updates that proposal in place and re-publishes.
-  regenerateProposalId: z.string().optional(),
-  // Attribution only (read back off the stored job row for per-flow / per-schedule
-  // cost); the drafter ignores it. Must be on the schema or the broker strips it.
-  // Absent on the unscoped/default flow or when the flow cannot be resolved.
-  flowId: z.string().optional(),
-  expectedOutput: z.literal("markdown_proposal")
-}) satisfies z.ZodType<ProviderInput<CoreDraftMarkdownProposalJobInput>>;
-export const draftMarkdownProposalOutputSchema = z.object({
-  title: z.string(),
-  targetPath: z.string(),
-  markdown: z.string(),
-  rationale: z.string(),
-  mapUpdates: mapUpdatesField,
-  // #213: source-uncovered points, omitted from the markdown by contract. Must be
-  // declared here or the broker strips it before the completion handler reads it.
-  uncoveredPoints: z.array(z.string()).optional(),
-  provenance: provenanceField
-}) satisfies z.ZodType<DraftMarkdownProposalJobOutput>;
+export const draftMarkdownProposalInputSchema = contract<SourceGroundedInput<CoreDraftMarkdownProposalJobInput>>()(
+  z.object({
+    provider: providerSchema,
+    gapSummaries: z.array(z.string()),
+    triggeringQuestions: z.array(z.string()),
+    evidence: z.array(citationSchema),
+    // Why a prior merged proposal failed to close these gaps, carried on a
+    // resubmission so the drafter can address the specific shortfall (see the
+    // gap `note` set by verify_gap_closure).
+    resubmissionNotes: z.array(z.string()).optional(),
+    // Mirrors @magpie/core SourceDescriptor. References only — no file content; the
+    // watcher resolves git/local to traversable workspaces. Same schema the seed
+    // input uses.
+    sources: z.array(sourceDescriptorSchema),
+    // The drafter's awareness of the flow's in-flight work, so it can avoid
+    // duplicating a doc already being drafted or in an open PR.
+    openPullRequests: z.array(openPullRequestContextSchema).optional(),
+    destinationId: z.string().optional(),
+    targetPath: z.string().optional(),
+    // Read back off the stored job input to link the created proposal to its
+    // triggering questions; must be on the schema or the broker strips it.
+    triggeringQuestionIds: z.array(z.string()).optional(),
+    gapClusterId: z.string().optional(),
+    // Set when this draft regenerates an already-published proposal whose PR went
+    // stale; the completion handler updates that proposal in place and re-publishes.
+    regenerateProposalId: z.string().optional(),
+    // Attribution only (read back off the stored job row for per-flow / per-schedule
+    // cost); the drafter ignores it. Must be on the schema or the broker strips it.
+    // Absent on the unscoped/default flow or when the flow cannot be resolved.
+    flowId: z.string().optional(),
+    expectedOutput: z.literal("markdown_proposal")
+  })
+);
+export const draftMarkdownProposalOutputSchema = contract<DraftMarkdownProposalJobOutput>()(
+  z.object({
+    title: z.string(),
+    targetPath: z.string(),
+    markdown: z.string(),
+    rationale: z.string(),
+    mapUpdates: mapUpdatesField,
+    // #213: source-uncovered points, omitted from the markdown by contract. Must be
+    // declared here or the broker strips it before the completion handler reads it.
+    uncoveredPoints: z.array(z.string()).optional(),
+    provenance: provenanceField
+  })
+);
 
-export const draftSeedDocumentInputSchema = z.object({
-  provider: providerSchema,
-  flowId: z.string(),
-  title: z.string().optional(),
-  targetPath: z.string().optional(),
-  coverage: z.array(z.string()),
-  questions: z.array(z.string()).optional(),
-  sources: z.array(sourceDescriptorSchema),
-  destinationId: z.string().optional(),
-  // Run-scoped shaping from the seed plan; seedPlanId is read back at completion
-  // to link the proposal (triggeringQuestionIds precedent) — must be on the
-  // schema or the broker strips it.
-  charter: z.string().optional(),
-  persona: z.string().optional(),
-  seedPlanId: z.string().optional()
-}) satisfies z.ZodType<ProviderInput<CoreDraftSeedDocumentJobInput>>;
-export const draftSeedDocumentOutputSchema = z.object({
-  title: z.string(),
-  targetPath: z.string(),
-  markdown: z.string(),
-  rationale: z.string(),
-  mapUpdates: mapUpdatesField,
-  // #213: see draftMarkdownProposalOutputSchema.uncoveredPoints.
-  uncoveredPoints: z.array(z.string()).optional(),
-  provenance: provenanceField
-}) satisfies z.ZodType<DraftSeedDocumentJobOutput>;
+export const draftSeedDocumentInputSchema = contract<SourceGroundedInput<CoreDraftSeedDocumentJobInput>>()(
+  z.object({
+    provider: providerSchema,
+    flowId: z.string(),
+    title: z.string().optional(),
+    targetPath: z.string().optional(),
+    coverage: z.array(z.string()),
+    questions: z.array(z.string()).optional(),
+    sources: z.array(sourceDescriptorSchema),
+    destinationId: z.string().optional(),
+    // Run-scoped shaping from the seed plan; seedPlanId is read back at completion
+    // to link the proposal (triggeringQuestionIds precedent) — must be on the
+    // schema or the broker strips it.
+    charter: z.string().optional(),
+    persona: z.string().optional(),
+    seedPlanId: z.string().optional()
+  })
+);
+export const draftSeedDocumentOutputSchema = contract<DraftSeedDocumentJobOutput>()(
+  z.object({
+    title: z.string(),
+    targetPath: z.string(),
+    markdown: z.string(),
+    rationale: z.string(),
+    mapUpdates: mapUpdatesField,
+    // #213: see draftMarkdownProposalOutputSchema.uncoveredPoints.
+    uncoveredPoints: z.array(z.string()).optional(),
+    provenance: provenanceField
+  })
+);
 
 const existingDocumentContextSchema = z.object({
   path: z.string(),
@@ -327,77 +415,91 @@ const existingDocumentContextSchema = z.object({
 });
 // The seed item shape as the model RETURNS it: coverage may be empty in raw model
 // output (a human edits before approving, and plan approval enforces non-empty).
-const seedItemSchema = z.object({
-  title: z.string().optional(),
-  targetPath: z.string().optional(),
-  coverage: z.array(z.string()),
-  questions: z.array(z.string()).optional()
-}) satisfies z.ZodType<SeedItem>;
-export const outlineFlowSeedInputSchema = z.object({
-  provider: providerSchema,
-  flowId: z.string(),
-  origin: z.enum(["manual", "auto"]),
-  notes: z.string().optional(),
-  sources: z.array(sourceDescriptorSchema),
-  existingDocuments: z.array(existingDocumentContextSchema),
-  persona: z.string().optional(),
-  charter: z.string().optional(),
-  routingSummary: z.string().optional()
-}) satisfies z.ZodType<ProviderInput<CoreOutlineFlowSeedJobInput>>;
-export const outlineFlowSeedOutputSchema = z.object({
-  items: z.array(seedItemSchema),
-  rationale: z.string(),
-  // Proposed only when the flow lacked them; must be declared or the broker
-  // strips them before the plan-creation handler reads them.
-  proposedCharter: z.string().optional(),
-  proposedPersona: z.string().optional(),
-  mapUpdates: mapUpdatesField
-}) satisfies z.ZodType<OutlineFlowSeedJobOutput>;
-
-export const reviseSeedPlanInputSchema = z.object({
-  provider: providerSchema,
-  flowId: z.string(),
-  planId: z.string(),
-  instruction: z.string(),
-  currentPlan: z.object({
-    items: z.array(seedItemSchema),
-    charter: z.string().optional(),
-    persona: z.string().optional(),
-    rationale: z.string()
+const seedItemSchema = contract<SeedItem>()(
+  z.object({
+    title: z.string().optional(),
+    targetPath: z.string().optional(),
+    coverage: z.array(z.string()),
+    questions: z.array(z.string()).optional()
   })
-}) satisfies z.ZodType<ProviderInput<CoreReviseSeedPlanJobInput>>;
-export const reviseSeedPlanOutputSchema = z.object({
-  items: z.array(seedItemSchema),
-  rationale: z.string(),
-  // Returned only when the instruction changed them; declared so the broker does
-  // not strip them before the completion handler reads them.
-  charter: z.string().optional(),
-  persona: z.string().optional()
-}) satisfies z.ZodType<ReviseSeedPlanJobOutput>;
+);
+export const outlineFlowSeedInputSchema = contract<SourceGroundedInput<CoreOutlineFlowSeedJobInput>>()(
+  z.object({
+    provider: providerSchema,
+    flowId: z.string(),
+    origin: z.enum(["manual", "auto"]),
+    notes: z.string().optional(),
+    sources: z.array(sourceDescriptorSchema),
+    existingDocuments: z.array(existingDocumentContextSchema),
+    persona: z.string().optional(),
+    charter: z.string().optional(),
+    routingSummary: z.string().optional()
+  })
+);
+export const outlineFlowSeedOutputSchema = contract<OutlineFlowSeedJobOutput>()(
+  z.object({
+    items: z.array(seedItemSchema),
+    rationale: z.string(),
+    // Proposed only when the flow lacked them; must be declared or the broker
+    // strips them before the plan-creation handler reads them.
+    proposedCharter: z.string().optional(),
+    proposedPersona: z.string().optional(),
+    mapUpdates: mapUpdatesField
+  })
+);
 
-export const foldMarkdownProposalInputSchema = z.object({
-  provider: providerSchema,
-  survivorProposalId: z.string(),
-  rivalProposalId: z.string(),
-  targetPath: z.string(),
-  survivorMarkdown: z.string(),
-  rivalMarkdown: z.string(),
-  rivalGapSummaries: z.array(z.string()),
-  rivalEvidence: z.array(citationSchema),
-  // #214 phase 3: both parents' claim provenance, so the fold can re-attribute
-  // every surviving claim to the folded document's headings.
-  survivorProvenance: provenanceField,
-  rivalProvenance: provenanceField,
-  expectedOutput: z.literal("folded_markdown")
-}) satisfies z.ZodType<ProviderInput<CoreFoldMarkdownProposalJobInput>>;
-export const foldMarkdownProposalOutputSchema = z.object({
-  markdown: z.string(),
-  rationale: z.string(),
-  // #214 phase 3: the merged document's provenance (union of the parents',
-  // re-anchored). Must be on the schema or the broker strips it before the
-  // API can rewrite the survivor's provenance event.
-  provenance: provenanceField
-}) satisfies z.ZodType<FoldMarkdownProposalJobOutput>;
+export const reviseSeedPlanInputSchema = contract<ProviderInput<CoreReviseSeedPlanJobInput>>()(
+  z.object({
+    provider: providerSchema,
+    flowId: z.string(),
+    planId: z.string(),
+    instruction: z.string(),
+    currentPlan: z.object({
+      items: z.array(seedItemSchema),
+      charter: z.string().optional(),
+      persona: z.string().optional(),
+      rationale: z.string()
+    })
+  })
+);
+export const reviseSeedPlanOutputSchema = contract<ReviseSeedPlanJobOutput>()(
+  z.object({
+    items: z.array(seedItemSchema),
+    rationale: z.string(),
+    // Returned only when the instruction changed them; declared so the broker does
+    // not strip them before the completion handler reads them.
+    charter: z.string().optional(),
+    persona: z.string().optional()
+  })
+);
+
+export const foldMarkdownProposalInputSchema = contract<ProviderInput<CoreFoldMarkdownProposalJobInput>>()(
+  z.object({
+    provider: providerSchema,
+    survivorProposalId: z.string(),
+    rivalProposalId: z.string(),
+    targetPath: z.string(),
+    survivorMarkdown: z.string(),
+    rivalMarkdown: z.string(),
+    rivalGapSummaries: z.array(z.string()),
+    rivalEvidence: z.array(citationSchema),
+    // #214 phase 3: both parents' claim provenance, so the fold can re-attribute
+    // every surviving claim to the folded document's headings.
+    survivorProvenance: provenanceField,
+    rivalProvenance: provenanceField,
+    expectedOutput: z.literal("folded_markdown")
+  })
+);
+export const foldMarkdownProposalOutputSchema = contract<FoldMarkdownProposalJobOutput>()(
+  z.object({
+    markdown: z.string(),
+    rationale: z.string(),
+    // #214 phase 3: the merged document's provenance (union of the parents',
+    // re-anchored). Must be on the schema or the broker strips it before the
+    // API can rewrite the survivor's provenance event.
+    provenance: provenanceField
+  })
+);
 
 // A single-PR comment as a github job (the API holds no GitHub token, so commenting
 // must run in the watcher). crosslink_pull_requests can't serve here — it needs two
@@ -489,82 +591,98 @@ const sourceChangeFileSchema = z.object({
   status: z.enum(["added", "modified", "deleted", "renamed", "other"]),
   diff: z.string()
 });
-export const syncSourceChangesGeneratePlanInputSchema = z.object({
-  provider: providerSchema,
-  flowId: z.string().optional(),
-  destinationId: z.string().optional(),
-  sourceId: z.string(),
-  sourceName: z.string(),
-  fromSha: z.string(),
-  toSha: z.string(),
-  changes: z.array(sourceChangeFileSchema),
-  totalChangedFileCount: z.number().int().nonnegative().optional(),
-  changedFilesTruncated: z.boolean().optional(),
-  candidateDocuments: z.array(documentSchema),
-  expectedOutput: z.literal("maintenance_plan")
-}) satisfies z.ZodType<ProviderInput<CoreSourceChangeSyncJobInput>>;
-export const syncSourceChangesGeneratePlanOutputSchema = z.object({
-  summary: z.string(),
-  operations: z.array(maintenanceOperationSchema),
-  rationale: z.string()
-}) satisfies z.ZodType<MaintenancePlan>;
+export const syncSourceChangesGeneratePlanInputSchema = contract<ProviderInput<CoreSourceChangeSyncJobInput>>()(
+  z.object({
+    provider: providerSchema,
+    flowId: z.string().optional(),
+    destinationId: z.string().optional(),
+    sourceId: z.string(),
+    sourceName: z.string(),
+    fromSha: z.string(),
+    toSha: z.string(),
+    changes: z.array(sourceChangeFileSchema),
+    totalChangedFileCount: z.number().int().nonnegative().optional(),
+    changedFilesTruncated: z.boolean().optional(),
+    candidateDocuments: z.array(documentSchema),
+    expectedOutput: z.literal("maintenance_plan")
+  })
+);
+export const syncSourceChangesGeneratePlanOutputSchema = contract<MaintenancePlan>()(
+  z.object({
+    summary: z.string(),
+    operations: z.array(maintenanceOperationSchema),
+    rationale: z.string()
+  })
+);
 
-const sourceConflictPositionSchema = z.object({
-  sourceId: z.string(),
-  path: z.string(),
-  statement: z.string(),
-  lines: z.string().optional()
-}) satisfies z.ZodType<SourceConflictPosition>;
+const sourceConflictPositionSchema = contract<SourceConflictPosition>()(
+  z.object({
+    sourceId: z.string(),
+    path: z.string(),
+    statement: z.string(),
+    lines: z.string().optional()
+  })
+);
 
-const detectedSourceConflictSchema = z.object({
-  topic: z.string(),
-  summary: z.string(),
-  anchor: z.string(),
-  claim: z.string(),
-  // Fewer than two positions is not a conflict — it is an unprovable claim.
-  // Accepting one would route a correctable defect into the register, where
-  // nothing ever fixes it, and would leave the document annotated forever.
-  positions: z.array(sourceConflictPositionSchema).min(2)
-}) satisfies z.ZodType<DetectedSourceConflict>;
+const detectedSourceConflictSchema = contract<DetectedSourceConflict>()(
+  z.object({
+    topic: z.string(),
+    summary: z.string(),
+    anchor: z.string(),
+    claim: z.string(),
+    // Fewer than two positions is not a conflict — it is an unprovable claim.
+    // Accepting one would route a correctable defect into the register, where
+    // nothing ever fixes it, and would leave the document annotated forever.
+    positions: z.array(sourceConflictPositionSchema).min(2)
+  })
+);
 
-const knownSourceConflictSchema = z.object({
-  id: z.string(),
-  topic: z.string(),
-  summary: z.string()
-}) satisfies z.ZodType<KnownSourceConflict>;
+const knownSourceConflictSchema = contract<KnownSourceConflict>()(
+  z.object({
+    id: z.string(),
+    topic: z.string(),
+    summary: z.string()
+  })
+);
 
-const resolvedSourceConflictSchema = z.object({
-  id: z.string(),
-  agreedStatement: z.string()
-}) satisfies z.ZodType<ResolvedSourceConflict>;
+const resolvedSourceConflictSchema = contract<ResolvedSourceConflict>()(
+  z.object({
+    id: z.string(),
+    agreedStatement: z.string()
+  })
+);
 
-export const verifyDocumentInputSchema = z.object({
-  provider: providerSchema,
-  path: z.string(),
-  content: z.string(),
-  sources: z.array(sourceDescriptorSchema),
-  // #214 phase 2: advisory per-claim provenance folded from the document's
-  // merged proposals. The agent checks these against their cited locations
-  // first; claims not listed here are re-derived from scratch as before.
-  citedClaims: z.array(provenanceClaimSchema).optional(),
-  // Attribution only (read back off the stored job row for per-flow / per-schedule
-  // cost); the verify runner ignores it. Must be on the schema or the broker
-  // strips it. Absent on the unscoped/default flow.
-  flowId: z.string().optional(),
-  // The document's open conflicts, so the agent reports each as still-conflicted
-  // or resolved rather than re-raising it as novel (which would re-annotate).
-  knownConflicts: z.array(knownSourceConflictSchema).optional()
-}) satisfies z.ZodType<ProviderInput<CoreVerifyDocumentJobInput>>;
-export const verifyDocumentOutputSchema = z.object({
-  verdict: z.enum(["healthy", "unprovable"]),
-  claims: z.array(z.object({ claim: z.string(), reason: z.string() })),
-  // Disagreements between the SOURCES themselves. Kept separate from `claims`
-  // because they route to the conflict register, never to correct_document —
-  // correcting one would silently pick a winner between two sources.
-  conflicts: z.array(detectedSourceConflictSchema).optional(),
-  resolvedConflicts: z.array(resolvedSourceConflictSchema).optional(),
-  mapUpdates: mapUpdatesField
-}) satisfies z.ZodType<VerifyDocumentJobOutput>;
+export const verifyDocumentInputSchema = contract<SourceGroundedInput<CoreVerifyDocumentJobInput>>()(
+  z.object({
+    provider: providerSchema,
+    path: z.string(),
+    content: z.string(),
+    sources: z.array(sourceDescriptorSchema),
+    // #214 phase 2: advisory per-claim provenance folded from the document's
+    // merged proposals. The agent checks these against their cited locations
+    // first; claims not listed here are re-derived from scratch as before.
+    citedClaims: z.array(provenanceClaimSchema).optional(),
+    // Attribution only (read back off the stored job row for per-flow / per-schedule
+    // cost); the verify runner ignores it. Must be on the schema or the broker
+    // strips it. Absent on the unscoped/default flow.
+    flowId: z.string().optional(),
+    // The document's open conflicts, so the agent reports each as still-conflicted
+    // or resolved rather than re-raising it as novel (which would re-annotate).
+    knownConflicts: z.array(knownSourceConflictSchema).optional()
+  })
+);
+export const verifyDocumentOutputSchema = contract<VerifyDocumentJobOutput>()(
+  z.object({
+    verdict: z.enum(["healthy", "unprovable"]),
+    claims: z.array(z.object({ claim: z.string(), reason: z.string() })),
+    // Disagreements between the SOURCES themselves. Kept separate from `claims`
+    // because they route to the conflict register, never to correct_document —
+    // correcting one would silently pick a winner between two sources.
+    conflicts: z.array(detectedSourceConflictSchema).optional(),
+    resolvedConflicts: z.array(resolvedSourceConflictSchema).optional(),
+    mapUpdates: mapUpdatesField
+  })
+);
 
 // Stage 2 of ingesting completed questionnaires
 // (docs/superpowers/specs/2026-08-11-questionnaire-ingestion-design.md D5): a
@@ -650,101 +768,123 @@ export const mapQuestionnaireColumnsOutputSchema = z.object({
     .max(20)
 });
 
-export const correctDocumentInputSchema = z.object({
-  provider: providerSchema,
-  path: z.string(),
-  content: z.string(),
-  claims: z.array(z.object({ claim: z.string(), reason: z.string() })),
-  sources: z.array(sourceDescriptorSchema),
-  destinationId: z.string().optional(),
-  flowId: z.string().optional()
-}) satisfies z.ZodType<ProviderInput<CoreCorrectDocumentJobInput>>;
-export const correctDocumentOutputSchema = z.object({
-  markdown: z.string(),
-  rationale: z.string(),
-  mapUpdates: mapUpdatesField,
-  // #214 phase 3: the corrected claims this diff introduces or rewrites, so the
-  // corrective proposal is a provenance event too.
-  provenance: provenanceField
-}) satisfies z.ZodType<CorrectDocumentJobOutput>;
-
-const changesetChangeSchema = z.object({
-  path: z.string(),
-  content: z.string().optional(),
-  delete: z.boolean().optional()
-}) satisfies z.ZodType<ChangesetChange>;
-
-export const dedupeDocumentsInputSchema = z.object({
-  provider: providerSchema,
-  path: z.string(),
-  content: z.string(),
-  neighbours: z.array(z.object({ path: z.string(), content: z.string() })),
-  destinationId: z.string().optional(),
-  flowId: z.string().optional()
-}) satisfies z.ZodType<ProviderInput<CoreDedupeDocumentsJobInput>>;
-export const dedupeDocumentsOutputSchema = z.object({
-  duplicate: z.boolean(),
-  rationale: z.string(),
-  primaryPath: z.string().optional(),
-  changeset: z.array(changesetChangeSchema).optional()
-}) satisfies z.ZodType<DedupeDocumentsJobOutput>;
-
-export const splitDocumentInputSchema = z.object({
-  provider: providerSchema,
-  path: z.string(),
-  content: z.string(),
-  neighbours: z.array(z.object({ path: z.string(), content: z.string() })),
-  destinationId: z.string().optional(),
-  flowId: z.string().optional()
-}) satisfies z.ZodType<ProviderInput<CoreSplitDocumentJobInput>>;
-export const splitDocumentOutputSchema = z.object({
-  split: z.boolean(),
-  rationale: z.string(),
-  primaryPath: z.string().optional(),
-  changeset: z.array(changesetChangeSchema).optional()
-}) satisfies z.ZodType<SplitDocumentJobOutput>;
-
-export const improveDocumentInputSchema = z.object({
-  provider: providerSchema,
-  path: z.string(),
-  content: z.string(),
-  sources: z.array(sourceDescriptorSchema),
-  destinationId: z.string().optional(),
-  flowId: z.string().optional()
-}) satisfies z.ZodType<ProviderInput<CoreImproveDocumentJobInput>>;
-export const improveDocumentOutputSchema = z.union([
-  // The improved: false branch carries no provenance by design — a no-op
-  // improvement grounds no new claims, so a stray field is stripped, not kept.
+export const correctDocumentInputSchema = contract<SourceGroundedInput<CoreCorrectDocumentJobInput>>()(
   z.object({
-    improved: z.literal(false),
-    rationale: z.string(),
-    markdown: z.string().optional(),
-    mapUpdates: mapUpdatesField
-  }),
-  // #214 phase 3: provenance for the claims the rewritten markdown introduces
-  // or materially changes.
+    provider: providerSchema,
+    path: z.string(),
+    content: z.string(),
+    claims: z.array(z.object({ claim: z.string(), reason: z.string() })),
+    sources: z.array(sourceDescriptorSchema),
+    destinationId: z.string().optional(),
+    flowId: z.string().optional()
+  })
+);
+export const correctDocumentOutputSchema = contract<CorrectDocumentJobOutput>()(
   z.object({
-    improved: z.literal(true),
     markdown: z.string(),
     rationale: z.string(),
     mapUpdates: mapUpdatesField,
+    // #214 phase 3: the corrected claims this diff introduces or rewrites, so the
+    // corrective proposal is a provenance event too.
     provenance: provenanceField
   })
-]) satisfies z.ZodType<ImproveDocumentJobOutput>;
+);
 
-export const foldChangesetProposalInputSchema = z.object({
-  provider: providerSchema,
-  survivorProposalId: z.string(),
-  rivalProposalId: z.string(),
-  survivorChangeset: z.array(changesetChangeSchema),
-  rivalChangeset: z.array(changesetChangeSchema),
-  sharedPaths: z.array(z.string()),
-  expectedOutput: z.literal("folded_changeset")
-}) satisfies z.ZodType<ProviderInput<CoreFoldChangesetProposalJobInput>>;
-export const foldChangesetProposalOutputSchema = z.object({
-  changeset: z.array(changesetChangeSchema),
-  rationale: z.string()
-}) satisfies z.ZodType<FoldChangesetProposalJobOutput>;
+const changesetChangeSchema = contract<ChangesetChange>()(
+  z.object({
+    path: z.string(),
+    content: z.string().optional(),
+    delete: z.boolean().optional()
+  })
+);
+
+export const dedupeDocumentsInputSchema = contract<ProviderInput<CoreDedupeDocumentsJobInput>>()(
+  z.object({
+    provider: providerSchema,
+    path: z.string(),
+    content: z.string(),
+    neighbours: z.array(z.object({ path: z.string(), content: z.string() })),
+    destinationId: z.string().optional(),
+    flowId: z.string().optional()
+  })
+);
+export const dedupeDocumentsOutputSchema = contract<DedupeDocumentsJobOutput>()(
+  z.object({
+    duplicate: z.boolean(),
+    rationale: z.string(),
+    primaryPath: z.string().optional(),
+    changeset: z.array(changesetChangeSchema).optional()
+  })
+);
+
+export const splitDocumentInputSchema = contract<ProviderInput<CoreSplitDocumentJobInput>>()(
+  z.object({
+    provider: providerSchema,
+    path: z.string(),
+    content: z.string(),
+    neighbours: z.array(z.object({ path: z.string(), content: z.string() })),
+    destinationId: z.string().optional(),
+    flowId: z.string().optional()
+  })
+);
+export const splitDocumentOutputSchema = contract<SplitDocumentJobOutput>()(
+  z.object({
+    split: z.boolean(),
+    rationale: z.string(),
+    primaryPath: z.string().optional(),
+    changeset: z.array(changesetChangeSchema).optional()
+  })
+);
+
+export const improveDocumentInputSchema = contract<SourceGroundedInput<CoreImproveDocumentJobInput>>()(
+  z.object({
+    provider: providerSchema,
+    path: z.string(),
+    content: z.string(),
+    sources: z.array(sourceDescriptorSchema),
+    destinationId: z.string().optional(),
+    flowId: z.string().optional()
+  })
+);
+export const improveDocumentOutputSchema = contract<ImproveDocumentJobOutput>()(
+  z.union([
+    // The improved: false branch carries no provenance by design — a no-op
+    // improvement grounds no new claims, so a stray field is stripped, not kept.
+    z.object({
+      improved: z.literal(false),
+      rationale: z.string(),
+      markdown: z.string().optional(),
+      mapUpdates: mapUpdatesField
+    }),
+    // #214 phase 3: provenance for the claims the rewritten markdown introduces
+    // or materially changes.
+    z.object({
+      improved: z.literal(true),
+      markdown: z.string(),
+      rationale: z.string(),
+      mapUpdates: mapUpdatesField,
+      provenance: provenanceField
+    })
+  ])
+);
+
+export const foldChangesetProposalInputSchema = contract<ProviderInput<CoreFoldChangesetProposalJobInput>>()(
+  z.object({
+    provider: providerSchema,
+    survivorProposalId: z.string(),
+    rivalProposalId: z.string(),
+    survivorChangeset: z.array(changesetChangeSchema),
+    rivalChangeset: z.array(changesetChangeSchema),
+    sharedPaths: z.array(z.string()),
+    expectedOutput: z.literal("folded_changeset")
+  })
+);
+export const foldChangesetProposalOutputSchema = contract<FoldChangesetProposalJobOutput>()(
+  z.object({
+    changeset: z.array(changesetChangeSchema),
+    rationale: z.string()
+  })
+);
 
 export const refreshFlowSnapshotInputSchema = z.object({});
 export const refreshFlowSnapshotOutputSchema = z.object({
@@ -806,11 +946,16 @@ export const sourceChangeSyncOutputSchema = z.object({
 
 export const correctnessPatrolInputSchema = z.object({ flowId: z.string().optional() });
 // Per tick the patrol records exactly one run; the output reports its id and how
-// many documents it checked (0 when the flow has no indexed documents yet).
+// many documents it selected (0 when the flow has no indexed documents yet). The
+// tick ENQUEUES its verify_document checks and returns without waiting, so
+// `findingCount` counts only verdicts already in hand at return (normally 0) and
+// `pendingVerifyCount` the verifies still to answer — their findings land on the
+// run as each completes.
 export const correctnessPatrolOutputSchema = z.object({
   runId: z.string(),
   selectedCount: z.number().int(),
-  findingCount: z.number().int()
+  findingCount: z.number().int(),
+  pendingVerifyCount: z.number().int().optional()
 });
 
 export const editorialPatrolInputSchema = z.object({ flowId: z.string().optional() });
@@ -832,9 +977,13 @@ export const seedBootstrapOutputSchema = z.object({
 });
 
 export const verifyGapClosureInputSchema = z.object({ proposalId: z.string() });
+// `pending` is the orchestrator's normal first answer: it enqueued the re-asks and
+// returned without waiting for them. No verdict exists yet — the re-asks'
+// completions resume the verification and record one (so `perQuestion` is empty).
+// The three settled values are the verdicts persisted on proposals.closure_status.
 export const verifyGapClosureOutputSchema = z.object({
   proposalId: z.string(),
-  closureStatus: z.enum(["verified_closed", "reopened", "needs_attention"]),
+  closureStatus: z.enum(["verified_closed", "reopened", "needs_attention", "pending"]),
   perQuestion: z.array(
     z.object({
       questionId: z.string(),
@@ -864,8 +1013,10 @@ export const crosslinkPullRequestsOutputSchema = z.object({
 // id — NOT in any domain inputSchema — and attached to the JobView at claim time
 // (see JobRepairContext in types.ts). Kept here so the store and the API share
 // one validated shape.
-export const jobRepairContextSchema = z.object({
-  attempt: z.number().int().positive(),
-  priorOutput: z.unknown(),
-  issues: z.array(z.object({ path: z.string(), message: z.string() }))
-}) satisfies z.ZodType<JobRepairContext>;
+export const jobRepairContextSchema = contract<JobRepairContext>()(
+  z.object({
+    attempt: z.number().int().positive(),
+    priorOutput: z.unknown(),
+    issues: z.array(z.object({ path: z.string(), message: z.string() }))
+  })
+);

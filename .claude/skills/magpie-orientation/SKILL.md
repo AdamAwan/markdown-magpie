@@ -42,14 +42,16 @@ Implications you must design around:
   `AI_EXECUTION_MODE` was removed in the queue-only migration.
 - **A watcher runs one job at a time** (`apps/watcher/src/worker-loop.ts`): claim one job,
   heartbeat, report exactly one terminal outcome.
-- **Maintenance orchestrators need ≥2 watchers.** A maintenance job (`verify_gap_closure`,
-  the patrols, the reconciler) claims a watcher, then *blocks* in an API callback while the
-  API bounded-waits on the follow-up AI jobs it enqueues. Since a watcher runs one job at a
-  time, those follow-ups can only be answered by a **second** watcher — with one watcher
-  the orchestration self-starves and times out. `verify_gap_closure` handles that timeout
-  safely (an incomplete re-ask is an infra failure that retries, never a false `still_open`
-  — #150), and the console warns when only one watcher is connected. Run two locally (see
-  the **run-magpie** skill).
+- **Orchestrators never wait on a job — one watcher is enough.** A maintenance job
+  (`verify_gap_closure`, the patrols, the reconciler) claims a watcher and POSTs a thin API
+  endpoint, which **enqueues** its follow-up AI jobs and **returns**. The orchestration
+  resumes from the follow-up job's completion, in the completion dispatcher (`completeJob`):
+  an `orchestration_followups` row keyed by the follow-up's job id says which orchestration
+  to continue. There is no bounded wait and no "create a job and wait for it" helper — do
+  not add one (it would hold the claiming watcher in its callback, so the follow-up could
+  only run on a *second* watcher: the self-starve this design removed). `verify_gap_closure`
+  only ever derives a verdict from a re-ask that reached `completed`; an unanswered or
+  failed re-ask is *pending*, never a false `still_open` (#150).
 - **The watcher has no database access** — its package.json has no `@magpie/db`, `pg`, or
   `pg-boss` dependency. API and watcher share only (a) the HTTP API
   (`apps/watcher/src/http-client.ts` is the sole conduit: claim/heartbeat/complete/fail
@@ -316,8 +318,10 @@ non-repairable (source-grounded/agentic/patch-emitting) type, repair disabled
 (`MAGPIE_JOB_REPAIR_ENABLED=false`), or a repair run that is invalid *again* —
 **terminal-fails immediately** (`JobBroker.failTerminal`: straight to `failed` +
 dead-letter). Net: original + at most one repair, then terminal — no blind paid
-retries. Each decision emits a `job_repair` event; a successful completion warns
-on any undeclared fields the `z.object` output schema stripped.
+retries. Each decision emits a `job_repair` event. An output that is valid but
+carries a field the schema does **not declare** is a different case and is never
+repaired: production strips it and warns, tests/CI/e2e
+(`MAGPIE_JOB_OUTPUT_STRICT=true`) terminal-fail the job — see §5.
 
 **17 provider (AI) jobs** — queue `` `${type}__${provider}` ``:
 `answer_question`, `answer_question_batch`, `summarize_gap`, `draft_markdown_proposal`,
@@ -338,18 +342,25 @@ live ask via the interactive reserve.
 | `correctness_patrol` | maintenance | cron hourly | orchestrator → `POST /api/fix-patrol/run` |
 | `editorial_patrol` | maintenance | cron hourly | orchestrator → `POST /api/fix-patrol/improve/run` |
 | `verify_gap_closure` | maintenance | **on merge** (not cron) | orchestrator → `POST /api/proposals/:id/verify-closure` |
-| `seed_bootstrap` | maintenance | cron hourly | guard-check → `POST /api/flows/:id/seed-bootstrap/run` (enqueue-and-return, never bounded-waits) |
+| `seed_bootstrap` | maintenance | cron hourly | guard-check → `POST /api/flows/:id/seed-bootstrap/run` (enqueue-and-return) |
 | `refresh_flow_snapshot` | github | cron ~5 min (GitHub flows only) | leaf: polls PRs, reports mergeability |
 | `publish_proposal` | github / local-git (destination fan-out) | event | leaf: push branch, open PR |
 | `crosslink_pull_requests` | github | event | leaf: comment linking two PRs |
 | `comment_pull_request` | github | event | leaf: one PR comment |
 
 Maintenance jobs are *orchestrators*: they POST a thin API endpoint where the heavy
-orchestration lives, and the API bounded-waits on the tier-2 AI jobs it enqueues
-(`runJobToCompletion` — reuses in-flight jobs via `reuseKey`, and on timeout **cancels the
-orphaned job** so a late watcher never runs a paid generation nobody reads). A Postgres
-advisory lock keyed on (taskType, flowId) serialises overlapping runs
-(`apps/api/src/scheduling/run-lock.ts`). Cron tasks are registered **per flow** from
+orchestration lives. The endpoint **enqueues** its tier-2 AI jobs and returns — every one
+of the six is enqueue-and-return. Three of them have work left once a tier-2 job finishes,
+and resume from its completion (`completeJob` → the `continue…` handlers, keyed by an
+`orchestration_followups` row): `verify_gap_closure` commits its verdicts when the last
+`answer_question` re-ask completes; `process_gaps_to_pull_requests` applies the
+`reconcile_gap_clusters` verdicts and *then* drafts; `correctness_patrol` acts on each
+`verify_document` verdict and completes its `running` maintenance run when the last
+settles. An in-flight follow-up is reused rather than duplicated, a follow-up's result is
+always read (by its completion, or by the next tick if the continuation never ran), and a
+continuation is serialised, idempotent and replay-safe. A Postgres advisory lock keyed on
+(taskType, flowId) serialises overlapping runs (`apps/api/src/scheduling/run-lock.ts`;
+continuations use `withFlowRunLockWaiting`, which waits instead of skipping). Cron tasks are registered **per flow** from
 `flowTaskTemplates` in `apps/api/src/scheduling/task-registry.ts` and managed from the
 Schedules page.
 
@@ -384,7 +395,7 @@ apps/
 packages/
   core/       Shared domain types + provider interfaces (incl. ProvenanceClaim).
   auth/       Auth0 / Entra token validation + on-behalf-of helpers.
-  db/         SQL migrations (0001–0060; see the write-a-migration skill).
+  db/         SQL migrations (0001–0070; see the write-a-migration skill).
   git/        Git sync + PR adapters: ensureGitCheckout (blobless partial clones),
               PR status/mergeability polling, LocalGitProposalPublisher, checkout locks.
   jobs/       Job contracts: JOB_TYPES, capabilities, input/output schemas, queue
@@ -425,11 +436,27 @@ the watcher run a job?" → `apps/watcher/src/runners/`. "what does the API expo
 - **Commit AND push little and often** so there's always a reliable revert point.
 - **Update documentation** alongside code (`docs/`, README, this skill) when behavior
   or structure changes.
-- **Declare every output field on the job schema.** The broker validates completed
-  outputs against `packages/jobs/src/schemas.ts` and **strips undeclared fields** before
-  the API can persist them. Optional fields like `mapUpdates`, `uncoveredPoints`, and
-  `provenance` have all hit this trap — if a new output field "mysteriously disappears",
-  check the schema first.
+- **Declare every output field on the job schema.** Job outputs are parsed against
+  `packages/jobs/src/schemas.ts` (`z.object`), which **drops undeclared fields** — first
+  in the watcher (`parseJobOutput`, on the model's reply), then again at the API's
+  `completeJob`. `mapUpdates`, `uncoveredPoints`, `provenance` and the answer trace's
+  `routing.method` all shipped undeclared and vanished. That is now loud everywhere except
+  production (`docs/ai-jobs.md` J24/J24a):
+  - **Compile time** — schemas are built with `contract<Domain>()(…)`, so a field on the
+    `@magpie/core` job type that the schema lacks is a type error naming the path; outputs
+    assembled in code go through `buildJobOutput(schema, {...})` (excess-property check),
+    and `AnswerOutput` is the schema's own parsed type.
+  - **Test time** — `apps/watcher/src/output-contract.test.ts` asserts every field a
+    catalog prompt asks the model for (`outputShape`, the `Return JSON:` example, inline
+    examples) is declared on that job's output schema.
+  - **Run time** — one shared `validateJobOutput` with a policy: `strip` + warn in
+    production; `reject` (`MAGPIE_JOB_OUTPUT_STRICT=true`) in the API test context, the
+    golden eval, the e2e compose stack, and by default in every watcher runner a test
+    constructs. A failing test that says "output carries fields the job contract does not
+    declare" means: add the field to the schema, don't loosen the test.
+  - Not yet covered: **inputs** are still stripped silently at enqueue (compile-time
+    `contract` only). The one known input gap, `sources[].tokenEnv`, is pinned in
+    `schemas.ts` with the reason it is not simply declared.
 - **The completion dispatcher persists before side effects.** `completeJob`
   (`apps/api/src/features/jobs/service.ts`) validates and stores the
   `{result, executor, usage?, provider?, model?}` envelope (`usage` = the watcher's summed
@@ -445,10 +472,12 @@ the watcher run a job?" → `apps/watcher/src/runners/`. "what does the API expo
   predicate drives publish routing, which scheduled tasks are offered (no PR-poll for
   local-git), and the console's Accept/Bin vs Publish/Merge UI. Don't re-sniff
   destinations ad hoc — key off it.
-- **Docs staleness is flagged inline.** `docs/maintenance-redesign.md` carries an explicit
-  "Superseded (2026-07)" callout for the removed shared-source-corpus design;
-  `docs/superpowers/` plans/specs are historical records, never retro-edited. Trust the
-  code when a doc and the source disagree.
+- **Docs staleness is flagged inline.** `docs/maintenance-redesign.md` is a shipped design
+  record (status banner at the top) and carries an explicit "Superseded (2026-07)" callout
+  for the removed shared-source-corpus design; `docs/archive/` holds finished/superseded
+  documents (the MVP roadmap, the scheduled-jobs migration tracker) that are not
+  maintained; `docs/superpowers/` plans/specs are historical records, never retro-edited.
+  Trust the code when a doc and the source disagree.
 
 ### Commands
 
@@ -465,7 +494,7 @@ npm run e2e:jobs    # queue e2e harness; eval:api / eval:gap-threshold for eval 
 npm run eval:golden # golden-question answer-quality regression gate (docs/golden-eval.md)
 ```
 
-To actually **launch and drive the running stack** (Postgres → migrate → API → Watcher ×2
+To actually **launch and drive the running stack** (Postgres → migrate → API → Watcher
 → Web, with the local `.env` overrides needed because your `.env` (gitignored, deploy-only —
 never committed) holds the prod config), use the **run-magpie** skill — don't re-derive the
 launch recipe here.

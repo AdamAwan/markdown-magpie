@@ -12,6 +12,8 @@ import type {
   SplitDocumentJobInput
 } from "@magpie/core";
 import { verifyDocumentInputSchema } from "@magpie/jobs";
+import type { JobView } from "@magpie/jobs";
+import { cancelJob, completeJob, failJob } from "../jobs/service.js";
 import * as patrol from "./service.js";
 import type { CorrectDocumentFn } from "./service.js";
 
@@ -22,8 +24,9 @@ async function indexDocs(ctx: ReturnType<typeof makeTestContext>, paths: string[
   });
 }
 
-// Healthy verify + quiet dedupe, so the cursor/run tests stay offline and fast (the
-// real deps would enqueue jobs and bounded-wait on the never-completing fake broker).
+// Healthy verify + quiet dedupe, so the cursor/run tests get their verdict within
+// the tick (the default verify enqueues a job whose verdict arrives later, at its
+// completion — covered by the "non-blocking verify" tests below).
 const HEALTHY_DEPS: {
   verifyDocument: VerifyDocumentFn;
   dedupeDocument: DedupeDocumentFn;
@@ -510,10 +513,9 @@ test("runImprovePatrol gates an unchanged doc on the next tick", async () => {
 });
 
 // The default verify path (no injected verifyDocument) enqueues a real
-// verify_document job on the fake broker; the broker never completes it, the
-// bounded wait times out at the test context's 100ms, and the orphaned job is
-// cancelled — but its input stays inspectable via ctx.jobs.list. These tests
-// pin down what that input carries (#214 phase 2: folded citedClaims).
+// verify_document job on the fake broker and returns without waiting for it; the
+// job stays queued and its input inspectable via ctx.jobs.list. These tests pin
+// down what that input carries (#214 phase 2: folded citedClaims).
 const QUIET_LENS_DEPS = {
   correctDocument: (async () => {}) as CorrectDocumentFn,
   dedupeDocument: (async () => {}) as DedupeDocumentFn,
@@ -725,4 +727,397 @@ test("runFixPatrol skips a document already covered by an open same-flow proposa
   if (!outcome.ok) return;
   // covered.md was selected by the cursor but no lens ran against it.
   assert.deepEqual(verified, ["free.md"]);
+});
+
+// --- Non-blocking verify -------------------------------------------------------
+// The default verify enqueues a verify_document job per document and returns; each
+// job's completion applies its own verdict. These tests complete the jobs the way
+// a watcher does (completeJob / failJob), so nothing completes "by itself" — the
+// single watcher that ran the patrol tick is enough to run its verifies.
+
+const UNPROVABLE_OUTPUT = { verdict: "unprovable", claims: [{ claim: "stale", reason: "no source" }] };
+const HEALTHY_OUTPUT = { verdict: "healthy", claims: [] };
+
+async function verifyJobs(ctx: ReturnType<typeof makeTestContext>): Promise<JobView[]> {
+  return (await ctx.jobs.list({ type: "verify_document", limit: 50 })).jobs;
+}
+
+function verifyJobFor(jobs: JobView[], path: string): JobView {
+  const job = jobs.find((candidate) => (candidate.input as { path: string }).path === path);
+  assert.ok(job, `expected a verify_document job for ${path}`);
+  return job;
+}
+
+async function cursorEntry(ctx: ReturnType<typeof makeTestContext>, path: string) {
+  return (await ctx.stores.patrol.listCursor(undefined)).find((entry) => entry.docPath === path);
+}
+
+test("the default verify enqueues and returns: nothing checked yet, the run is still running", async () => {
+  const ctx = makeTestContext();
+  await indexDocs(ctx, ["a.md", "b.md"]);
+
+  const outcome = await patrol.runFixPatrol(ctx, { trigger: "scheduled" }, QUIET_LENS_DEPS);
+  assert.ok(outcome.ok);
+  if (!outcome.ok) return;
+
+  const jobs = await verifyJobs(ctx);
+  assert.equal(jobs.length, 2, "one verify per document");
+  assert.ok(
+    jobs.every((job) => job.state === "created"),
+    "the verifies are queued for a watcher — never cancelled, never waited on"
+  );
+  assert.equal(outcome.pendingVerifyCount, 2);
+  assert.deepEqual(outcome.findings, []);
+
+  const run = await ctx.stores.maintenanceRuns.get(outcome.runId);
+  assert.equal(run?.status, "running");
+  assert.equal(run?.completedAt, undefined);
+  assert.equal(run?.details.pendingVerifies, 2);
+  assert.match(run?.summary ?? "", /checked 0\/2 docs · 0 findings · 2 verifies in progress/);
+
+  // The cursor rotated, but no verified hash is recorded for an unanswered verify.
+  const cursor = await ctx.stores.patrol.listCursor(undefined);
+  assert.equal(cursor.length, 2);
+  assert.equal(cursor.filter((entry) => entry.contentHash).length, 0);
+});
+
+test("each verify's completion applies its verdict; the last one completes the run", async () => {
+  const ctx = makeTestContext();
+  await indexDocs(ctx, ["a.md", "b.md"]);
+  const outcome = await patrol.runFixPatrol(ctx, { trigger: "scheduled" }, QUIET_LENS_DEPS);
+  assert.ok(outcome.ok);
+  if (!outcome.ok) return;
+  const jobs = await verifyJobs(ctx);
+
+  // a.md is unprovable: a corrective job is enqueued and the finding lands on the run.
+  assert.equal((await completeJob(ctx, verifyJobFor(jobs, "a.md").id, UNPROVABLE_OUTPUT)).ok, true);
+  const corrections = (await ctx.jobs.list({ type: "correct_document" })).jobs;
+  assert.equal(corrections.length, 1);
+  assert.deepEqual(
+    {
+      path: (corrections[0]?.input as { path: string }).path,
+      claims: (corrections[0]?.input as { claims: unknown }).claims
+    },
+    { path: "a.md", claims: UNPROVABLE_OUTPUT.claims }
+  );
+  assert.ok((await cursorEntry(ctx, "a.md"))?.contentHash, "the verified document is stamped");
+  assert.equal((await cursorEntry(ctx, "b.md"))?.contentHash, undefined, "its unanswered sibling is not");
+
+  let run = await ctx.stores.maintenanceRuns.get(outcome.runId);
+  assert.equal(run?.status, "running", "one verify is still outstanding");
+  assert.equal((run?.details.findings as unknown[]).length, 1);
+  assert.equal(run?.details.pendingVerifies, 1);
+
+  // b.md is healthy: no correction, and the run is now complete.
+  assert.equal((await completeJob(ctx, verifyJobFor(jobs, "b.md").id, HEALTHY_OUTPUT)).ok, true);
+  assert.equal((await ctx.jobs.list({ type: "correct_document" })).jobs.length, 1);
+  run = await ctx.stores.maintenanceRuns.get(outcome.runId);
+  assert.equal(run?.status, "completed");
+  assert.ok(run?.completedAt);
+  assert.equal(run?.summary, "checked 2/2 docs · 1 finding");
+  assert.deepEqual(
+    (run?.details.findings as Array<{ path: string }>).map((finding) => finding.path),
+    ["a.md"]
+  );
+  assert.equal((run?.details.intentTraces as unknown[]).length, 1);
+  assert.equal(run?.details.pendingVerifies, 0);
+
+  // Both docs now carry a verified hash, so the next tick gates them: no new verifies.
+  const second = await patrol.runFixPatrol(ctx, { trigger: "scheduled" }, QUIET_LENS_DEPS);
+  assert.ok(second.ok);
+  if (!second.ok) return;
+  assert.equal((await verifyJobs(ctx)).length, 2);
+  assert.equal(second.pendingVerifyCount, 0);
+  assert.equal((await ctx.stores.maintenanceRuns.get(second.runId))?.status, "completed");
+});
+
+test("a replayed verify completion enqueues no second correction", async () => {
+  const ctx = makeTestContext();
+  await indexDocs(ctx, ["a.md"]);
+  const outcome = await patrol.runFixPatrol(ctx, { trigger: "scheduled" }, QUIET_LENS_DEPS);
+  assert.ok(outcome.ok);
+  if (!outcome.ok) return;
+  const [job] = await verifyJobs(ctx);
+
+  await completeJob(ctx, job!.id, UNPROVABLE_OUTPUT);
+  await completeJob(ctx, job!.id, UNPROVABLE_OUTPUT);
+
+  assert.equal((await ctx.jobs.list({ type: "correct_document" })).jobs.length, 1);
+  const run = await ctx.stores.maintenanceRuns.get(outcome.runId);
+  assert.equal((run?.details.findings as unknown[]).length, 1, "the finding is counted once");
+});
+
+test("a completion that died after enqueueing the correction but before settling does not buy it twice", async () => {
+  // The paid correct_document enqueue happened; then the settle failed. The
+  // watcher re-POSTs the completion and the verdict is acted on a second time.
+  const ctx = makeTestContext();
+  await indexDocs(ctx, ["a.md"]);
+  const outcome = await patrol.runFixPatrol(ctx, { trigger: "scheduled" }, QUIET_LENS_DEPS);
+  assert.ok(outcome.ok);
+  if (!outcome.ok) return;
+  const [job] = await verifyJobs(ctx);
+  const store = ctx.stores.orchestrationFollowups;
+  const realSettle = store.settle.bind(store);
+  let failures = 1;
+  store.settle = async (jobId, result) => {
+    if (failures > 0) {
+      failures -= 1;
+      throw new Error("database blip");
+    }
+    return realSettle(jobId, result);
+  };
+
+  assert.deepEqual(await completeJob(ctx, job!.id, UNPROVABLE_OUTPUT), { ok: false, code: "side_effects_failed" });
+  assert.equal((await ctx.jobs.list({ type: "correct_document" })).jobs.length, 1, "enqueued before the failure");
+
+  assert.equal((await completeJob(ctx, job!.id, UNPROVABLE_OUTPUT)).ok, true);
+
+  assert.equal(
+    (await ctx.jobs.list({ type: "correct_document" })).jobs.length,
+    1,
+    "the replay reused the correction already enqueued"
+  );
+  const run = await ctx.stores.maintenanceRuns.get(outcome.runId);
+  assert.equal(run?.status, "completed");
+  assert.equal((run?.details.findings as unknown[]).length, 1);
+  assert.ok((await cursorEntry(ctx, "a.md"))?.contentHash, "and the doc is stamped as verified");
+});
+
+test("the correction reuse key tells different corrections apart and ignores a failed one", async () => {
+  const ctx = makeTestContext();
+  await indexDocs(ctx, ["a.md", "b.md"]);
+  await patrol.runFixPatrol(ctx, { trigger: "scheduled" }, QUIET_LENS_DEPS);
+  const jobs = await verifyJobs(ctx);
+
+  // An identical correction for a.md already exists but FAILED: it never
+  // happened, so the verdict must still buy one.
+  const failed = await ctx.jobs.create("correct_document", {
+    provider: "codex",
+    path: "a.md",
+    content: "# a.md",
+    claims: UNPROVABLE_OUTPUT.claims,
+    sources: [],
+    destinationId: "docs"
+  });
+  await failJob(ctx, failed.id, { code: "provider_down", message: "down", category: "provider" }, { terminal: true });
+
+  await completeJob(ctx, verifyJobFor(jobs, "a.md").id, UNPROVABLE_OUTPUT);
+  const afterA = (await ctx.jobs.list({ type: "correct_document" })).jobs;
+  assert.equal(afterA.filter((job) => job.state === "created").length, 1, "a fresh correction replaces the failed one");
+
+  // A different document with the same claims text is a different correction.
+  await completeJob(ctx, verifyJobFor(jobs, "b.md").id, UNPROVABLE_OUTPUT);
+  const live = (await ctx.jobs.list({ type: "correct_document" })).jobs.filter((job) => job.state === "created");
+  assert.deepEqual(live.map((job) => (job.input as { path: string }).path).sort(), ["a.md", "b.md"]);
+});
+
+test("a verify that FAILS leaves its document unchecked and re-checkable, and the run stops waiting", async () => {
+  const ctx = makeTestContext();
+  await indexDocs(ctx, ["a.md"]);
+  const outcome = await patrol.runFixPatrol(ctx, { trigger: "scheduled" }, QUIET_LENS_DEPS);
+  assert.ok(outcome.ok);
+  if (!outcome.ok) return;
+  const [job] = await verifyJobs(ctx);
+
+  await failJob(ctx, job!.id, { code: "provider_down", message: "down", category: "provider" }, { terminal: true });
+
+  const run = await ctx.stores.maintenanceRuns.get(outcome.runId);
+  assert.equal(run?.status, "completed");
+  assert.equal(run?.summary, "checked 0/1 docs · 0 findings");
+  assert.equal((await cursorEntry(ctx, "a.md"))?.contentHash, undefined, "no verified hash for a doc never verified");
+
+  // Not gated: the next tick verifies it again.
+  await patrol.runFixPatrol(ctx, { trigger: "scheduled" }, QUIET_LENS_DEPS);
+  assert.equal((await verifyJobs(ctx)).length, 2);
+});
+
+test("a cancelled verify is written off the same way", async () => {
+  const ctx = makeTestContext();
+  await indexDocs(ctx, ["a.md"]);
+  const outcome = await patrol.runFixPatrol(ctx, { trigger: "scheduled" }, QUIET_LENS_DEPS);
+  assert.ok(outcome.ok);
+  if (!outcome.ok) return;
+  const [job] = await verifyJobs(ctx);
+
+  await cancelJob(ctx, job!.id);
+
+  assert.equal((await ctx.stores.maintenanceRuns.get(outcome.runId))?.status, "completed");
+  assert.equal((await cursorEntry(ctx, "a.md"))?.contentHash, undefined);
+});
+
+test("a verdict for content that changed while the verify ran is dropped, not applied or stamped", async () => {
+  const ctx = makeTestContext();
+  await indexDocs(ctx, ["a.md"]);
+  const outcome = await patrol.runFixPatrol(ctx, { trigger: "scheduled" }, QUIET_LENS_DEPS);
+  assert.ok(outcome.ok);
+  if (!outcome.ok) return;
+  const [job] = await verifyJobs(ctx);
+
+  // The document is re-indexed with new content before the verify answers.
+  await ctx.stores.knowledgeIndex.indexMarkdownDocuments({
+    repositoryId: "docs",
+    documents: [{ path: "a.md", content: "# a.md\n\nrewritten" }]
+  });
+  await completeJob(ctx, job!.id, UNPROVABLE_OUTPUT);
+
+  assert.equal((await ctx.jobs.list({ type: "correct_document" })).jobs.length, 0, "no correction against stale text");
+  assert.equal((await cursorEntry(ctx, "a.md"))?.contentHash, undefined, "the new content is not gated as verified");
+  const run = await ctx.stores.maintenanceRuns.get(outcome.runId);
+  assert.equal(run?.status, "completed");
+  assert.equal(run?.summary, "checked 0/1 docs · 0 findings");
+});
+
+test("a later tick reuses a verify still in flight instead of enqueueing a duplicate", async () => {
+  const ctx = makeTestContext();
+  await indexDocs(ctx, ["a.md"]);
+  const first = await patrol.runFixPatrol(ctx, { trigger: "scheduled" }, QUIET_LENS_DEPS);
+  const second = await patrol.runFixPatrol(ctx, { trigger: "scheduled" }, QUIET_LENS_DEPS);
+  assert.ok(first.ok && second.ok);
+  if (!first.ok || !second.ok) return;
+
+  const jobs = await verifyJobs(ctx);
+  assert.equal(jobs.length, 1, "the in-flight verify is reused");
+  // It still belongs to the tick that enqueued it; the second run has nothing of its own to wait for.
+  assert.equal((await ctx.stores.maintenanceRuns.get(second.runId))?.status, "completed");
+
+  await completeJob(ctx, jobs[0]!.id, UNPROVABLE_OUTPUT);
+  const firstRun = await ctx.stores.maintenanceRuns.get(first.runId);
+  assert.equal(firstRun?.status, "completed");
+  assert.equal((firstRun?.details.findings as unknown[]).length, 1);
+  assert.equal((await ctx.jobs.list({ type: "correct_document" })).jobs.length, 1);
+});
+
+test("self-heals: a tick applies a completed verify whose completion-side continuation never ran", async () => {
+  const ctx = makeTestContext();
+  await indexDocs(ctx, ["a.md"]);
+  const first = await patrol.runFixPatrol(ctx, { trigger: "scheduled" }, QUIET_LENS_DEPS);
+  assert.ok(first.ok);
+  if (!first.ok) return;
+  const [job] = await verifyJobs(ctx);
+
+  // The job reached `completed` in the broker, but the dispatcher's side effects
+  // never ran (the watcher gave up re-POSTing; the API restarted mid-completion).
+  await ctx.jobs.complete(job!.id, { result: UNPROVABLE_OUTPUT, executor: "watcher" });
+  assert.equal((await ctx.stores.maintenanceRuns.get(first.runId))?.status, "running");
+
+  await patrol.runFixPatrol(ctx, { trigger: "scheduled" }, QUIET_LENS_DEPS);
+
+  const healed = await ctx.stores.maintenanceRuns.get(first.runId);
+  assert.equal(healed?.status, "completed", "the next tick applied the verdict and finished the earlier run");
+  assert.equal((healed?.details.findings as unknown[]).length, 1);
+  assert.equal((await ctx.jobs.list({ type: "correct_document" })).jobs.length, 1);
+  assert.equal((await verifyJobs(ctx)).length, 1, "and, now stamped, the doc is gated rather than re-verified");
+});
+
+test("a source conflict reported by a completed verify annotates the document", async () => {
+  const ctx = makeTestContext();
+  await indexDocs(ctx, ["a.md"]);
+  const outcome = await patrol.runFixPatrol(ctx, { trigger: "scheduled" }, QUIET_LENS_DEPS);
+  assert.ok(outcome.ok);
+  if (!outcome.ok) return;
+  const [job] = await verifyJobs(ctx);
+
+  await completeJob(ctx, job!.id, {
+    verdict: "healthy",
+    claims: [],
+    conflicts: [
+      {
+        topic: "Retention period",
+        summary: "The policy says 30 days; the code enforces 90.",
+        anchor: "a-md",
+        claim: "Data is retained for 30 days.",
+        positions: [
+          { sourceId: "policy", path: "retention.md", statement: "30 days" },
+          { sourceId: "code", path: "retention.ts", statement: "90 days" }
+        ]
+      }
+    ]
+  });
+
+  assert.equal((await ctx.stores.sourceConflicts.listOpenPaths(undefined)).length, 1);
+  const run = await ctx.stores.maintenanceRuns.get(outcome.runId);
+  assert.equal(run?.summary, "checked 1/1 doc · 0 findings · 1 source conflict");
+  assert.equal((await ctx.jobs.list({ type: "correct_document" })).jobs.length, 0, "a conflict is never 'corrected'");
+});
+
+test("a verify whose doc had its dedupe/split enqueue shed applies its verdict but records no verified hash", async () => {
+  const ctx = makeTestContext();
+  await indexDocs(ctx, ["a.md"]);
+  // The dedupe lens reports a shed for this doc by marking it deferred — modelled
+  // here through the default enqueue path with the budget spent on the verify.
+  ctx.settings.rateLimit.maintenanceMaxAiJobsPerTick = 1;
+  // Force the split lens to want a job for a.md so it meets the exhausted budget.
+  await ctx.stores.knowledgeIndex.indexMarkdownDocuments({
+    repositoryId: "docs",
+    documents: [
+      {
+        path: "a.md",
+        content: ["# A", ...Array.from({ length: 40 }, (_, i) => `## Topic ${i}\n\n${"word ".repeat(400)}`)].join(
+          "\n\n"
+        )
+      }
+    ]
+  });
+
+  const outcome = await patrol.runFixPatrol(ctx, { trigger: "scheduled" }, {});
+  assert.ok(outcome.ok);
+  if (!outcome.ok) return;
+  const run = await ctx.stores.maintenanceRuns.get(outcome.runId);
+  const fanout = run?.details.fanout as { enqueued: number; deferredByBudget: number };
+  assert.equal(fanout.enqueued, 1, "the budget admitted only the verify");
+  assert.ok(fanout.deferredByBudget >= 1, "the split scan was shed");
+
+  const [job] = await verifyJobs(ctx);
+  await completeJob(ctx, job!.id, HEALTHY_OUTPUT);
+
+  assert.equal(
+    (await cursorEntry(ctx, "a.md"))?.contentHash,
+    undefined,
+    "the doc stays re-checkable so its shed split scan is retried"
+  );
+  assert.equal((await ctx.stores.maintenanceRuns.get(outcome.runId))?.summary, "checked 1/1 doc · 0 findings");
+});
+
+test("a verify shed by the fan-out budget is skipped, not waited for, and its doc stays re-checkable (#288b)", async () => {
+  const ctx = makeTestContext();
+  ctx.settings.rateLimit.maintenanceMaxAiJobsPerTick = 1;
+  await indexDocs(ctx, ["a.md", "b.md"]);
+
+  const outcome = await patrol.runFixPatrol(ctx, { trigger: "scheduled" }, QUIET_LENS_DEPS);
+  assert.ok(outcome.ok);
+  if (!outcome.ok) return;
+
+  assert.equal((await verifyJobs(ctx)).length, 1, "the budget admitted one verify");
+  assert.equal(outcome.pendingVerifyCount, 1, "the shed verify is not pending — there is nothing to wait for");
+  const run = await ctx.stores.maintenanceRuns.get(outcome.runId);
+  const fanout = run?.details.fanout as { enqueued: number; deferredByBudget: number };
+  assert.deepEqual(
+    { enqueued: fanout.enqueued, deferredByBudget: fanout.deferredByBudget },
+    { enqueued: 1, deferredByBudget: 1 }
+  );
+
+  // The reused in-flight verify spends no budget on the next tick, so the doc
+  // that was shed gets its turn.
+  const second = await patrol.runFixPatrol(ctx, { trigger: "scheduled" }, QUIET_LENS_DEPS);
+  assert.ok(second.ok);
+  if (!second.ok) return;
+  assert.equal((await verifyJobs(ctx)).length, 2);
+  const secondFanout = (await ctx.stores.maintenanceRuns.get(second.runId))?.details.fanout as { attempted: number };
+  assert.equal(secondFanout.attempted, 1, "only the new verify was admitted; the reuse cost nothing");
+});
+
+test("a verify_document with no follow-up row (created by hand) completes without touching the patrol", async () => {
+  const ctx = makeTestContext();
+  await indexDocs(ctx, ["a.md"]);
+  const job = await ctx.jobs.create("verify_document", {
+    provider: "codex",
+    path: "a.md",
+    content: "# a.md",
+    sources: []
+  });
+
+  assert.equal((await completeJob(ctx, job.id, UNPROVABLE_OUTPUT)).ok, true);
+
+  assert.equal((await ctx.jobs.list({ type: "correct_document" })).jobs.length, 0);
+  assert.deepEqual(await ctx.stores.maintenanceRuns.list({ limit: 10 }), []);
 });

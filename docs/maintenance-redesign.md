@@ -1,6 +1,18 @@
 # Knowledge-base maintenance redesign
 
-**Status:** Proposal · **Date:** 2026-06-23 · **Author:** Adam
+**Status:** Shipped design record (historical) · **Date:** 2026-06-23 · **Author:** Adam
+
+> **Read this as design history, not as a spec.** All six migration steps in §8 shipped and
+> this document is no longer maintained. The living description of the patrols, the
+> reconcile gate and the gap reconciler is
+> [`gaps-and-maintenance.md`](gaps-and-maintenance.md) (and
+> [`source-sync.md`](source-sync.md)); where they disagree with this file, they and the code
+> win. Known drift: the job names (`fix_patrol` → `correctness_patrol`, `improve_patrol` →
+> `editorial_patrol`, `refresh_pull_requests` → `refresh_flow_snapshot`), the shared source
+> corpus (removed — see the _Superseded_ callout in §4), and everything describing Crunch
+> (retired). It is kept in `docs/` rather than [`archive/`](archive/README.md) because source
+> comments still cite its _Decisions_ section for the rationale behind the patrol-cursor and
+> dedupe-neighbourhood tunables, and the dated designs under `docs/superpowers/` link here.
 
 This document replaces the current `crunch` / `gaps-to-pull-requests` / `source-change-sync`
 scheduled-job design with a model organised around two axes the original design ignored:

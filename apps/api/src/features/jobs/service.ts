@@ -4,7 +4,7 @@ import { handleImportVerificationCompletion } from "../questionnaires/import-esc
 import { applyColumnMapping, handleColumnMappingFailure } from "../questionnaire-imports/service.js";
 import { logger } from "../../logger.js";
 import type { JobCapability, JobError, JobType, JobView } from "@magpie/jobs";
-import { isRepairableJobType, jobDefinition } from "@magpie/jobs";
+import { isRepairableJobType, jobDefinition, undeclaredFieldsMessage, validateJobOutput } from "@magpie/jobs";
 import type { AppContext } from "../../context.js";
 import { HttpError } from "../../http/errors.js";
 import type { JobListFilters } from "../../jobs/broker.js";
@@ -15,31 +15,16 @@ import {
   verifyImportedAnswerOutputSchema
 } from "@magpie/jobs";
 import * as proposalsService from "../proposals/service.js";
+import { abandonFixPatrolVerify, continueFixPatrolFromCompletedVerify } from "../patrol/service.js";
 import * as seedService from "../seed/service.js";
 import * as questionnairesService from "../questionnaires/service.js";
 import * as sourceSyncService from "../source-sync/service.js";
 import * as sourceMapService from "../source-map/service.js";
 import * as snapshotsService from "../snapshots/service.js";
-import { applyPullRequestTransition } from "../../scheduling/gap-reconciler.js";
+import { applyPullRequestTransition, continueReconcileFromCompletedReshape } from "../../scheduling/gap-reconciler.js";
 import * as foldService from "../../scheduling/fold.js";
 import { snapshotRoot } from "../../platform/repositories.js";
-import type { FanoutBudget } from "../../platform/maintenance-fanout.js";
 import { retrievalMode } from "../../platform/providers.js";
-
-// Thrown by runJobToCompletion when the maintenance fan-out budget/admission
-// sheds the create it was about to make (#288b). Both bounded-wait callers
-// (requestReshape, defaultVerifyDocument) already treat a throw as "skip this
-// run", so a shed simply defers the unit of work to a later tick. Never thrown on
-// a reuseKey hit — reusing an in-flight job spends no budget/capacity.
-export class MaintenanceShedError extends Error {
-  constructor(
-    readonly jobType: JobType,
-    readonly reason: "budget_exhausted" | "capacity"
-  ) {
-    super(`maintenance fan-out shed ${jobType} (${reason})`);
-    this.name = "MaintenanceShedError";
-  }
-}
 
 // answer_question (live /api/ask) and answer_question_batch (the questionnaire
 // drip, #288c) share the IDENTICAL answer contract. Everything that routes an
@@ -58,8 +43,8 @@ export async function createJob(ctx: AppContext, type: JobType, input: unknown):
   // this an untrusted `manage:jobs` caller could persist and dispatch a malformed
   // input — e.g. a draft/verify job whose source descriptor carries an `ext::sh`
   // (RCE) or `-`-prefixed (argument-injection) git url, which the source-descriptor
-  // schema now rejects. Enforcing the contract here also covers the internal
-  // runJobToCompletion enqueue path, whose inputs are already built to the schema.
+  // schema now rejects. Enforcing the contract here also covers internal enqueues
+  // (e.g. the gap-closure re-asks), whose inputs are already built to the schema.
   const parsed = jobDefinition(type).inputSchema.safeParse(input ?? {});
   if (!parsed.success) {
     throw new HttpError(400, "invalid_job_input", `Job input does not match the ${type} contract`);
@@ -119,7 +104,14 @@ export async function heartbeatJob(ctx: AppContext, id: string, workerName?: str
 }
 
 export async function cancelJob(ctx: AppContext, id: string): Promise<JobView> {
-  return ctx.jobs.cancel(id);
+  const job = await ctx.jobs.cancel(id);
+  // A cancelled verify_document will never deliver the verdict its patrol run is
+  // waiting on: stop the run waiting. (Cancel is a no-op on an already-terminal
+  // job, so only a job that really ended up cancelled is written off.)
+  if (job.state === "cancelled") {
+    await abandonFixPatrolVerify(ctx, job);
+  }
+  return job;
 }
 
 export async function retryJob(ctx: AppContext, id: string): Promise<JobView> {
@@ -139,7 +131,7 @@ export async function acceptFailedJob(ctx: AppContext, id: string): Promise<JobV
 export async function waitForJob(
   ctx: AppContext,
   id: string,
-  options: { timeoutMs?: number; pollMs?: number; signal?: AbortSignal } = {}
+  options: { timeoutMs?: number; pollMs?: number } = {}
 ): Promise<{ terminal: boolean; job: JobView }> {
   const timeoutMs = options.timeoutMs ?? ctx.settings.jobs.waitTimeoutMs;
   const pollMs = options.pollMs ?? ctx.settings.jobs.waitPollMs;
@@ -148,13 +140,7 @@ export async function waitForJob(
     const job = await ctx.jobs.get(id);
     if (!job) throw new Error(`Job not found: ${id}`);
     const terminal = isTerminal(job.state);
-    // A fired `signal` (the caller's request was aborted — e.g. the maintenance
-    // watcher's verify-closure POST hit its timeout and pg-boss will retry the
-    // job) ends the wait like the deadline does: the caller treats a
-    // non-terminal view as "skip this run", so the orphaned job is cancelled and
-    // no result is acted upon. This is what stops an aborted verifyGapClosure
-    // from continuing to run in parallel with its own retry (#195).
-    if (terminal || Date.now() >= deadline || options.signal?.aborted) {
+    if (terminal || Date.now() >= deadline) {
       return { terminal, job: (await decorateJobs(ctx, [job]))[0] };
     }
     await new Promise((resolve) => setTimeout(resolve, pollMs));
@@ -163,128 +149,19 @@ export async function waitForJob(
 
 // Job states that are not yet terminal — a job in one of these is either still
 // queued, executing, or waiting out a blocked dependency. Mirrors the overlap
-// guard in features/scheduled-tasks/service.ts. Exported for callers that need
-// their own in-flight dedupe outside runJobToCompletion (e.g. the proposals
-// service's one-publish-per-proposal guard).
+// guard in features/scheduled-tasks/service.ts. Exported for the callers that do
+// their own in-flight dedupe: the proposals service's one-publish-per-proposal
+// guard, and the maintenance orchestrators, which reuse a follow-up job already
+// in flight instead of enqueueing a duplicate.
+//
+// There is deliberately no "create a job and wait for it" helper here any more.
+// The orchestrators used to bounded-wait on their follow-up AI jobs from inside
+// the API, which held the claiming watcher in its callback and so needed a SECOND
+// watcher to run the follow-up. They now enqueue and return; the follow-up's
+// completion resumes the orchestration from the dispatcher below (see the
+// CONTINUATION calls in completeJob, and
+// docs/superpowers/specs/2026-11-27-non-blocking-orchestrators-design.md).
 export const IN_FLIGHT_JOB_STATES: ReadonlySet<JobView["state"]> = new Set(["created", "retry", "active", "blocked"]);
-
-// Creates a job and bounded-waits for it to reach a terminal state, returning the
-// terminal JobView (or the last view seen if the deadline elapses first — check
-// `.state` for whether it actually completed). Used by API flows that need an AI
-// step a watcher executes (e.g. the gap-cluster reshape): the heavy orchestration
-// stays in the API, but the only generative step is an enqueued job we wait on.
-// The default deadline is tied to the job's own expiry; pass `deadlineMs` (or set
-// JOB_RUN_TO_COMPLETION_TIMEOUT_MS) to shorten it, e.g. in tests.
-//
-// `reuseKey`, when supplied, lets a caller reuse an already in-flight job of the
-// same type instead of enqueueing a duplicate: existing in-flight jobs of `type`
-// are scanned and the first whose input maps to the same key (via `reuseKey`) is
-// waited on instead of creating a new one. This is the cheapest fix for the
-// "queue backlog" half of #162: a bounded wait that timed out on a busy queue
-// left its job queued (not cancelled — see below) for exactly the scenario where
-// the very next caller (e.g. the next cron tick, or a concurrent request for the
-// same flow/document) would otherwise pile a duplicate job on top of it.
-//
-// On timeout (the deadline elapses before the job reaches a terminal state), the
-// job is cancelled rather than left to run unread — see cancelOrphanedJob for why
-// that is safe even when a watcher has already claimed it. Passing `signal` makes
-// an aborted caller (e.g. a maintenance watcher's POST that hit its own timeout)
-// end the bounded wait the same way — the orphaned job is cancelled and the
-// non-terminal view returned — so the caller can unwind instead of running on in
-// parallel with the retry that abort triggered (#195).
-// `admission`, when supplied, routes any NEW job creation through the maintenance
-// fan-out budget (#288b): a reuseKey hit is returned untouched (reuse spends no
-// budget/capacity), but a genuine create must be admitted first — a shed throws
-// MaintenanceShedError, which the caller catches as "skip this run".
-export async function runJobToCompletion(
-  ctx: AppContext,
-  type: JobType,
-  input: unknown,
-  options: {
-    deadlineMs?: number;
-    pollMs?: number;
-    reuseKey?: (input: unknown) => string;
-    signal?: AbortSignal;
-    admission?: { budget: FanoutBudget };
-  } = {}
-): Promise<JobView> {
-  const job = await acquireJob(ctx, type, input, options.reuseKey, options.admission);
-  const deadlineMs =
-    options.deadlineMs ??
-    ctx.settings.jobs.runToCompletionTimeoutMs ??
-    jobDefinition(type).policy.expireInSeconds * 1000;
-  const pollMs = options.pollMs ?? ctx.settings.jobs.waitPollMs;
-  const { terminal, job: view } = await waitForJob(ctx, job.id, {
-    timeoutMs: deadlineMs,
-    pollMs,
-    signal: options.signal
-  });
-  return terminal ? view : cancelOrphanedJob(ctx, job.id, view);
-}
-
-// Finds an in-flight job of `type` whose input maps to the same `reuseKey` as the
-// requested `input`, or creates a fresh job when none exists (or no `reuseKey` was
-// given). Scoped to `type` the same way isTaskRunning is in scheduled-tasks, just
-// returning the match instead of a boolean.
-async function acquireJob(
-  ctx: AppContext,
-  type: JobType,
-  input: unknown,
-  reuseKey?: (input: unknown) => string,
-  admission?: { budget: FanoutBudget }
-): Promise<JobView> {
-  if (reuseKey) {
-    const key = reuseKey(input);
-    const { jobs } = await ctx.jobs.list({ type, limit: 200 });
-    const existing = jobs.find(
-      (candidate) => IN_FLIGHT_JOB_STATES.has(candidate.state) && reuseKey(candidate.input) === key
-    );
-    // Reuse spends NO budget/capacity: an in-flight job already holds its slot, so
-    // waiting on it must never re-charge admission (#288b).
-    if (existing) return existing;
-  }
-  // No reusable job — this is a genuine create. Under a fan-out budget it must be
-  // admitted first; a shed throws MaintenanceShedError (the caller skips this run).
-  if (admission) {
-    const result = await admission.budget.admit(type, input);
-    if (!result.ok) {
-      throw new MaintenanceShedError(type, result.reason);
-    }
-    return result.job;
-  }
-  return createJob(ctx, type, input);
-}
-
-// The bounded wait gave up before the job reached a terminal state: the caller is
-// about to treat this attempt as "skip this run", so nothing will ever read this
-// job's output once it does complete. Cancelling closes both halves of #162's
-// waste: a job still sitting in the queue is never claimed by a late watcher that
-// would otherwise run the full (paid-for) generation for an answer nobody reads,
-// and a job a watcher already claimed and is mid-flight gets its eventual
-// completeJob() call rejected via the existing `job_cancelled` guard rather than
-// having its output silently discarded after paying for the generation.
-//
-// This is race-safe against a concurrent completion/failure without any special
-// handling: pg-boss's cancel only updates rows still in a non-terminal state
-// (`state < 'completed'`), so if the job finished between our timeout and this
-// call, cancel is a no-op and the refetch inside cancelJob returns the job's real
-// terminal state instead. Cancelling a job a watcher already claimed (`active`)
-// is deliberate, not a bug: pg-boss has no way to interrupt a watcher mid-flight,
-// so the goal here is only to make sure the eventual output is never acted upon.
-async function cancelOrphanedJob(ctx: AppContext, jobId: string, lastSeen: JobView): Promise<JobView> {
-  try {
-    return await cancelJob(ctx, jobId);
-  } catch (error) {
-    // Cancellation failing (e.g. the job vanished) must not throw out of
-    // runJobToCompletion — callers already treat a non-"completed" view as "skip
-    // this run"; fall back to the last view we saw and just log it.
-    logger.warn(
-      { jobId, err: error instanceof Error ? error.message : String(error) },
-      "runJobToCompletion: failed to cancel orphaned job after bounded-wait timeout"
-    );
-    return lastSeen;
-  }
-}
 
 // THE COMPLETION DISPATCHER. Looks up the existing job (404 if missing),
 // validates and PERSISTS the output first, then fans out to the side-effect
@@ -363,22 +240,27 @@ export async function completeJob(
       return { ok: true, job: existingJob };
     }
   } else {
-    const parsed = jobDefinition(existingJob.type).outputSchema.safeParse(output);
-    if (!parsed.success) {
+    const validation = validateJobOutput(existingJob.type, output, ctx.settings.jobs.undeclaredOutputFields);
+    if (!validation.ok) {
+      if (validation.reason === "undeclared_fields") {
+        // Strict policy only (tests, CI, the e2e/eval harnesses): the output is
+        // valid but carries fields the job contract does not declare.
+        return handleUndeclaredOutputFields(ctx, existingJob, validation.undeclaredPaths, executor);
+      }
       // Schema-invalid output. Either route it to ONE informed repair (a
       // repairable type, repair enabled, no prior repair context) or take the
       // terminal-fail backstop (#288d) — no more blind paid retries. See
       // decideRepairOrTerminal for the full decision table.
-      return handleInvalidOutput(ctx, existingJob, output, parsed.error, executor);
+      return handleInvalidOutput(ctx, existingJob, output, validation.error, executor);
     }
-    resultData = parsed.data;
+    resultData = validation.data;
     // Output schemas are z.object, so a valid parse STRIPPED any undeclared keys.
-    // Surface the strip (never fail on it) so a watcher shipping fields the job
-    // contract doesn't declare is observable rather than silent (#288d).
-    const strippedKeys = strippedOutputKeyPaths(output, resultData);
-    if (strippedKeys.length > 0) {
+    // Under the production policy that is surfaced, never failed on: a model
+    // emitting one stray field must not cost a paid generation, but a watcher
+    // shipping fields the job contract doesn't declare stays observable (#288d).
+    if (validation.strippedPaths.length > 0) {
       logger.warn(
-        { jobId, jobType: existingJob.type, strippedKeys },
+        { jobId, jobType: existingJob.type, strippedKeys: validation.strippedPaths },
         "watcher output carried undeclared fields stripped to the job contract"
       );
     }
@@ -454,6 +336,20 @@ export async function completeJob(
     if (isAnswerJobType(existingJob.type) && isAnswerQuestionJobOutput(resultData)) {
       await questionnairesService.handleQuestionnaireAnswerCompletion(ctx, existingJob, resultData);
     }
+    // CONTINUATION: a completed gap-closure re-ask resumes its proposal's
+    // verification (the verify_gap_closure orchestrator enqueued it and returned
+    // without waiting). A no-op for every answer job that is not a registered
+    // re-ask. Inside the replayable block on purpose: if the commit fails, the
+    // 500-replay re-runs it from the persisted answer.
+    await proposalsService.continueGapClosureFromCompletedJob(ctx, existingJob);
+    // CONTINUATION: a completed gap-cluster reshape resumes the reconcile tick that
+    // enqueued it — apply the critic's verdicts, then draft. A no-op for a reshape
+    // job no tick registered.
+    await continueReconcileFromCompletedReshape(ctx, existingJob, resultData);
+    // CONTINUATION: a completed verify_document a correctness-patrol tick enqueued
+    // resumes that tick for its document — act on the verdict, stamp the cursor,
+    // fold the outcome into the tick's run. A no-op for a verify no tick registered.
+    await continueFixPatrolFromCompletedVerify(ctx, existingJob, resultData);
     // Stage-2 findings for an imported questionnaire answer route to a knowledge
     // gap (the sources back it, the KB never wrote it down) or to a register
     // entry. Without this the job runs and its findings vanish.
@@ -585,6 +481,36 @@ export async function completeJob(
   return { ok: true, job: await ctx.jobs.get(jobId) };
 }
 
+// A completion that is valid against its contract but carries fields the
+// contract does not declare, under the strict policy
+// (settings.jobs.undeclaredOutputFields === "reject"). This is a DEFECT IN THE
+// CODE — a prompt or runner emitting a field nobody declared on the schema — not
+// a model slip, so it terminal-fails immediately and loudly: no repair (a
+// reshape would just drop the field and hide the defect) and no retry (it is
+// deterministic). Production never reaches this; it strips and warns instead.
+async function handleUndeclaredOutputFields(
+  ctx: AppContext,
+  job: JobView,
+  undeclaredPaths: string[],
+  executor: string
+): Promise<{ ok: false; code: "invalid_output" }> {
+  const message = undeclaredFieldsMessage(job.type, undeclaredPaths);
+  logger.error({ jobId: job.id, jobType: job.type, undeclaredFields: undeclaredPaths }, message);
+  await failJob(
+    ctx,
+    job.id,
+    {
+      code: "undeclared_output_fields",
+      message,
+      category: "validation",
+      details: { undeclaredFields: undeclaredPaths.join(", ") },
+      ...(executor ? { executor } : {})
+    },
+    { terminal: true }
+  );
+  return { ok: false, code: "invalid_output" };
+}
+
 // THE REPAIR DECISION (#288d). A schema-invalid watcher output is either routed
 // to ONE informed repair or taken straight to the terminal-fail backstop. See
 // the interaction table in the issue; this helper encodes it:
@@ -699,27 +625,6 @@ function providerOf(job: JobView): string | undefined {
   return isPlainObject(job.input) && typeof job.input.provider === "string" ? job.input.provider : undefined;
 }
 
-// The dotted key paths present in `raw` but absent in `kept` after a z.object
-// parse stripped unknown keys (#288d). Walks plain objects recursively; ARRAYS
-// ARE TREATED AS LEAVES — element-level strips inside arrays are not reported
-// (pairing raw/kept array elements positionally against a possibly-reordered or
-// resized array is out of scope; object-level strips are what the warning surfaces).
-export function strippedOutputKeyPaths(raw: unknown, kept: unknown, prefix = ""): string[] {
-  if (!isPlainObject(raw) || !isPlainObject(kept)) {
-    return [];
-  }
-  const paths: string[] = [];
-  for (const [key, rawValue] of Object.entries(raw)) {
-    const path = prefix ? `${prefix}.${key}` : key;
-    if (!(key in kept)) {
-      paths.push(path);
-    } else {
-      paths.push(...strippedOutputKeyPaths(rawValue, kept[key], path));
-    }
-  }
-  return paths;
-}
-
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -738,9 +643,10 @@ function completedJobResult(job: JobView): unknown {
   return envelope.success ? envelope.data.result : undefined;
 }
 
-// Parses a completed job's output against `schema` for API-side consumers of
-// runJobToCompletion (the gap reshape, the patrol verify lens, gap-closure
-// re-asks). Production outputs arrive in the { result, executor } envelope
+// Parses a completed job's output against `schema` for API-side consumers that
+// read a follow-up job's result back off the job row (the gap reshape, the patrol
+// verify, gap-closure re-asks — on the self-healing path, where a tick applies a
+// completion nobody else did). Production outputs arrive in the { result, executor } envelope
 // above, so the envelope's `result` is tried first; the raw shape is a fallback
 // for brokers that complete without the envelope (e.g. test fakes). Returns
 // undefined when neither shape validates. Parsing the raw JobView.output
@@ -891,6 +797,15 @@ export async function failJob(
   // Retryable failures are skipped — the job will run again.
   if (failingJob && isAnswerJobType(failingJob.type) && failedJob.state === "failed") {
     await questionnairesService.handleQuestionnaireAnswerFailure(ctx, failingJob, jobError.message);
+  }
+  // A gap-closure re-ask that failed terminally records NO verdict (an
+  // infrastructure failure is never a still_open) — the proposal stays unverified,
+  // and this makes that loud.
+  if (failingJob && failedJob.state === "failed") {
+    await proposalsService.noteGapClosureReaskFailed(ctx, failingJob, jobError.message);
+    // A verify_document that failed terminally will never deliver the verdict its
+    // patrol run is waiting on: leave the document unchecked and stop waiting.
+    await abandonFixPatrolVerify(ctx, failingJob);
   }
   // A terminally failed (dead-lettered) mapping job marks its questionnaire import
   // `failed` with the reason (#366), so the console shows the error instead of a

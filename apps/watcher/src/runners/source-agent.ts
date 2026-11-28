@@ -1,10 +1,10 @@
 import { generateText, stepCountIs, tool, type LanguageModel, type ModelMessage } from "ai";
 import { z } from "zod";
 import { aiUsageFromTokenCounts, type AiUsage, type SourceMapEntry } from "@magpie/core";
-import type { JobView } from "@magpie/jobs";
+import type { JobView, UndeclaredOutputFieldPolicy } from "@magpie/jobs";
 import { JOB_RUNNER_SYSTEM, wrapUntrusted } from "@magpie/prompts";
 import { UrlFetcher, type FetchableInternetSource } from "../fetch-url.js";
-import { buildSourceGroundedPrompt, parseJobOutput } from "../job-prompts.js";
+import { DEFAULT_UNDECLARED_OUTPUT_FIELDS, buildSourceGroundedPrompt, parseJobOutput } from "../job-prompts.js";
 import { logger } from "../logger.js";
 import { grepWorkspaces, listDir, readFile, SourceToolError, type ToolBudget } from "../source-tools.js";
 import type { SourceWorkspace } from "../source-workspace.js";
@@ -30,8 +30,11 @@ export async function runSourceAgentJob(options: {
   // Receives the loop's provider-reported token usage (#241) — the aggregate
   // across every step, plus the forced closing turn when one runs.
   onUsage?: (usage: AiUsage) => void;
+  // See ChatRunnerOptions.undeclaredOutputFields. Strict when omitted.
+  undeclaredOutputFields?: UndeclaredOutputFieldPolicy;
 }): Promise<unknown> {
   const { job, model, workspaces, notes, mapEntries = [], fetchable = [], signal, onUsage } = options;
+  const undeclaredOutputFields = options.undeclaredOutputFields ?? DEFAULT_UNDECLARED_OUTPUT_FIELDS;
   // The AI SDK types every totalUsage field as possibly-undefined (NaN shows up
   // for providers that don't report); the shared core sanitizer validates and
   // rounds each count independently.
@@ -134,7 +137,7 @@ export async function runSourceAgentJob(options: {
   );
 
   try {
-    return parseJobOutput(job, result.text);
+    return parseJobOutput(job, result.text, undeclaredOutputFields);
   } catch (error) {
     // The loop hit the step cap mid-exploration (or replied with prose). One
     // forced, tool-less closing turn — the same convergence guarantee the answer
@@ -155,6 +158,6 @@ export async function runSourceAgentJob(options: {
     ];
     const forced = await generateText({ model, system: JOB_RUNNER_SYSTEM.instructions, messages, abortSignal: signal });
     reportUsage(forced.totalUsage);
-    return parseJobOutput(job, forced.text);
+    return parseJobOutput(job, forced.text, undeclaredOutputFields);
   }
 }

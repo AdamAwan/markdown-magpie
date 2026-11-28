@@ -658,7 +658,9 @@ flowId?, status, proposalId?, proposalStatus?, lastReconciledAt }`:
 ### `POST /api/gaps/reconcile`
 
 Scope `manage:jobs`, rate tier `trigger`. Drives one reconcile pass for a flow (holds the
-Postgres advisory lock, clusters, reshapes, drafts). Body `{ "flowId": string }` (required).
+Postgres advisory lock, clusters, and either drafts or — when the cluster set needs
+re-judging — enqueues the reshape and returns, leaving drafting to the reshape's
+completion). Never waits on an AI job. Body `{ "flowId": string }` (required).
 The `process_gaps_to_pull_requests` maintenance job POSTs here on its ~10-minute cron. See
 [gaps-and-maintenance.md](./gaps-and-maintenance.md#the-reconciler).
 
@@ -908,21 +910,26 @@ poller.
 
 **Watcher callback** (API16, scope `manage:jobs`). The maintenance runner POSTs here when it
 claims a `verify_gap_closure` job (enqueued by the merge cascade for any merged proposal
-that had triggering questions). The API re-asks each triggering question through the queued
-`answer_question` path against the freshly re-indexed knowledge base and applies the
-deterministic closure test — a confident (`high`/`medium`) answer that cites one of the
-proposal's target docs. Gaps are resolved only when **every** triggering question closes;
-otherwise they are reopened (with the verification detail as a `note`), or flagged
+that had triggering questions). The API **enqueues** a re-ask of each triggering question
+through the queued `answer_question` path against the freshly re-indexed knowledge base and
+**returns at once** with `closureStatus: "pending"` — it does not wait for the re-asks. Each
+re-ask's completion resumes the verification; once every question has an answer the
+deterministic closure test is applied — a confident (`high`/`medium`) answer that cites one
+of the proposal's target docs. Gaps are resolved only when **every** triggering question
+closes; otherwise they are reopened (with the verification detail as a `note`), or flagged
 `needs_attention` after repeated failures. The outcome is persisted to
-`proposals.closure_status` and each re-ask to `gap_closure_verification`. See
+`proposals.closure_status` and each re-ask to `gap_closure_verification`. The endpoint is
+re-entrant: calling it again reuses re-asks already in flight or answered, replaces only
+ones that died (at most three re-ask jobs per question, then `needs_attention` with no
+verdict recorded), and returns the recorded verdict once there is one. See
 [gaps-and-maintenance.md](./gaps-and-maintenance.md), [ai-jobs.md](ai-jobs.md), and
 [question-logging.md](question-logging.md).
 
 - Request body: none.
 - `404 proposal_not_found`.
-- `503 gap_closure_verification_incomplete` — the inner re-ask could not complete (needs a
-  second watcher); the job retries rather than recording a false `still_open` verdict.
-- `200` — `{ "proposalId": string, "closureStatus": "verified_closed" | "reopened" | "needs_attention", "perQuestion": [ { "questionId": string, "reaskedQuestionId": string | null, "verdict": "closed" | "still_open" } ] }`.
+- `200` — `{ "proposalId": string, "closureStatus": "pending" | "verified_closed" | "reopened" | "needs_attention", "perQuestion": [ { "questionId": string, "reaskedQuestionId": string | null, "verdict": "closed" | "still_open" } ] }`.
+  `pending` (with an empty `perQuestion`) means re-asks are outstanding and **no verdict has
+  been recorded**: an unanswered or failed re-ask is never reported as `still_open`.
 
 ### `POST /api/proposals/:id/publish`
 
@@ -1107,8 +1114,11 @@ maintenance watcher POSTs on its crons (API16) plus the read-only run/decision h
 
 Scope `manage:jobs`, rate tier `trigger`. Thin orchestration endpoints the maintenance
 watcher's `correctness_patrol` / `editorial_patrol` runners POST. `run` selects the next
-batch of documents, runs the verify lens over them, advances the cursor, and records a
-maintenance run with its findings, returning `{ "runId", "selectedCount", "findingCount" }`.
+batch of documents, **enqueues** a `verify_document` check for each, advances the cursor,
+records a maintenance run (`running` until its verifies settle) and returns
+`{ "runId", "selectedCount", "findingCount", "pendingVerifyCount" }` without waiting — each
+verify's completion applies its own verdict and adds its findings to the run, so
+`findingCount` is normally `0` here.
 `improve/run` fans one `improve_document` job per selected doc, returning `{ "runId",
 "selectedCount", "enqueuedCount" }`. Body optional (`{ "flowId"? }`); an absent flowId
 patrols the default (unscoped) flow. `400 <code>` on a guard failure.
@@ -1116,8 +1126,8 @@ patrols the default (unscoped) flow. `400 <code>` on a guard failure.
 ### `POST /api/source-sync/run` · `GET /api/source-sync/runs` · `GET /api/source-sync/runs/:id`
 
 `run` (scope `manage:jobs`, rate tier `trigger`) is the orchestration endpoint the
-`source_change_sync` runner POSTs: the heavy gather (checkout/diff/candidate retrieval) and
-the generative step (an enqueued AI job the API bounded-waits on) run here. Body optional
+`source_change_sync` runner POSTs: the heavy gather (checkout/diff/candidate retrieval) runs
+here and the generative step is enqueued (the plan job's completion finishes the run). Body optional
 (`{ "flowId"? }`); an absent flowId watches every configured git source. Returns
 `{ "runIds": string[] }`. `runs` / `runs/:id` (scope `read:knowledge`) are the read-only run
 history (`404 source_sync_run_not_found`).

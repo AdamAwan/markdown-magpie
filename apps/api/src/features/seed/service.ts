@@ -346,8 +346,8 @@ export async function approveSeedPlan(
 // Sparse-flow auto-seeding tick (thin orchestration endpoint body). Checks the
 // guards in cheapest-first order and proposes a plan only when the flow has
 // sources, a near-empty KB, and no pending/duplicate/vetoed planning work.
-// Enqueue-and-return: unlike the patrols it never bounded-waits — the plan
-// lands via createSeedPlanFromCompletedJob. Dismissal is sticky per source
+// Enqueue-and-return, like every orchestrator — the plan lands via
+// createSeedPlanFromCompletedJob. Dismissal is sticky per source
 // config: a human "no" is re-litigated only when the flow's sources change.
 export async function runSeedBootstrap(
   ctx: AppContext,

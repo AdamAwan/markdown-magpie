@@ -1,10 +1,14 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import test, { after } from "node:test";
 import { act } from "react";
 import { renderMarkup } from "../test/render";
-import { click, renderDom } from "../test/dom";
+import { click, closeDom, renderDom } from "../test/dom";
 import { StatusPill } from "./StatusPill";
 import type { ConsoleNotice, UiNotification } from "../lib/types";
+
+// The open popover mounts BuildStatus, which calls the API; close the DOM so the
+// request timeout it arms cannot hold the test process open (see closeDom).
+after(closeDom);
 
 const at = "2026-07-14T12:00:00.000Z";
 

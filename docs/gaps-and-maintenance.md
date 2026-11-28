@@ -95,12 +95,31 @@ Entry: `reconcileGaps` (`POST /api/gaps/reconcile`), driven by the
   processed revision and there are no pending actions, the run does the PR-state pass only
   and skips clustering/reshape/drafting.
 - **G17** — **Reshape** (the only generative step) is a provider-partitioned
-  `reconcile_gap_clusters` AI job the API enqueues and bounded-waits on: it proposes
-  merges/splits/**dismissals**, then a critic confirms. It runs whenever ≥1 active
-  cluster exists. A critic-confirmed **dismissal** moves an off-topic cluster to a
-  terminal `dismissed` state (e.g. a "cats" cluster in a product flow) so it never drafts
-  and never re-clusters. Reshape is **best-effort**: a timeout/failure/absent-watcher
-  leaves the raw clusters intact and the run continues.
+  `reconcile_gap_clusters` AI job: it proposes merges/splits/**dismissals**, then a critic
+  confirms. It runs whenever ≥1 active cluster exists. A critic-confirmed **dismissal**
+  moves an off-topic cluster to a terminal `dismissed` state (e.g. a "cats" cluster in a
+  product flow) so it never drafts and never re-clusters.
+- **G17a** — **The reshape is enqueued, never waited on.** A tick that needs a reshape
+  enqueues it (through the fan-out budget; an in-flight reshape for the same flow+provider
+  is reused), records the composition hash and catalog revision it was requested at,
+  **skips drafting**, holds the processed revision, and returns — drafting first would turn
+  clusters the critic is about to merge or dismiss into pull requests. The reshape's
+  **completion** resumes under the flow's reconcile lock: apply the confirmed verdicts,
+  record the judged composition (G18), then draft the uncovered clusters, mark the captured
+  revision processed and drain the outbox. If the active composition moved while the
+  reshape was in flight, the completion applies the verdicts but leaves drafting to the
+  next tick, which re-judges first. A tick that finds a reshape still in flight skips
+  clustering. Each reshape leaves a second `process_gaps_to_pull_requests` maintenance run
+  (`applied reshape for flow …`).
+- **G17b** — Reshape stays **best-effort**: a shed enqueue leaves the raw clusters intact
+  and the run continues to drafting, and when the reshape of *this exact composition*
+  failed or was cancelled the next tick drafts without it rather than re-buying the same
+  failing generation. A tick also applies a completed reshape whose completion-side
+  continuation never ran. A reshape still **unclaimed** `RESHAPE_STALL_MS` (30 min) after
+  it was enqueued — no capable watcher — is cancelled (so no paid generation runs unread)
+  and written off the same way, so the flow drafts instead of freezing; one a watcher is
+  running is never written off. Decision audit rows are recorded once even if the
+  completion is replayed.
 - **G18** — **Composition short-circuit**: before enqueuing the reshape, the reconciler
   hashes the active cluster composition (sorted cluster ids each paired with sorted member
   gap ids) and compares it to `last_reshape_composition_hash`. An identical hash means the
@@ -140,20 +159,55 @@ Entry: `reconcileGaps` (`POST /api/gaps/reconcile`), driven by the
   a note (`reopened`); after the retry cap the question is parked
   (`needs_attention`, see G6). Clusterless/seed proposals have no triggering questions and
   skip verification.
-- **G23** — **Single-watcher safety**: an incomplete re-ask (the orchestrator's inner AI
-  job can only be claimed by a *second* watcher) MUST be reported as infrastructure
-  failure — the endpoint returns **503** and the job retries — never recorded as a
-  `still_open` content verdict that would wrongly reopen a correctly-merged doc. The
-  console warns when only one watcher is connected. Maintenance orchestrators therefore
-  need **at least two watchers**.
+- **G23** — **An unanswered re-ask is never a verdict.** `verify_gap_closure` enqueues its
+  re-asks and returns (`closureStatus: "pending"`); each re-ask's completion resumes the
+  verification, and the verdicts are committed only once **every** triggering question has
+  an answer. A verdict is derived solely from a re-ask job in state `completed`: one that
+  is still queued, running, failed or cancelled is *pending* and records nothing, so an
+  infrastructure failure can never become a `still_open` content verdict that would wrongly
+  reopen a correctly-merged doc (#150). The evaluation is serialised per proposal and its
+  entry guard re-read under that lock, so two re-asks completing together cannot
+  double-record.
+- **G23b** — **Stalled verifications are re-driven, and bounded.** Nothing fires when a
+  re-ask ends without its continuation running — the continuation was lost (the watcher's
+  `complete()` retries ran out, the API restarted), or the re-ask was cancelled, expired in
+  the queue, failed terminally, or vanished. So every `process_gaps_to_pull_requests` tick
+  re-drives each of its flow's merged proposals that has no verdict but has re-ask rows
+  (`stalledVerificationsRedriven` in the run details): a completed re-ask nobody applied is
+  applied, a dead one is replaced, one still queued or running is left alone. A question
+  gets `REASK_ATTEMPT_CAP = 3` re-ask jobs; past that it is **parked** with a note that
+  verification could not run and the proposal is marked `needs_attention`. That escalation
+  records **no** verdict: no `gap_closure_verification` row, nothing counted against
+  `CLOSURE_RETRY_CAP`, no gap reopened for re-drafting (G23 still holds). Answered re-asks
+  are kept until the verdict is recorded, however long the verification stalls.
+- **G23a** — **No orchestrator needs a second watcher.** None of the maintenance
+  orchestrators waits on the AI jobs it enqueues — `seed_bootstrap`, `source_change_sync`
+  and `editorial_patrol` always were enqueue-only; `verify_gap_closure` (G23),
+  `process_gaps_to_pull_requests` (G17a) and `correctness_patrol` (G24a) resume from their
+  follow-up job's completion. The shared mechanics are in [ai-jobs.md](./ai-jobs.md) J22a.
 
 ## The patrols
 
 - **G24** — **`correctness_patrol`** (hourly, `maintenance`) selects a cursor batch
   (oldest-checked-first exploit + random explore; `PATROL_BATCH_SIZE = 10`,
   `PATROL_RANDOM_COUNT = 2`), drops open-PR-covered docs, applies a content+sources change
-  gate, then runs the **verify lens** (`verify_document`) per doc and fans into
+  gate, then starts the **verify lens** (`verify_document`) per doc and fans into
   `correct_document` (per finding), `dedupe_documents`, and `split_document`.
+- **G24a** — **Verifies are enqueued, never waited on.** The tick enqueues one
+  `verify_document` per document (fan-out budget, in-flight reuse and change gate
+  unchanged), runs the dedupe and split lenses, and returns; its maintenance run is
+  recorded `running`. Each verify's **completion** applies that document's verdict —
+  annotate source conflicts, repair resolved ones, reconcile-gate the finding, enqueue
+  `correct_document` (reusing an identical correction already queued, running or completed,
+  so a replayed completion never buys it twice) — stamps the patrol cursor with the hash of the content it verified,
+  and folds the outcome into the run, which completes when its last verify settles. A
+  verdict for content re-indexed while the verify ran is dropped and the doc left
+  unstamped; a failed or cancelled verify leaves its doc unchecked and re-checkable. Each
+  tick first settles earlier runs of the flow (applying a completed verify whose
+  continuation never ran, writing off a dead one), so no run stays `running`. The
+  completion's `correct_document` enqueue admits through a fresh fan-out budget — the
+  per-tick budget no longer bounds verify + correct together; the global non-interactive
+  ceiling still does.
 - **G25** — **`editorial_patrol`** (hourly, `maintenance`) uses a separate cursor and a
   smaller batch (`IMPROVE_PATROL_BATCH_SIZE = 2`) and fans into one `improve_document`
   per doc.
@@ -209,9 +263,10 @@ Entry: `reconcileGaps` (`POST /api/gaps/reconcile`), driven by the
 | `GAP_CLUSTER_ASSIGN_THRESHOLD` | 0.84 | `apps/api/src/platform/config.ts` |
 | `MAX_DRAFTS_PER_TICK` | 10 | `apps/api/src/scheduling/gap-reconciler.ts` |
 | `CLOSURE_RETRY_CAP` | 2 | `apps/api/src/features/proposals/service.ts` |
+| `REASK_ATTEMPT_CAP` | 3 | `apps/api/src/features/proposals/service.ts` |
+| `RESHAPE_STALL_MS` | 30 min | `apps/api/src/scheduling/gap-reconciler.ts` |
 | `PATROL_BATCH_SIZE` / `PATROL_RANDOM_COUNT` | 10 / 2 | `apps/api/src/features/patrol/service.ts` |
 | `IMPROVE_PATROL_BATCH_SIZE` / `_RANDOM_COUNT` | 2 / 1 | `apps/api/src/features/patrol/service.ts` |
-| `VERIFY_WAIT_BUDGET_MS` | 10 min | `apps/api/src/features/patrol/service.ts` |
 | `WATCHER_MAINTENANCE_TIMEOUT_MS` | 15 min | `apps/watcher/src/config.ts` |
 | `MAGPIE_AGENTIC_TIMEOUT_MS` | 10 min | `apps/watcher/src/runners/index.ts` |
 
@@ -220,8 +275,8 @@ Entry: `reconcileGaps` (`POST /api/gaps/reconcile`), driven by the
 - `GET /api/gaps/candidates`, `GET /api/gaps/clusters`, `POST /api/gaps/reconcile`,
   `POST /api/gaps/clusters/:id/proposal` (`manage:jobs`).
 - `POST /api/fix-patrol/run`, `POST /api/fix-patrol/improve/run` (`manage:jobs`).
-- `POST /api/proposals/:id/verify-closure` (`manage:jobs`; returns 503
-  `gap_closure_verification_incomplete` on an incomplete re-ask, G23).
+- `POST /api/proposals/:id/verify-closure` (`manage:jobs`; returns
+  `closureStatus: "pending"` while re-asks are outstanding, G23).
 - `POST /api/questions/:id/gap`, `DELETE /api/questions/:id/gap`,
   `POST /api/questions/:id/gap/retry`, `POST /api/questions/:id/gap/dismiss`.
 - `GET /api/maintenance-runs`, `GET /api/scheduled-tasks` (with run-now),
@@ -237,17 +292,18 @@ for gap sources and the parked-question workflow.
 | Gap store & lifecycle | `apps/api/src/stores/{question-log-store,postgres-question-log-store}.ts`, `apps/api/src/features/questions/` |
 | Clustering (pure geometry) | `apps/api/src/scheduling/gap-assignment.ts`, `apps/api/src/stores/gap-cluster-store.ts` |
 | Reconciler | `apps/api/src/scheduling/gap-reconciler.ts`, `apps/api/src/features/gaps/` |
-| Advisory lock | `apps/api/src/scheduling/run-lock.ts` |
-| Reshape / cluster ops | `apps/api/src/scheduling/gap-reconciler.ts` (`requestReshape`, `applyMerge/Split/Dismissal`) |
-| Patrols & lenses | `apps/api/src/features/patrol/service.ts`, `apps/api/src/scheduling/{verify,dedupe,split}-lens*.ts`, `patrol-cursor.ts`, `patrol-hash.ts` |
-| Closure verification | `apps/api/src/features/proposals/service.ts`, `closure-eval.ts`, `apps/api/src/stores/postgres-gap-closure-verification-store.ts` |
+| Advisory lock | `apps/api/src/scheduling/run-lock.ts` (`withFlowRunLock`; `withFlowRunLockWaiting` for continuations) |
+| Reshape / cluster ops | `apps/api/src/scheduling/gap-reconciler.ts` (`requestReshape`, `continueReconcileFromCompletedReshape`, `applyMerge/Split/Dismissal`) |
+| Orchestrator continuation state | `apps/api/src/stores/{orchestration-followup-store,postgres-orchestration-followup-store}.ts` (migration 0070); continuations wired in `apps/api/src/features/jobs/service.ts` (`completeJob`) |
+| Patrols & lenses | `apps/api/src/features/patrol/service.ts` (`runFixPatrol`, `continueFixPatrolFromCompletedVerify`), `apps/api/src/scheduling/{verify,dedupe,split}-lens*.ts`, `patrol-cursor.ts`, `patrol-hash.ts` |
+| Closure verification | `apps/api/src/features/proposals/service.ts` (`verifyGapClosure`, `continueGapClosureFromCompletedJob`), `closure-eval.ts`, `apps/api/src/stores/postgres-gap-closure-verification-store.ts` |
 | Reconcile gate / intent | `apps/api/src/scheduling/{reconcile-gate,changeset,fold,intent,intent-trace}.ts` |
 | Scheduled tasks | `apps/api/src/scheduling/task-registry.ts`, `packages/jobs/src/{types,catalog}.ts` |
 
 ## Tests (behavioural contract)
 
 `apps/api/src/scheduling/{gap-reconciler,gap-reconciler-lineage,gap-reconciler-link,gap-reconciler-merge-cascade,gap-reconciler-overlap,gap-assignment,gap-backfill,reconcile-gate,run-lock,changeset,fold,intent,intent-trace,verify-lens,dedupe-lens,dedupe-neighbours,split-lens,split-neighbours,patrol-cursor,patrol-hash,task-registry}.test.ts`,
-`apps/api/src/stores/{gap-cluster-store,postgres-gap-cluster-store,gap-clustering,postgres-gap-closure-verification-store,question-log-store,postgres-question-log-store,patrol-store,maintenance-run-store,scheduled-task-store}.test.ts`,
+`apps/api/src/stores/{gap-cluster-store,postgres-gap-cluster-store,gap-clustering,postgres-gap-closure-verification-store,question-log-store,postgres-question-log-store,patrol-store,maintenance-run-store,orchestration-followup-store,scheduled-task-store}.test.ts`,
 `apps/api/src/features/proposals/{closure-eval,service,link-cluster,routes.merge}.test.ts`,
 `apps/api/src/features/patrol/service.test.ts`,
 `apps/api/src/features/gaps/{service,routes}.test.ts`,
@@ -261,5 +317,9 @@ Consolidates: `docs/superpowers/specs/2026-06-18-persistent-gap-reconciliation-d
 `2026-06-25-dedupe-lens-design.md`, `2026-06-26-split-lens-design.md`,
 `2026-06-26-improve-patrol-design.md`, `2026-06-26-retire-scheduled-crunch-design.md`,
 `2026-06-26-maintenance-run-audit-design.md`, `2026-06-24-source-sync-through-gate-design.md`,
-`2026-06-23-fold-at-draft-design.md`. The whole-KB *Crunch* pass those docs sometimes
-reference is retired (G26); patrol job types were renamed (see the naming note).
+`2026-06-23-fold-at-draft-design.md`, `2026-11-27-non-blocking-orchestrators-design.md`
+(G17a, G23, G23a, G24a — orchestrators enqueue and continue from the follow-up's completion;
+it supersedes every earlier statement that the API "bounded-waits" on a reshape, verify or
+re-ask, and the two-watcher requirement that followed from it). The whole-KB *Crunch* pass
+those docs sometimes reference is retired (G26); patrol job types were renamed (see the
+naming note).

@@ -20,10 +20,8 @@ import type { ConsoleSection, Health, JobType, JobView, KnowledgeStats, UiNotifi
 
 const now = "2026-06-30T12:00:00.000Z";
 
-// Two fully-capable watchers, so tests that aren't about coverage trip neither the
-// "no watchers"/"uncovered jobs" banners nor the single-watcher warning (which fires
-// at exactly one connected watcher — see the maintenance-orchestrator note in
-// buildAttentionNotices).
+// Fully-capable watchers, so tests that aren't about coverage trip neither the
+// "no watchers" nor the "uncovered jobs" banner.
 const readyFleet: WatcherView[] = [
   { name: "w1", status: "idle", capabilities: ["codex", "github", "local-git", "maintenance"], lastSeenAt: now },
   { name: "w2", status: "idle", capabilities: ["codex", "github", "local-git", "maintenance"], lastSeenAt: now }
@@ -143,35 +141,16 @@ test("buildAttentionNotices shows a concise notice when no watchers are connecte
   assert.deepEqual(opened, ["jobs"]);
 });
 
-test("buildAttentionNotices warns when exactly one watcher is connected", () => {
-  const opened: ConsoleSection[] = [];
+test("buildAttentionNotices raises nothing for a single fully-capable watcher", () => {
+  // One watcher is a supported deployment: the maintenance orchestrators enqueue
+  // their follow-up AI jobs and return, so the same watcher runs them.
   const result = notices({
     health: { ok: true, service: "api" },
     workers: [
       { name: "solo", status: "idle", capabilities: ["codex", "github", "local-git", "maintenance"], lastSeenAt: now }
-    ],
-    openSection: (section) => opened.push(section)
+    ]
   });
-  const notice = result.find((n) => n.id === "single-watcher");
-  assert.ok(notice, "expected a single-watcher notice");
-  assert.equal(notice.tone, "warning");
-  notice.action?.();
-  assert.deepEqual(opened, ["jobs"]);
-});
-
-test("buildAttentionNotices does not warn about a single watcher once a second connects", () => {
-  const result = notices({ health: { ok: true, service: "api" }, workers: readyFleet });
-  assert.equal(
-    result.find((n) => n.id === "single-watcher"),
-    undefined
-  );
-});
-
-test("buildAttentionNotices shows the no-watchers notice, not the single-watcher one, when none are connected", () => {
-  const result = notices({ health: { ok: true, service: "api" }, workers: [] });
-  const ids = result.map((n) => n.id);
-  assert.ok(ids.includes("no-watchers"));
-  assert.equal(ids.includes("single-watcher"), false, "zero watchers is the no-watchers case, not single-watcher");
+  assert.deepEqual(result, []);
 });
 
 test("buildAttentionNotices lists uncovered job types when watchers run but miss a capability", () => {

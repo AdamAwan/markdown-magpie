@@ -500,8 +500,11 @@ function useConsoleController() {
       // Anchor rather than snap: when the selected proposal dropped off the
       // active list (merged/rejected), keep the preview on its nearest
       // surviving neighbour so working a backlog doesn't jump back to the top.
+      // Captured before the ref is reassigned below: the updater runs lazily at
+      // render, by which time proposalsRef.current already holds the new page.
+      const previousProposals = proposalsRef.current;
       setSelectedProposalId((current) =>
-        anchorProposalSelection(proposalsRef.current, proposalsResult.proposals, current)
+        anchorProposalSelection(previousProposals, proposalsResult.proposals, current)
       );
       proposalsRef.current = proposalsResult.proposals;
       setLastRefreshedAt(new Date().toISOString());

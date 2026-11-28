@@ -26,7 +26,8 @@ overwrite already-set vars), which is how the local overrides below work. The co
 `.env` is the **production** config, so a local run must override two things:
 
 - `STORAGE_BACKEND=postgres` → needs Postgres (pgvector) on `:5432`.
-- AI job queue + stores are Postgres → **Redis is not required** despite `QUEUE_URL`.
+- AI job queue + stores are Postgres → **Redis is not required**. (An old `.env` may still
+  carry a `QUEUE_URL`; nothing reads it.)
 - `AUTH_REQUIRED=true` (prod) gates token validation across the API. Locally, **override
   `AUTH_REQUIRED=false`** so the API skips auth and the watcher can claim jobs without
   Auth0 — otherwise every call (and `/api/jobs/claim`) returns `401`. The watcher only
@@ -79,19 +80,12 @@ API_BASE_URL=http://localhost:4000 \
   AUTH_REQUIRED=false WATCHER_API_CLIENT_ID= WATCHER_API_CLIENT_SECRET= \
   MAGPIE_CHECKOUT_ROOT="$PWD/.magpie/checkouts" npm run dev:watcher                 # background
 
-# 4b. Run a SECOND watcher for the maintenance orchestrators (gap-closure
-#     verification and the patrols). Those jobs claim a watcher, then block in an
-#     API callback while it waits on follow-up answer_question jobs — which a
-#     watcher can only pick up if it isn't the one blocking. One watcher self-
-#     starves and the work times out; with verify_gap_closure that means a merged
-#     doc never verifies (it stays honestly "unverified" — the fix in #150 keeps it
-#     from being falsely reopened). Each process gets a unique registry id, but the
-#     health server does NOT auto-increment its port — the second watcher dies with
-#     `EADDRINUSE :::4002` unless you override WATCHER_HEALTH_PORT. The console
-#     warns while only one is connected.
-WATCHER_HEALTH_PORT=4003 API_BASE_URL=http://localhost:4000 \
-  AUTH_REQUIRED=false WATCHER_API_CLIENT_ID= WATCHER_API_CLIENT_SECRET= \
-  MAGPIE_CHECKOUT_ROOT="$PWD/.magpie/checkouts" npm run dev:watcher                 # background
+#    One watcher is enough: the maintenance orchestrators (gap-closure verification,
+#    the patrols, the reconciler) enqueue their follow-up AI jobs and return, so the
+#    same watcher goes on to run them. To run MORE than one locally (throughput),
+#    give each extra process its own health port — it does not auto-increment, and
+#    a second watcher dies with `EADDRINUSE :::4002` otherwise:
+#      WATCHER_HEALTH_PORT=4003 API_BASE_URL=http://localhost:4000 ... npm run dev:watcher
 
 # 5. Web on :3000. Set MAGPIE_DEV_API_PROXY so the browser reaches the API
 #    same-origin (next.config rewrites /api/* → this URL; inert when unset).

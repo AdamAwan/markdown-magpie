@@ -27,6 +27,7 @@ import { InMemoryWatcherRegistryStore } from "../stores/watcher-registry-store.j
 import { NullInsightsStore } from "../stores/insights-store.js";
 import { InMemoryJobAcceptanceStore } from "../stores/job-acceptance-store.js";
 import { InMemoryJobRepairContextStore } from "../stores/job-repair-context-store.js";
+import { InMemoryOrchestrationFollowupStore } from "../stores/orchestration-followup-store.js";
 import { InMemoryRateLimitStore } from "../stores/rate-limit-store.js";
 
 // Builds an AppContext wired entirely to in-memory stores with fake collaborators,
@@ -50,12 +51,12 @@ export function makeTestContext(overrides: Partial<AppContext> = {}): AppContext
     // Auth fails closed by default; the in-memory test context explicitly opts
     // out so buildApp(makeTestContext()) exercises handlers without tokens.
     AUTH_REQUIRED: "false",
-    // Bounded-waits (e.g. the reconciler's reshape job) resolve to a terminal job
-    // instantly when a fake broker completes it synchronously; when a broker never
-    // completes, keep the fallback wait tiny so tests don't block on the real
-    // job-expiry deadline (5 min for reconcile_gap_clusters).
-    JOB_RUN_TO_COMPLETION_TIMEOUT_MS: "100",
-    JOB_WAIT_POLL_MS: "5"
+    // Keep the /api/jobs/:id/wait long-poll snappy under test.
+    JOB_WAIT_POLL_MS: "5",
+    // Tests run the strict output policy: a completion carrying a field its job
+    // contract does not declare fails the job instead of being silently stripped,
+    // so a schema/prompt/runner drift fails in CI rather than shipping.
+    MAGPIE_JOB_OUTPUT_STRICT: "true"
   });
   const embedder = new BackgroundEmbedder(undefined, undefined);
 
@@ -85,6 +86,7 @@ export function makeTestContext(overrides: Partial<AppContext> = {}): AppContext
       insights: new NullInsightsStore(),
       jobAcceptances: new InMemoryJobAcceptanceStore(),
       jobRepairContexts: new InMemoryJobRepairContextStore(),
+      orchestrationFollowups: new InMemoryOrchestrationFollowupStore(),
       rateLimit: new InMemoryRateLimitStore()
     },
     jobs: new FakeJobBroker(),

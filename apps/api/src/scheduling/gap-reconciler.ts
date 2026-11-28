@@ -2,11 +2,14 @@ import { createHash } from "node:crypto";
 import type { EmbeddingProvider, GapCandidate, Proposal } from "@magpie/core";
 import { fetchPullRequestStatus as defaultFetchPullRequestStatus } from "@magpie/git";
 import { logger } from "../logger.js";
-import { reconcileGapClustersOutputSchema, type JobState } from "@magpie/jobs";
+import { reconcileGapClustersOutputSchema, type JobState, type JobView } from "@magpie/jobs";
+import { z } from "zod";
 import type { AppContext } from "../context.js";
-import { withFlowRunLock } from "./run-lock.js";
+import { withFlowRunLock, withFlowRunLockWaiting } from "./run-lock.js";
 import * as gapsService from "../features/gaps/service.js";
-import { parseCompletedJobOutput, runJobToCompletion } from "../features/jobs/service.js";
+import { IN_FLIGHT_JOB_STATES, parseCompletedJobOutput } from "../features/jobs/service.js";
+import type { OrchestrationFollowup } from "../stores/orchestration-followup-store.js";
+import type { NewReconciliationDecision } from "../stores/reconciliation-decision-store.js";
 import * as proposalsService from "../features/proposals/service.js";
 import { describeFlowScope } from "../features/retrieve/service.js";
 import type {
@@ -64,6 +67,9 @@ interface GapReconcileRunDetails extends Record<string, unknown> {
   // Orphaned post-merge cascades this tick re-drove: proposals left `merged` with
   // their gaps never verified because the fast cascade path was lost (#282).
   mergedCascadesRecovered: number;
+  // Stalled gap-closure verifications this tick re-drove to a recorded verdict
+  // (see sweepStalledGapClosureVerifications).
+  stalledVerificationsRedriven: number;
   overlapsDetected: number;
   clustersCreated: number;
   mergeDecisions: number;
@@ -78,6 +84,15 @@ interface GapReconcileRunDetails extends Record<string, unknown> {
   // judged at the last reshape (issue #168). Distinct from skippedModelWork, which
   // covers the whole clustering step being gated out by an unchanged revision.
   reshapeSkipped: boolean;
+  // True when this tick left a reconcile_gap_clusters reshape in flight (it
+  // enqueued one, or found one already running). The tick does NOT wait for it:
+  // drafting is skipped and the processed revision held, and the reshape's
+  // completion applies the verdicts and finishes the tick's work
+  // (continueReconcileFromCompletedReshape).
+  reshapePending: boolean;
+  // Set on the run a reshape completion records (rather than a tick): the job
+  // whose verdicts it applied.
+  reshapeJobId?: string;
   // The per-tick maintenance fan-out budget summary (#288b): how many AI enqueues
   // this tick attempted, admitted, and shed (by budget vs capacity). Undefined on
   // a tick that never reached the model work (revision gate short-circuit).
@@ -165,6 +180,7 @@ async function reconcileGapsInner(
     pullRequestsChecked: 0,
     pullRequestTransitions: 0,
     mergedCascadesRecovered: 0,
+    stalledVerificationsRedriven: 0,
     overlapsDetected: 0,
     clustersCreated: 0,
     mergeDecisions: 0,
@@ -174,7 +190,8 @@ async function reconcileGapsInner(
     proposalsDrafted: 0,
     publicationActionsDrained: 0,
     skippedModelWork: false,
-    reshapeSkipped: false
+    reshapeSkipped: false,
+    reshapePending: false
   };
 
   // (b) PR-state pass — only the open pull requests raised from this flow's proposals.
@@ -186,6 +203,12 @@ async function reconcileGapsInner(
   // before it enqueued verification (#282). Runs every tick, independent of the
   // gap-catalog revision gate, since an orphan can exist with no gap changes.
   details.mergedCascadesRecovered = await sweepUnverifiedMergedProposals(ctx, flowId, clusterFlowCache);
+
+  // (b3) Stalled-verification sweep — re-drive any gap-closure verification whose
+  // re-asks were enqueued but which will never finish by itself (a lost
+  // continuation; a re-ask that failed, was cancelled, or expired). Also every
+  // tick, for the same reason.
+  details.stalledVerificationsRedriven = await sweepStalledGapClosureVerifications(ctx, flowId, clusterFlowCache);
 
   details.overlapsDetected = await detectOverlaps(ctx, flowId, clusterFlowCache);
 
@@ -211,7 +234,7 @@ async function reconcileGapsInner(
       { flowLabel, processed, catalogRevision },
       "gap reconciler: gap catalog advanced; reconciling clusters"
     );
-    const clustering = await reconcileClusters(ctx, flowId, budget);
+    const clustering = await reconcileClusters(ctx, flowId, budget, catalogRevision);
     details.clustersCreated = clustering.clustersCreated;
     details.mergeDecisions = clustering.mergeDecisions;
     details.splitDecisions = clustering.splitDecisions;
@@ -219,12 +242,21 @@ async function reconcileGapsInner(
     details.decisionsApplied = clustering.decisionsApplied;
     details.proposalsDrafted = clustering.proposalsDrafted;
     details.reshapeSkipped = clustering.reshapeSkipped;
+    details.reshapePending = clustering.reshapePending;
     // Only mark this revision processed once drafting has fully drained. When the
     // per-tick cap deferred some clusters, hold the revision so the next tick re-enters
     // reconcileClusters and drafts the next batch. Re-entry is cheap: clustering finds
     // no new gaps and the composition hash is unchanged, so the metered reshape is
     // skipped — only the capped drafting repeats until the backlog clears.
-    if (clustering.draftsDeferred) {
+    if (clustering.reshapePending) {
+      // A reshape is in flight. Nothing was drafted, so the revision is held: the
+      // reshape's completion drafts and marks it processed, and if that never
+      // happens the next tick re-enters and picks the reshape's outcome up itself.
+      logger.info(
+        { flowLabel, catalogRevision },
+        "gap reconciler: reshape in flight; holding the processed revision until its verdicts are applied"
+      );
+    } else if (clustering.draftsDeferred) {
       logger.warn(
         { flowLabel, catalogRevision },
         "gap reconciler: drafting was capped this tick; holding the processed revision so remaining clusters draft on later ticks"
@@ -414,6 +446,54 @@ async function sweepUnverifiedMergedProposals(
   return recovered;
 }
 
+// Re-drives this flow's stalled gap-closure verifications. verify_gap_closure
+// enqueues its re-asks and returns, and normally each re-ask's completion carries
+// the verification on — but a continuation can be lost (the watcher retries a
+// failed complete() only a few times; the API can restart mid-completion), and a
+// re-ask can end without ever completing (failed, cancelled, expired in the
+// queue). None of those fires anything, and the orphaned-merge sweep above cannot
+// see them: it keys on "no verify_gap_closure job ever existed", and one did. So
+// without this sweep such a proposal would sit merged-but-unverified forever.
+//
+// The work is redriveStalledGapClosure's: apply any completed re-ask nobody
+// applied, replace any that died (bounded, then needs_attention), leave any still
+// in flight. Only proposals with no verdict are examined, so the steady-state
+// cost is one indexed read per unverified merged proposal. Best-effort per
+// proposal — a failure is logged and retried next tick. Returns how many reached
+// a recorded verdict this tick.
+async function sweepStalledGapClosureVerifications(
+  ctx: AppContext,
+  flowId: string | undefined,
+  cache: ClusterFlowCache
+): Promise<number> {
+  const merged = await ctx.stores.proposals.list(200, { status: "merged" });
+  let settled = 0;
+  for (const proposal of merged) {
+    if (proposal.closureStatus || (proposal.triggeringQuestionIds ?? []).length === 0) {
+      continue;
+    }
+    if (!sameFlow(await proposalFlowId(ctx, proposal, cache), flowId)) {
+      continue;
+    }
+    try {
+      if (await proposalsService.redriveStalledGapClosure(ctx, proposal)) {
+        settled += 1;
+        logger.warn(
+          { flowLabel: flowId ?? "default", proposalId: proposal.id },
+          "gap reconciler: re-drove a stalled gap-closure verification to a recorded verdict"
+        );
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "verification re-drive failed";
+      logger.warn(
+        { proposalId: proposal.id, err: message },
+        "gap reconciler: stalled gap-closure verification re-drive failed; will retry next tick"
+      );
+    }
+  }
+  return settled;
+}
+
 async function freezeClusterForProposal(ctx: AppContext, proposal: Proposal): Promise<void> {
   if (proposal.gapClusterId) {
     await ctx.stores.gapClusters.freezeCluster(proposal.gapClusterId);
@@ -426,7 +506,8 @@ async function freezeClusterForProposal(ctx: AppContext, proposal: Proposal): Pr
 async function reconcileClusters(
   ctx: AppContext,
   flowId: string | undefined,
-  budget: FanoutBudget
+  budget: FanoutBudget,
+  catalogRevision: number
 ): Promise<
   Pick<
     GapReconcileRunDetails,
@@ -437,6 +518,7 @@ async function reconcileClusters(
     | "decisionsApplied"
     | "proposalsDrafted"
     | "reshapeSkipped"
+    | "reshapePending"
   > & {
     // True when the per-tick draft cap left uncovered clusters undrafted. The caller
     // holds the processed revision so the next tick re-enters and drains the remainder.
@@ -452,8 +534,27 @@ async function reconcileClusters(
     decisionsApplied: 0,
     proposalsDrafted: 0,
     reshapeSkipped: false,
+    reshapePending: false,
     draftsDeferred: false
   };
+
+  // -1) Pick up where an earlier tick's reshape left off. The reshape is an
+  // enqueued job this reconciler does NOT wait for, so a previous tick may have
+  // left one behind:
+  //   - still queued/running → nothing to do this tick. Clustering is skipped
+  //     outright (it would only re-derive the set that is already being judged)
+  //     and the reshape's completion carries on.
+  //   - completed, but its completion-side continuation never ran (the watcher
+  //     gave up re-POSTing, the API restarted) → apply its verdicts here, through
+  //     the same code the continuation uses, then reconcile as usual.
+  //   - failed/cancelled → remembered as `failedCompositionHash`, so the
+  //     best-effort rule below can draft without it.
+  const leftover = await settleLeftoverReshapes(ctx, flowId, flowLabel, details);
+  if (leftover.inFlight) {
+    details.reshapePending = true;
+    logger.info({ flowLabel }, "gap reconciler: a reshape for this flow is still in flight; skipping clustering");
+    return details;
+  }
 
   // 0) Evict resolved gaps from whatever active cluster still holds them. A gap
   // is resolved by (question, summary) when its proposal merges, but a reshape
@@ -488,13 +589,15 @@ async function reconcileClusters(
   // semantic refiner either way.
   details.clustersCreated = await assignNewGaps(ctx, flowId, flowLabel);
 
-  // 2) Reshape this flow's active clusters. The propose→critic generative step now
-  // runs as a reconcile_gap_clusters AI job in the watcher; the API enqueues it and
-  // bounded-waits for the critic-confirmed verdicts. Runs whenever there is at least
-  // one active cluster: a single cluster has nothing to merge/split, but it can still
-  // be dismissed as off-topic (a lone "cats" cluster in a product flow). Reshape is
-  // best-effort: when no chat watcher is available (timeout) or the job fails, we log
-  // and skip, leaving the rest of reconcileGaps to run.
+  // 2) Reshape this flow's active clusters. The propose→critic generative step
+  // runs as a reconcile_gap_clusters AI job in the watcher. The API ENQUEUES it and
+  // returns — it never waits — and the job's completion applies the
+  // critic-confirmed verdicts and then drafts (continueReconcileFromCompletedReshape).
+  // Runs whenever there is at least one active cluster: a single cluster has
+  // nothing to merge/split, but it can still be dismissed as off-topic (a lone
+  // "cats" cluster in a product flow). Reshape is best-effort: when it cannot be
+  // enqueued (budget shed), or the reshape of this exact composition already
+  // failed, we log and skip, leaving the rest of reconcileGaps to run.
   const active = await ctx.stores.gapClusters.listActiveClustersForFlow(flowId);
   if (active.length >= 1) {
     // (#168) Short-circuit the metered propose→critic reshape when the active
@@ -514,97 +617,35 @@ async function reconcileClusters(
         { flowLabel, compositionHash, activeClusters: active.length },
         "gap reconciler: active cluster composition unchanged since last reshape; skipping propose→critic"
       );
-    }
-    const reshape = details.reshapeSkipped ? undefined : await requestReshape(ctx, active, flowId, flowLabel, budget);
-    if (reshape) {
-      // 3) Apply only the critic-confirmed changes, recording every decision
-      // (confirmed or not) so it's inspectable in the UI, not just in the logs.
-      for (const merge of reshape.merges) {
-        if (merge.clusterIds.length < 2) {
-          continue;
-        }
-        details.mergeDecisions += 1;
-        await ctx.stores.reconciliations.record({
-          flowId,
-          kind: "merge",
-          rationale: merge.rationale,
-          confirmed: merge.confirmed,
-          applied: merge.confirmed,
-          clusterIds: merge.clusterIds
-        });
-        if (!merge.confirmed) {
-          logger.info(
-            { flowLabel, clusterCount: merge.clusterIds.length },
-            "gap reconciler: critic rejected proposed merge"
-          );
-          continue;
-        }
-        details.decisionsApplied += 1;
-        logger.info({ flowLabel, clusterIds: merge.clusterIds }, "gap reconciler: critic confirmed merge of clusters");
-        await applyMerge(ctx, { clusterIds: merge.clusterIds, rationale: merge.rationale }, flowId);
+    } else if (compositionHash === leftover.failedCompositionHash) {
+      // The reshape of exactly this composition failed (or was cancelled). Best
+      // effort, as a reshape that timed out always was: draft the un-reshaped
+      // clusters rather than re-buying the same failing generation every tick. A
+      // later catalog change re-enters with no failure on record and tries again.
+      logger.warn(
+        { flowLabel, compositionHash },
+        "gap reconciler: the reshape for this composition did not complete; skipping reshape this run"
+      );
+    } else {
+      const outcome = await requestReshape(ctx, active, flowId, flowLabel, budget, {
+        compositionHash,
+        catalogRevision
+      });
+      if (outcome.kind === "pending") {
+        // Enqueued (or already running). Do NOT draft: these are exactly the
+        // clusters the critic may be about to merge or dismiss, and a draft now
+        // would turn one of them into a pull request. The completion drafts.
+        details.reshapePending = true;
+        return details;
       }
-      for (const split of reshape.splits) {
-        if (split.children.length < 2) {
-          continue;
-        }
-        details.splitDecisions += 1;
-        await ctx.stores.reconciliations.record({
-          flowId,
-          kind: "split",
-          rationale: split.rationale,
-          confirmed: split.confirmed,
-          applied: split.confirmed,
-          clusterIds: [split.clusterId]
-        });
-        if (!split.confirmed) {
-          logger.info({ flowLabel, clusterId: split.clusterId }, "gap reconciler: critic rejected proposed split");
-          continue;
-        }
-        details.decisionsApplied += 1;
-        logger.info(
-          { flowLabel, clusterId: split.clusterId, childCount: split.children.length },
-          "gap reconciler: critic confirmed split of cluster"
-        );
-        await applySplit(
-          ctx,
-          { clusterId: split.clusterId, children: split.children, rationale: split.rationale },
-          flowId
-        );
+      if (outcome.kind === "completed") {
+        // Already finished by the time we looked (an instant provider; the
+        // synchronous brokers the tests use). Apply it now, exactly as the
+        // completion handler would, and carry on to drafting in this tick.
+        await applyCompletedReshape(ctx, flowId, flowLabel, outcome.followup, outcome.job.output, details);
       }
-      // Dismissals run before drafting (step 4) so an off-topic cluster never becomes
-      // a pull request. A confirmed dismissal drops the cluster and dismisses its
-      // member gaps permanently, so it neither drafts nor re-clusters next run.
-      for (const dismissal of reshape.dismissals) {
-        details.dismissDecisions += 1;
-        await ctx.stores.reconciliations.record({
-          flowId,
-          kind: "dismiss",
-          rationale: dismissal.rationale,
-          confirmed: dismissal.confirmed,
-          applied: dismissal.confirmed,
-          clusterIds: [dismissal.clusterId]
-        });
-        if (!dismissal.confirmed) {
-          logger.info(
-            { flowLabel, clusterId: dismissal.clusterId },
-            "gap reconciler: critic rejected proposed dismissal"
-          );
-          continue;
-        }
-        details.decisionsApplied += 1;
-        logger.info(
-          { flowLabel, clusterId: dismissal.clusterId },
-          "gap reconciler: critic confirmed dismissal of off-topic cluster"
-        );
-        await applyDismissal(ctx, { clusterId: dismissal.clusterId, rationale: dismissal.rationale }, flowId);
-      }
-      // Record the composition we just judged, so a later tick whose active set is
-      // identical skips the reshape. Recorded ONLY here — inside the `reshape`
-      // branch — so a skipped, timed-out, failed, or malformed reshape (all of
-      // which leave `reshape` undefined) never marks an unjudged set as done and
-      // wedges the gate. If a merge/split/dismissal was applied, the active set now
-      // differs from this hash, so the next tick re-judges the new composition once.
-      await ctx.stores.gapClusters.setReshapeCompositionHash(flowId, compositionHash);
+      // outcome.kind === "unavailable": could not be enqueued (budget/capacity
+      // shed, broker error) — skip reshape this run and fall through to drafting.
     }
   }
 
@@ -818,7 +859,7 @@ async function embedAll(provider: EmbeddingProvider, texts: string[]): Promise<n
 
 // Fan-out containment ceiling: the most NEW proposal drafts a single reconcile tick
 // will enqueue for one flow. Reshape is meant to collapse near-duplicate singleton
-// clusters before drafting, but it is best-effort — a timeout (no second watcher), a
+// clusters before drafting, but it is best-effort — a shed enqueue, a
 // job failure, malformed output, or a model that simply under-merges all leave the
 // raw singleton set intact. Without a ceiling a single questionnaire that produced
 // ~100 fine-grained gaps drafts ~100 proposals (and ~100 publish jobs) in one tick.
@@ -1016,18 +1057,404 @@ export function reshapeCompositionHash(
 
 type Reshape = ReturnType<typeof reconcileGapClustersOutputSchema.parse>;
 
-// Enqueues the reconcile_gap_clusters AI job for this flow's active clusters and
-// bounded-waits for the watcher to propose→critic-confirm the reshape. Returns the
-// validated verdicts, or `undefined` when the reshape could not be obtained
-// (timeout with no chat watcher, job failure/cancellation, or malformed output) —
-// the caller treats that as "skip reshape this run".
+// The decision counters a reshape application adds to — a subset of the run
+// details, shared by the tick and the completion-side continuation.
+type ReshapeCounters = Pick<
+  GapReconcileRunDetails,
+  "mergeDecisions" | "splitDecisions" | "dismissDecisions" | "decisionsApplied"
+>;
+
+// What a process_gaps_to_pull_requests follow-up row carries (see
+// stores/orchestration-followup-store.ts): the flow, and the state the reshape was
+// requested at — the composition it judges (recorded as "judged" once its verdicts
+// are applied) and the catalog revision to mark processed once drafting has run.
+const reshapeContextSchema = z.object({
+  flowId: z.string().optional(),
+  compositionHash: z.string(),
+  catalogRevision: z.number()
+});
+
+// How long a reshape may sit unclaimed (queued, never started) before a tick stops
+// waiting for it. Three reconcile ticks: long enough to ride out a busy queue or a
+// watcher restart, short enough that a flow with no capable watcher is not frozen.
+export const RESHAPE_STALL_MS = 30 * 60_000;
+
+// The scope key reshape follow-ups are filed under: one flow's reconcile.
+function reshapeScopeKey(flowId: string | undefined): string {
+  return flowId ?? "";
+}
+
+// Examines the reshape follow-ups an earlier tick left pending for this flow.
+// Returns whether one is still in flight, and — if a reshape failed outright —
+// the composition it had been asked to judge. A completed-but-unapplied reshape
+// is applied here (self-healing: this is the same routine the completion handler
+// runs, so it does not matter which of the two gets there first; both hold the
+// flow's reconcile lock and re-read the row).
+async function settleLeftoverReshapes(
+  ctx: AppContext,
+  flowId: string | undefined,
+  flowLabel: string,
+  counters: ReshapeCounters
+): Promise<{ inFlight: boolean; failedCompositionHash?: string }> {
+  const rows = await ctx.stores.orchestrationFollowups.listByScope(
+    "process_gaps_to_pull_requests",
+    reshapeScopeKey(flowId)
+  );
+  let inFlight = false;
+  let failedCompositionHash: string | undefined;
+  for (const row of rows) {
+    if (row.status !== "pending") {
+      continue;
+    }
+    let job: JobView | undefined;
+    try {
+      job = await ctx.jobs.get(row.jobId);
+    } catch (error) {
+      // The broker could not tell us. Assume the reshape is still running rather
+      // than write its outcome off: the next tick asks again.
+      const message = error instanceof Error ? error.message : String(error);
+      logger.warn({ flowLabel, jobId: row.jobId, err: message }, "gap reconciler: could not read reshape job state");
+      inFlight = true;
+      continue;
+    }
+    if (job && IN_FLIGHT_JOB_STATES.has(job.state)) {
+      const stalled = job.state !== "active" && Date.now() - Date.parse(row.createdAt) >= RESHAPE_STALL_MS;
+      if (!stalled) {
+        inFlight = true;
+        continue;
+      }
+      // Still unclaimed long after it was enqueued: no capable watcher is taking
+      // it. Waiting on it would freeze this flow's clustering AND drafting for as
+      // long as that lasts, where a reshape that could not be obtained has always
+      // meant "draft without it". Write it off — and CANCEL it, so a watcher that
+      // turns up later never runs a paid generation whose verdicts nobody will
+      // apply. (Cancel is a no-op if it completed in the meantime; the row is
+      // settled below either way, so a late completion's continuation is a no-op.)
+      // An `active` reshape is never written off here: it is running, and its own
+      // expiry bounds it.
+      await ctx.jobs.cancel(job.id);
+      job = await ctx.jobs.get(job.id);
+      if (job?.state === "completed") {
+        await applyCompletedReshape(ctx, flowId, flowLabel, row, job.output, counters);
+        continue;
+      }
+    } else if (job?.state === "completed") {
+      await applyCompletedReshape(ctx, flowId, flowLabel, row, job.output, counters);
+      continue;
+    }
+    // Failed, cancelled, stalled, or gone: no verdicts will ever arrive for this row.
+    const context = reshapeContextSchema.safeParse(row.context);
+    if (context.success) {
+      failedCompositionHash = context.data.compositionHash;
+    }
+    await ctx.stores.orchestrationFollowups.settle(row.jobId, { applied: false });
+    logger.warn(
+      { flowLabel, jobId: row.jobId, state: job?.state ?? "missing" },
+      "gap reconciler: reshape job did not complete; its verdicts will not be applied"
+    );
+  }
+  // Reshape rows are tiny and settle within a tick or two; keep a week for audit.
+  await ctx.stores.orchestrationFollowups.pruneSettledBefore(
+    "process_gaps_to_pull_requests",
+    new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString()
+  );
+  return { inFlight, ...(failedCompositionHash ? { failedCompositionHash } : {}) };
+}
+
+// Applies one completed reshape job's output and settles its follow-up row. The
+// single place a reshape's verdicts are applied, shared by three callers that all
+// hold the flow's reconcile lock: the completion handler, a tick that finds the
+// job already complete, and a tick picking up a completion nobody applied.
+// Idempotent: a settled row is a no-op, and applyMerge/applySplit/applyDismissal
+// each act only on still-active clusters, so re-applying after a crash between
+// the verdicts and the settle changes nothing.
+//
+// Returns true when verdicts were applied. Malformed output applies nothing and
+// records no judged composition (so a later tick re-judges it), but the row is
+// still settled — the job is done and will never produce anything better.
+async function applyCompletedReshape(
+  ctx: AppContext,
+  flowId: string | undefined,
+  flowLabel: string,
+  followup: OrchestrationFollowup,
+  output: unknown,
+  counters: ReshapeCounters
+): Promise<boolean> {
+  const current = await ctx.stores.orchestrationFollowups.get(followup.jobId);
+  if (!current || current.status !== "pending") {
+    return false;
+  }
+  const context = reshapeContextSchema.safeParse(current.context);
+  const reshape = parseCompletedJobOutput(reconcileGapClustersOutputSchema, output);
+  if (!reshape || !context.success) {
+    logger.warn(
+      { flowLabel, jobId: followup.jobId },
+      "gap reconciler: reshape job returned malformed output; skipping reshape"
+    );
+    await ctx.stores.orchestrationFollowups.settle(followup.jobId, { applied: false });
+    return false;
+  }
+  await applyReshapeVerdicts(ctx, flowId, flowLabel, reshape, counters);
+  // Record the composition this reshape judged, so a later tick whose active set
+  // is identical skips the reshape. Recorded ONLY once real verdicts were applied —
+  // a failed, cancelled, or malformed reshape never marks an unjudged set as done
+  // and wedges the gate. If a merge/split/dismissal was applied, the active set now
+  // differs from this hash, so the next catalog change re-judges the new composition.
+  await ctx.stores.gapClusters.setReshapeCompositionHash(flowId, context.data.compositionHash);
+  await ctx.stores.orchestrationFollowups.settle(followup.jobId, { applied: true });
+  return true;
+}
+
+// How far back applyReshapeVerdicts looks for a decision it has already recorded.
+const RECENT_DECISION_SCAN = 200;
+
+function decisionKey(decision: NewReconciliationDecision): string {
+  return JSON.stringify([
+    decision.kind,
+    [...decision.clusterIds].sort(),
+    decision.rationale,
+    decision.confirmed,
+    decision.applied
+  ]);
+}
+
+// 3) Apply only the critic-confirmed changes, recording every decision
+// (confirmed or not) so it's inspectable in the UI, not just in the logs.
+async function applyReshapeVerdicts(
+  ctx: AppContext,
+  flowId: string | undefined,
+  flowLabel: string,
+  reshape: Reshape,
+  details: ReshapeCounters
+): Promise<void> {
+  // Replay guard for the AUDIT rows. The cluster operations below are idempotent
+  // (each acts only on still-active clusters), but recording a decision is an
+  // insert: a crash after the verdicts were applied and before the follow-up row
+  // settled replays this whole function and would log every decision twice. So a
+  // decision identical to one already on record for this flow — same kind, same
+  // clusters, same rationale, same verdict — is not recorded again.
+  const recorded = new Set(
+    (await ctx.stores.reconciliations.list(RECENT_DECISION_SCAN))
+      .filter((decision) => sameFlow(decision.flowId, flowId))
+      .map(decisionKey)
+  );
+  const recordDecision = async (decision: NewReconciliationDecision): Promise<void> => {
+    const key = decisionKey(decision);
+    if (recorded.has(key)) {
+      return;
+    }
+    recorded.add(key);
+    await ctx.stores.reconciliations.record(decision);
+  };
+
+  for (const merge of reshape.merges) {
+    if (merge.clusterIds.length < 2) {
+      continue;
+    }
+    details.mergeDecisions += 1;
+    await recordDecision({
+      flowId,
+      kind: "merge",
+      rationale: merge.rationale,
+      confirmed: merge.confirmed,
+      applied: merge.confirmed,
+      clusterIds: merge.clusterIds
+    });
+    if (!merge.confirmed) {
+      logger.info(
+        { flowLabel, clusterCount: merge.clusterIds.length },
+        "gap reconciler: critic rejected proposed merge"
+      );
+      continue;
+    }
+    details.decisionsApplied += 1;
+    logger.info({ flowLabel, clusterIds: merge.clusterIds }, "gap reconciler: critic confirmed merge of clusters");
+    await applyMerge(ctx, { clusterIds: merge.clusterIds, rationale: merge.rationale }, flowId);
+  }
+  for (const split of reshape.splits) {
+    if (split.children.length < 2) {
+      continue;
+    }
+    details.splitDecisions += 1;
+    await recordDecision({
+      flowId,
+      kind: "split",
+      rationale: split.rationale,
+      confirmed: split.confirmed,
+      applied: split.confirmed,
+      clusterIds: [split.clusterId]
+    });
+    if (!split.confirmed) {
+      logger.info({ flowLabel, clusterId: split.clusterId }, "gap reconciler: critic rejected proposed split");
+      continue;
+    }
+    details.decisionsApplied += 1;
+    logger.info(
+      { flowLabel, clusterId: split.clusterId, childCount: split.children.length },
+      "gap reconciler: critic confirmed split of cluster"
+    );
+    await applySplit(ctx, { clusterId: split.clusterId, children: split.children, rationale: split.rationale }, flowId);
+  }
+  // Dismissals run before drafting (step 4) so an off-topic cluster never becomes
+  // a pull request. A confirmed dismissal drops the cluster and dismisses its
+  // member gaps permanently, so it neither drafts nor re-clusters next run.
+  for (const dismissal of reshape.dismissals) {
+    details.dismissDecisions += 1;
+    await recordDecision({
+      flowId,
+      kind: "dismiss",
+      rationale: dismissal.rationale,
+      confirmed: dismissal.confirmed,
+      applied: dismissal.confirmed,
+      clusterIds: [dismissal.clusterId]
+    });
+    if (!dismissal.confirmed) {
+      logger.info({ flowLabel, clusterId: dismissal.clusterId }, "gap reconciler: critic rejected proposed dismissal");
+      continue;
+    }
+    details.decisionsApplied += 1;
+    logger.info(
+      { flowLabel, clusterId: dismissal.clusterId },
+      "gap reconciler: critic confirmed dismissal of off-topic cluster"
+    );
+    await applyDismissal(ctx, { clusterId: dismissal.clusterId, rationale: dismissal.rationale }, flowId);
+  }
+}
+
+// THE CONTINUATION. A completed reconcile_gap_clusters job resumes the reconcile
+// tick that enqueued it and returned without waiting: apply the critic-confirmed
+// verdicts, then do what the tick would have done next — draft the uncovered
+// clusters, mark the revision processed, drain the publication outbox. Called
+// from the completion dispatcher (completeJob) for every completed reshape job; a
+// job with no follow-up row (created by hand) is a no-op.
+//
+// Runs under the flow's reconcile lock, WAITING for it rather than skipping: it
+// must serialise against a tick of the same flow, and its outcome must not be
+// lost. If the wait times out the completion returns 500 and the watcher re-POSTs
+// it (the replay re-runs this, not the generation); and if that too is exhausted,
+// the next tick applies the completed reshape itself (settleLeftoverReshapes).
+//
+// Drafting happens here only if the active composition is still the one the
+// reshape was asked to judge. If it moved while the job was in flight — a merge
+// cascade froze a cluster, a human dismissed one — some clusters are un-judged, so
+// the verdicts are applied but drafting and the processed revision are left to the
+// next tick, which re-judges the new composition first.
+export async function continueReconcileFromCompletedReshape(
+  ctx: AppContext,
+  job: JobView | undefined,
+  output: unknown,
+  deps: ReconcilerDeps = DEFAULT_DEPS
+): Promise<void> {
+  if (!job || job.type !== "reconcile_gap_clusters") {
+    return;
+  }
+  const followup = await ctx.stores.orchestrationFollowups.get(job.id);
+  if (!followup || followup.orchestrator !== "process_gaps_to_pull_requests" || followup.status !== "pending") {
+    return;
+  }
+  const context = reshapeContextSchema.safeParse(followup.context);
+  if (!context.success) {
+    return;
+  }
+  const { flowId, compositionHash, catalogRevision } = context.data;
+  const flowLabel = flowId ?? "default";
+
+  await withFlowRunLockWaiting(ctx.pool, "process_gaps_to_pull_requests", flowId, async () => {
+    // Re-read under the lock: a tick may have applied this reshape while we waited.
+    const current = await ctx.stores.orchestrationFollowups.get(job.id);
+    if (!current || current.status !== "pending") {
+      return;
+    }
+    const budget = createFanoutBudget(ctx, "process_gaps_to_pull_requests", flowId);
+    const details = {
+      reshapeJobId: job.id,
+      mergeDecisions: 0,
+      splitDecisions: 0,
+      dismissDecisions: 0,
+      decisionsApplied: 0,
+      proposalsDrafted: 0,
+      publicationActionsDrained: 0,
+      compositionChanged: false
+    };
+    try {
+      // Judged BEFORE the verdicts are applied — applying them changes it.
+      const compositionBefore = reshapeCompositionHash(
+        await ctx.stores.gapClusters.listActiveClustersForFlow(flowId),
+        await ctx.stores.gapClusters.listActiveMembershipsForFlow(flowId)
+      );
+      details.compositionChanged = compositionBefore !== compositionHash;
+
+      await applyCompletedReshape(ctx, flowId, flowLabel, current, output, details);
+
+      if (details.compositionChanged) {
+        logger.info(
+          { flowLabel, jobId: job.id },
+          "gap reconciler: cluster composition changed while the reshape was in flight; leaving drafting to the next tick"
+        );
+      } else {
+        // The rest of the tick, exactly as reconcileGapsInner runs it after a reshape.
+        const draftOutcome = await draftProposalsForUncoveredClusters(ctx, flowId, budget);
+        details.proposalsDrafted = draftOutcome.drafted;
+        if (draftOutcome.deferred > 0) {
+          logger.warn(
+            { flowLabel, catalogRevision },
+            "gap reconciler: drafting was capped after the reshape; holding the processed revision so remaining clusters draft on later ticks"
+          );
+        } else if ((await ctx.stores.gapClusters.getProcessedRevision(flowId)) < catalogRevision) {
+          // Mark the revision the reshape was requested at — not the current one.
+          // Gaps that arrived since leave the catalog ahead of it, so the next tick
+          // re-enters and clusters them.
+          await ctx.stores.gapClusters.setProcessedRevision(flowId, catalogRevision, new Date().toISOString());
+        }
+        details.publicationActionsDrained = await drainPublicationOutbox(ctx, flowId, deps, new Map());
+      }
+    } catch (error) {
+      budget.finish();
+      await ctx.stores.maintenanceRuns.record({
+        taskType: "process_gaps_to_pull_requests",
+        flowId,
+        trigger: "scheduled",
+        status: "failed",
+        summary: `applying reshape failed for flow ${flowLabel}`,
+        error: error instanceof Error ? error.message : String(error),
+        details: { ...details, fanout: budget.snapshot() }
+      });
+      throw error;
+    }
+    budget.finish();
+    await ctx.stores.maintenanceRuns.record({
+      taskType: "process_gaps_to_pull_requests",
+      flowId,
+      trigger: "scheduled",
+      status: "completed",
+      summary: `applied reshape for flow ${flowLabel}`,
+      details: { ...details, fanout: budget.snapshot() }
+    });
+  });
+}
+
+// Requests the propose→critic reshape for this flow's active clusters WITHOUT
+// waiting for it. Outcomes:
+//   - `pending`     a reshape is now queued/running (freshly enqueued, or an
+//                   in-flight one for this flow+provider was reused — no second
+//                   paid generation, no budget spent). Its completion continues.
+//   - `completed`   the job had already finished when we looked; the caller
+//                   applies it inline.
+//   - `unavailable` it could not be enqueued (fan-out budget/capacity shed, or a
+//                   broker error) — the caller skips reshape this run.
+// Registering the follow-up row is what lets the completion find its way back;
+// `register` is insert-if-absent, so a reused in-flight job keeps the composition
+// and revision it was originally requested at.
 async function requestReshape(
   ctx: AppContext,
   active: GapClusterRecord[],
   flowId: string | undefined,
   flowLabel: string,
-  budget: FanoutBudget
-): Promise<Reshape | undefined> {
+  budget: FanoutBudget,
+  requestedAt: { compositionHash: string; catalogRevision: number }
+): Promise<
+  { kind: "pending" } | { kind: "completed"; job: JobView; followup: OrchestrationFollowup } | { kind: "unavailable" }
+> {
   // Attach scope grounding per cluster (persona + best retrieval relevance + closest
   // snippets, via inline retrieval against the flow's destination) so the model can
   // tell an off-topic cluster from an on-topic-but-uncovered one. The cluster title
@@ -1049,44 +1476,64 @@ async function requestReshape(
     provider: ctx.config.get().aiProvider
   };
 
-  let terminal;
+  let job: JobView;
   try {
-    terminal = await runJobToCompletion(ctx, "reconcile_gap_clusters", input, {
-      reuseKey: reconcileGapClustersReuseKey,
-      // A reuseKey hit waits on the in-flight reshape (no budget spent); only a
-      // genuine enqueue admits through the fan-out budget. A shed throws and is
-      // caught below as "skip reshape this run" (#288b).
-      admission: { budget }
-    });
+    const reusable = await findInFlightReshape(ctx, input);
+    if (reusable) {
+      // Reuse spends NO budget/capacity: an in-flight job already holds its slot.
+      job = reusable;
+    } else {
+      // A genuine enqueue admits through the fan-out budget (#288b).
+      const admission = await budget.admit("reconcile_gap_clusters", input);
+      if (!admission.ok) {
+        logger.warn(
+          { flowLabel, reason: admission.reason },
+          "gap reconciler: reshape job shed by the fan-out budget; skipping reshape this run"
+        );
+        return { kind: "unavailable" };
+      }
+      job = admission.job;
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message : "reshape job failed";
     logger.warn({ flowLabel, err: message }, "gap reconciler: reshape job could not be enqueued; skipping reshape");
-    return undefined;
+    return { kind: "unavailable" };
   }
 
-  if (terminal.state !== "completed") {
-    logger.warn(
-      { flowLabel, jobId: terminal.id, state: terminal.state },
-      "gap reconciler: reshape job did not complete; skipping reshape this run"
-    );
-    return undefined;
+  const followup = await ctx.stores.orchestrationFollowups.register({
+    jobId: job.id,
+    orchestrator: "process_gaps_to_pull_requests",
+    scopeKey: reshapeScopeKey(flowId),
+    context: { ...(flowId ? { flowId } : {}), ...requestedAt }
+  });
+  logger.info({ flowLabel, jobId: job.id }, "gap reconciler: reshape enqueued; its completion applies the verdicts");
+  // Read the job back AFTER registering. A reshape that completed between the
+  // enqueue and the register found no row, so its completion-side continuation
+  // did nothing; seeing it `completed` here lets the tick apply it now instead of
+  // leaving it for the next tick's leftover pass. A broker that cannot answer is
+  // treated as "still in flight" — the next tick asks again.
+  let current: JobView | undefined = job;
+  try {
+    current = (await ctx.jobs.get(job.id)) ?? job;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    logger.warn({ flowLabel, jobId: job.id, err: message }, "gap reconciler: could not read reshape job state");
   }
-
-  const parsed = parseCompletedJobOutput(reconcileGapClustersOutputSchema, terminal.output);
-  if (!parsed) {
-    logger.warn(
-      { flowLabel, jobId: terminal.id },
-      "gap reconciler: reshape job returned malformed output; skipping reshape"
-    );
-    return undefined;
-  }
-  return parsed;
+  return current.state === "completed" ? { kind: "completed", job: current, followup } : { kind: "pending" };
 }
 
-// Dedupe key for reuseKey (#162): a reshape already in flight for this flow (and
-// routed to the same provider) is the same piece of work a concurrent caller or
-// the next cron tick would otherwise duplicate, so wait on it instead of
-// enqueueing another. The default flow's undefined flowId is normalized to a
+// The in-flight reconcile_gap_clusters job for the same flow and provider, if any
+// (#162): the same piece of work a concurrent caller or the next cron tick would
+// otherwise duplicate.
+async function findInFlightReshape(ctx: AppContext, input: unknown): Promise<JobView | undefined> {
+  const key = reconcileGapClustersReuseKey(input);
+  const { jobs } = await ctx.jobs.list({ type: "reconcile_gap_clusters", limit: 200 });
+  return jobs.find((job) => IN_FLIGHT_JOB_STATES.has(job.state) && reconcileGapClustersReuseKey(job.input) === key);
+}
+
+// Dedupe key (#162): a reshape already in flight for this flow (and routed to the
+// same provider) is the same piece of work a concurrent caller or the next cron
+// tick would otherwise duplicate, so it is reused instead of enqueueing another. The default flow's undefined flowId is normalized to a
 // stable sentinel so repeated default-flow reshapes still dedupe against each
 // other rather than each producing a distinct "undefined" key.
 function reconcileGapClustersReuseKey(input: unknown): string {

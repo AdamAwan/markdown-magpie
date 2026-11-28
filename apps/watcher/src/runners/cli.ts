@@ -2,10 +2,10 @@ import { spawn } from "node:child_process";
 import { tmpdir } from "node:os";
 import type { Readable, Writable } from "node:stream";
 import type { AiExecutionIdentity, ChatProvider, ChatRequest, ChatResponse, SourceDescriptor } from "@magpie/core";
-import type { JobCapability, JobType, JobView } from "@magpie/jobs";
+import type { JobCapability, JobType, JobView, UndeclaredOutputFieldPolicy } from "@magpie/jobs";
 import { JOB_RUNNER_SYSTEM } from "@magpie/prompts";
 import type { WatcherApi } from "../http-client.js";
-import { buildSourceGroundedPrompt, parseJobOutput } from "../job-prompts.js";
+import { DEFAULT_UNDECLARED_OUTPUT_FIELDS, buildSourceGroundedPrompt, parseJobOutput } from "../job-prompts.js";
 import { logger } from "../logger.js";
 import {
   fetchSourceMapEntries,
@@ -178,6 +178,9 @@ export interface CliRunnerOptions {
   // Defaults to the watcher's process.env; a test seam overrides it to assert the
   // allowlist without mutating global process state.
   spawnEnv?: NodeJS.ProcessEnv;
+  // See ChatRunnerOptions.undeclaredOutputFields: strict unless the composition
+  // root passes the operator's (lenient-by-default) policy.
+  undeclaredOutputFields?: UndeclaredOutputFieldPolicy;
 }
 
 // Runs generative jobs via an external CLI agent (codex / claude). The CLI is
@@ -189,6 +192,7 @@ export class CliRunner {
   // when explicitly configured — an unset model env means the CLI ran on its own
   // default, and reporting nothing beats guessing what the CLI resolved.
   readonly aiIdentity: AiExecutionIdentity;
+  readonly undeclaredOutputFields: UndeclaredOutputFieldPolicy;
   private readonly command: string;
   private readonly args: string[];
   private readonly promptMode: PromptMode;
@@ -219,6 +223,7 @@ export class CliRunner {
     this.prepareWorkspaces = options.prepareWorkspaces ?? prepareSourceWorkspaces;
     this.spawnFn = options.spawnOverride ?? spawn;
     this.spawnEnv = options.spawnEnv ?? process.env;
+    this.undeclaredOutputFields = options.undeclaredOutputFields ?? DEFAULT_UNDECLARED_OUTPUT_FIELDS;
   }
 
   supports(type: JobType): boolean {
@@ -231,7 +236,12 @@ export class CliRunner {
     // complete() contract — no checkout, no agent loop. answer_question fans out
     // over all providers, so the CLI runners need this branch too.
     if (job.repair) {
-      return runRepairReprompt({ job, model: this.modelFor(job), signal });
+      return runRepairReprompt({
+        job,
+        model: this.modelFor(job),
+        signal,
+        undeclaredOutputFields: this.undeclaredOutputFields
+      });
     }
     // Source-grounded jobs never go through the ChatProvider adapter — the CLI
     // itself is the whole agent, exploring the checkout with its native tools.
@@ -245,6 +255,7 @@ export class CliRunner {
       model,
       api: this.api ?? missingApi,
       signal,
+      undeclaredOutputFields: this.undeclaredOutputFields,
       ...(this.buildPromptOverride ? { buildPromptOverride: this.buildPromptOverride } : {})
     });
   }
@@ -306,7 +317,7 @@ export class CliRunner {
       extraArgs: this.readOnlyArgs(prepared),
       timeoutMs: this.agenticTimeoutMs
     });
-    return stampSourceMapUpdates(parseJobOutput(job, content), prepared.workspaces);
+    return stampSourceMapUpdates(parseJobOutput(job, content, this.undeclaredOutputFields), prepared.workspaces);
   }
 
   // Read-only enforcement is assembled HERE, per capability, so it cannot be

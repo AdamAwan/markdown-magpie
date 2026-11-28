@@ -13,6 +13,7 @@ import { RuntimeConfigHolder } from "../../config-holder.js";
 import { FakeJobBroker } from "../../jobs/fake-broker.js";
 import { makeTestContext } from "../../test-support/context.js";
 import { logger } from "../../logger.js";
+import { completeJob, failJob } from "../jobs/service.js";
 import * as proposals from "./service.js";
 
 const execFileAsync = promisify(execFile);
@@ -44,9 +45,9 @@ async function seedGitRepository(ctx: ReturnType<typeof makeTestContext>): Promi
 }
 
 // A fake broker that synchronously completes every answer_question job by
-// writing a caller-controlled answer onto the re-asked question log — so
-// runJobToCompletion returns at once and verifyGapClosure reads a real answer,
-// no watcher required. Mirrors the ReshapingJobBroker pattern used by the
+// writing a caller-controlled answer onto the re-asked question log — so the
+// re-ask is already complete when verifyGapClosure looks at it and the verdict is
+// committed in the same call, no watcher required. Mirrors the ReshapingJobBroker pattern used by the
 // reconciler tests.
 class AnsweringJobBroker extends FakeJobBroker {
   constructor(
@@ -1052,51 +1053,28 @@ test("verifyGapClosure resolves gaps for a closed question even when a sibling i
   assert.ok(q2GapStillOpen, "Q2's gap remains a candidate for re-drafting");
 });
 
-test("verifyGapClosure throws (not still_open) when a re-ask never completes, recording no verdict", async () => {
-  // Regression for issue #150: on a single-watcher deployment the maintenance
-  // watcher blocks in the /verify-closure callback and no watcher is free to answer
-  // the re-ask, so runJobToCompletion times out. That is an infrastructure failure,
-  // not evidence the merged doc is inadequate — it must NOT be turned into a
-  // still_open content verdict that reopens/parks a correctly-merged doc.
-  const ctx = makeTestContext();
-  const { log, merged } = await mergedProposalWithGap(ctx);
-  // A plain broker never completes the answer_question job, so the bounded wait
-  // times out (JOB_RUN_TO_COMPLETION_TIMEOUT_MS is 100ms in tests) and the job is
-  // cancelled — exactly the single-watcher self-starve.
-  ctx.jobs = new FakeJobBroker();
+// --- Non-blocking verification -------------------------------------------------
+// verify_gap_closure enqueues its re-asks and returns; each re-ask's completion
+// resumes the verification. These tests drive a plain FakeJobBroker the way a
+// watcher does (claim → completeJob/failJob), so nothing completes "by itself".
 
-  await assert.rejects(
-    () => proposals.verifyGapClosure(ctx, merged),
-    (error: unknown) => error instanceof proposals.VerificationIncompleteError
-  );
+const CLOSING_ANSWER: AnswerResult = {
+  answer: "Set the X flag.",
+  confidence: "high",
+  citations: [citation("configure-x.md")]
+};
 
-  // Nothing was committed: no closure status, no verification row, the gap is not
-  // reopened, and the retry cap is untouched — so a retry (once a watcher is free)
-  // starts clean.
-  const reloaded = await ctx.stores.proposals.get(merged.id);
-  assert.equal(
-    reloaded?.closureStatus,
-    undefined,
-    "an infrastructure failure leaves the proposal unverified, not reopened"
-  );
-  assert.equal(
-    await ctx.stores.gapClosureVerifications.countPriorStillOpen(log.id),
-    0,
-    "no still_open verdict is recorded"
-  );
-  const q = await ctx.stores.questionLogs.get(log.id);
-  assert.equal(
-    (q?.gaps ?? []).some((gap) => gap.source === "verification"),
-    false,
-    "no verification gap is filed for an infrastructure failure"
-  );
-});
+// The re-ask jobs currently enqueued, oldest first.
+async function reaskJobs(ctx: ReturnType<typeof makeTestContext>): Promise<JobView[]> {
+  const { jobs } = await ctx.jobs.list({ type: "answer_question", limit: 50 });
+  return [...jobs].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+}
 
-test("verifyGapClosure aborts the whole run when only some re-asks complete, committing nothing", async () => {
-  // A multi-question proposal where one re-ask completes and a sibling starves. The
-  // run must abort (throw) without committing the completed question's verdict, so a
-  // retry re-evaluates the whole proposal cleanly rather than half-recording it.
-  const ctx = makeTestContext();
+function reaskQuestion(job: JobView): string {
+  return (job.input as { question: string }).question;
+}
+
+async function twoQuestionMergedProposal(ctx: ReturnType<typeof makeTestContext>) {
   const q1 = await ctx.stores.questionLogs.record({
     question: "How do I configure X?",
     chatProvider: "codex",
@@ -1121,69 +1099,396 @@ test("verifyGapClosure aborts the whole run when only some re-asks complete, com
   await ctx.stores.proposals.updateStatus(proposal.id, "merged");
   const merged = await ctx.stores.proposals.get(proposal.id);
   assert.ok(merged);
+  return { q1, q2, merged };
+}
 
-  // Completes Q1's re-ask (confident, cites the doc) but leaves Q2's uncompleted.
-  class PartialBroker extends FakeJobBroker {
-    override async create(type: JobType, input: unknown): Promise<JobView> {
-      const job = await super.create(type, input);
-      if (type === "answer_question" && (input as { question: string }).question === "How do I configure X?") {
-        const { questionLogId } = input as { questionLogId: string };
-        const answer: AnswerResult = {
-          answer: "Set the X flag.",
-          confidence: "high",
-          citations: [citation("configure-x.md")]
-        };
-        await ctx.stores.questionLogs.updateAnswer(questionLogId, { answer, chatProvider: "codex" });
-        return super.complete(job.id, answer);
-      }
-      return job; // Q2 stays created → times out → cancelled → incomplete
-    }
-  }
-  ctx.jobs = new PartialBroker();
-
-  await assert.rejects(
-    () => proposals.verifyGapClosure(ctx, merged!),
-    (error: unknown) => error instanceof proposals.VerificationIncompleteError
-  );
-
-  const reloaded = await ctx.stores.proposals.get(merged!.id);
-  assert.equal(reloaded?.closureStatus, undefined);
-  // Q1 completed closed, but because the whole run aborted its verdict is NOT
-  // committed — questionsWithClosedVerdict is empty, so a retry re-asks it too.
-  const closed = await ctx.stores.gapClosureVerifications.questionsWithClosedVerdict(merged!.id);
-  assert.equal(closed.size, 0, "no partial verdict is recorded when the run aborts");
-});
-
-test("verifyGapClosure aborts and commits nothing when the request signal is aborted, even if every re-ask completed", async () => {
-  // Regression for issue #195: the maintenance watcher's verify-closure POST hit
-  // its timeout and pg-boss will retry the job. The original API-side run must
-  // unwind WITHOUT recording a verdict, so it can't overlap its own retry and
-  // write a duplicate set of gap_closure_verification rows. This is the worst case
-  // for a silent double-commit: every re-ask completes confidently (a verdict the
-  // run WOULD normally record as verified_closed and resolve the gap on), yet the
-  // aborted signal must still make it commit nothing.
+test("verifyGapClosure returns pending (not still_open) while a re-ask is unanswered, recording no verdict", async () => {
+  // Issue #150: a re-ask that has not been answered — no watcher free, a queue
+  // backlog — is not evidence the merged doc is inadequate. It must NOT become a
+  // still_open content verdict that reopens/parks a correctly-merged doc. The
+  // orchestrator enqueues the re-ask and returns; it no longer waits, so a single
+  // watcher is enough to run the whole verification.
   const ctx = makeTestContext();
   const { log, merged } = await mergedProposalWithGap(ctx);
-  ctx.jobs = new AnsweringJobBroker(ctx, () => ({
-    answer: "Set the X flag.",
-    confidence: "high",
-    citations: [citation("configure-x.md")]
-  }));
 
-  await assert.rejects(
-    () => proposals.verifyGapClosure(ctx, merged, AbortSignal.abort()),
-    (error: unknown) => error instanceof proposals.VerificationAbortedError
+  const result = await proposals.verifyGapClosure(ctx, merged);
+
+  assert.deepEqual(result, { proposalId: merged.id, closureStatus: "pending", perQuestion: [] });
+  const jobs = await reaskJobs(ctx);
+  assert.equal(jobs.length, 1, "exactly one re-ask is enqueued");
+  assert.equal(jobs[0]?.state, "created", "the re-ask is left queued for a watcher — never cancelled");
+
+  // Nothing was committed: no closure status, no verification row, the gap is not
+  // reopened, and the retry cap is untouched.
+  const reloaded = await ctx.stores.proposals.get(merged.id);
+  assert.equal(reloaded?.closureStatus, undefined, "an unanswered re-ask leaves the proposal unverified");
+  assert.equal(
+    await ctx.stores.gapClosureVerifications.countPriorStillOpen(log.id),
+    0,
+    "no still_open verdict is recorded"
+  );
+  const q = await ctx.stores.questionLogs.get(log.id);
+  assert.equal(
+    (q?.gaps ?? []).some((gap) => gap.source === "verification"),
+    false,
+    "no verification gap is filed while the re-ask is unanswered"
+  );
+});
+
+test("re-running the orchestrator reuses the re-ask already in flight instead of paying for another", async () => {
+  const ctx = makeTestContext();
+  const { merged } = await mergedProposalWithGap(ctx);
+
+  await proposals.verifyGapClosure(ctx, merged);
+  const second = await proposals.verifyGapClosure(ctx, merged);
+
+  assert.equal(second.closureStatus, "pending");
+  assert.equal((await reaskJobs(ctx)).length, 1, "a duplicate verify_gap_closure run enqueues no second re-ask");
+});
+
+test("a re-ask's completion resumes the verification and records the verdict (single watcher)", async () => {
+  const ctx = makeTestContext();
+  const { log, merged } = await mergedProposalWithGap(ctx);
+  assert.equal((await proposals.verifyGapClosure(ctx, merged)).closureStatus, "pending");
+
+  // The same lone watcher that ran verify_gap_closure is free again, claims the
+  // re-ask, and completes it through the dispatcher.
+  const claimed = await ctx.jobs.claim("watcher", ["codex"]);
+  assert.equal(claimed?.type, "answer_question");
+  const completion = await completeJob(ctx, claimed!.id, CLOSING_ANSWER);
+  assert.equal(completion.ok, true);
+
+  const verified = await ctx.stores.proposals.get(merged.id);
+  assert.equal(verified?.closureStatus, "verified_closed", "the completion committed the verdict");
+  const q = await ctx.stores.questionLogs.get(log.id);
+  assert.ok(
+    (q?.gaps ?? []).find((gap) => gap.summary === "How to configure X")?.resolvedAt,
+    "the verified gap is resolved"
+  );
+  assert.deepEqual(
+    await ctx.stores.orchestrationFollowups.listByScope("verify_gap_closure", merged.id),
+    [],
+    "the continuation state is dropped once the verdict is recorded"
   );
 
-  // Nothing committed: no closure status, no verification audit rows, and — the
-  // point of the bug — the gap is NOT resolved, so the retry run owns the verdict.
-  const reloaded = await ctx.stores.proposals.get(merged.id);
-  assert.equal(reloaded?.closureStatus, undefined, "an aborted run leaves the proposal unverified");
+  // A replayed completion (the watcher retrying a lost response) records nothing more.
+  assert.equal((await completeJob(ctx, claimed!.id, CLOSING_ANSWER)).ok, true);
   const closed = await ctx.stores.gapClosureVerifications.questionsWithClosedVerdict(merged.id);
-  assert.equal(closed.size, 0, "no verdict row is recorded on an aborted run");
-  const q = await ctx.stores.questionLogs.get(log.id);
-  const gap = (q?.gaps ?? []).find((candidate) => candidate.summary === "How to configure X");
-  assert.equal(gap?.resolvedAt, undefined, "the gap stays open for the retry run to resolve");
+  assert.equal(closed.size, 1);
+  assert.equal(await ctx.stores.gapClosureVerifications.countPriorStillOpen(log.id), 0);
+});
+
+test("a still_open verdict comes only from a completed re-ask, and reopens the gap", async () => {
+  const ctx = makeTestContext();
+  const { log, merged } = await mergedProposalWithGap(ctx);
+  await proposals.verifyGapClosure(ctx, merged);
+
+  const claimed = await ctx.jobs.claim("watcher", ["codex"]);
+  await completeJob(ctx, claimed!.id, { answer: "Not sure.", confidence: "low", citations: [] });
+
+  assert.equal((await ctx.stores.proposals.get(merged.id))?.closureStatus, "reopened");
+  assert.equal(await ctx.stores.gapClosureVerifications.countPriorStillOpen(log.id), 1);
+});
+
+test("nothing is committed until EVERY re-ask has an answer; the last completion commits them all", async () => {
+  // A multi-question proposal where one re-ask completes and a sibling is still
+  // queued. The completed question's verdict must not be recorded on its own.
+  const ctx = makeTestContext();
+  const { q1, q2, merged } = await twoQuestionMergedProposal(ctx);
+  assert.equal((await proposals.verifyGapClosure(ctx, merged)).closureStatus, "pending");
+
+  const [first, second] = await reaskJobs(ctx);
+  assert.deepEqual([reaskQuestion(first!), reaskQuestion(second!)], ["How do I configure X?", "How do I configure Y?"]);
+
+  // Q1's re-ask completes; Q2's is still queued.
+  await completeJob(ctx, first!.id, CLOSING_ANSWER);
+  assert.equal((await ctx.stores.proposals.get(merged.id))?.closureStatus, undefined);
+  assert.equal(
+    (await ctx.stores.gapClosureVerifications.questionsWithClosedVerdict(merged.id)).size,
+    0,
+    "no partial verdict is recorded while a sibling re-ask is unanswered"
+  );
+
+  // Q2's re-ask completes (not closing): now both verdicts are committed together.
+  await completeJob(ctx, second!.id, { answer: "Unknown.", confidence: "low", citations: [] });
+  assert.equal((await ctx.stores.proposals.get(merged.id))?.closureStatus, "reopened");
+  assert.deepEqual([...(await ctx.stores.gapClosureVerifications.questionsWithClosedVerdict(merged.id))], [q1.id]);
+  assert.equal(await ctx.stores.gapClosureVerifications.countPriorStillOpen(q2.id), 1);
+  assert.equal(await ctx.stores.gapClosureVerifications.countPriorStillOpen(q1.id), 0);
+});
+
+test("a re-ask that FAILS is never a still_open verdict; re-running the orchestrator re-asks it", async () => {
+  // The infrastructure-failure half of #150: the re-ask exhausted its retries (a
+  // provider outage). That says nothing about the merged doc.
+  const ctx = makeTestContext();
+  const { log, merged } = await mergedProposalWithGap(ctx);
+  await proposals.verifyGapClosure(ctx, merged);
+  const [failing] = await reaskJobs(ctx);
+
+  await failJob(
+    ctx,
+    failing!.id,
+    { code: "provider_down", message: "provider unavailable", category: "provider" },
+    { terminal: true }
+  );
+
+  assert.equal((await ctx.stores.proposals.get(merged.id))?.closureStatus, undefined);
+  assert.equal(await ctx.stores.gapClosureVerifications.countPriorStillOpen(log.id), 0, "a failure records no verdict");
+
+  // A continuation never enqueues: with nothing usable it simply stays pending.
+  const continued = await proposals.verifyGapClosure(ctx, merged, { enqueue: false });
+  assert.equal(continued.closureStatus, "pending");
+  assert.equal((await reaskJobs(ctx)).length, 1);
+
+  // Re-running verify_gap_closure enqueues a replacement re-ask...
+  assert.equal((await proposals.verifyGapClosure(ctx, merged)).closureStatus, "pending");
+  const jobs = await reaskJobs(ctx);
+  assert.equal(jobs.length, 2, "the failed re-ask is replaced, not reused");
+  const replacement = jobs.find((job) => job.id !== failing!.id);
+
+  // ...whose completion verifies the proposal.
+  await completeJob(ctx, replacement!.id, CLOSING_ANSWER);
+  assert.equal((await ctx.stores.proposals.get(merged.id))?.closureStatus, "verified_closed");
+  assert.equal(await ctx.stores.gapClosureVerifications.countPriorStillOpen(log.id), 0);
+});
+
+test("a CANCELLED re-ask is likewise no verdict", async () => {
+  const ctx = makeTestContext();
+  const { log, merged } = await mergedProposalWithGap(ctx);
+  await proposals.verifyGapClosure(ctx, merged);
+  const [cancelled] = await reaskJobs(ctx);
+  await ctx.jobs.cancel(cancelled!.id);
+
+  assert.equal((await proposals.verifyGapClosure(ctx, merged, { enqueue: false })).closureStatus, "pending");
+  assert.equal((await ctx.stores.proposals.get(merged.id))?.closureStatus, undefined);
+  assert.equal(await ctx.stores.gapClosureVerifications.countPriorStillOpen(log.id), 0);
+});
+
+test("a late re-ask completion after the verdict is recorded changes nothing", async () => {
+  // Two verify_gap_closure runs raced, or an operator retried a failed re-ask after
+  // its replacement already settled the proposal: the entry guard holds.
+  const ctx = makeTestContext();
+  const { log, merged } = await mergedProposalWithGap(ctx);
+  await proposals.verifyGapClosure(ctx, merged);
+  const [first] = await reaskJobs(ctx);
+  await failJob(ctx, first!.id, { code: "provider_down", message: "down", category: "provider" }, { terminal: true });
+  await proposals.verifyGapClosure(ctx, merged);
+  const replacement = (await reaskJobs(ctx)).find((job) => job.id !== first!.id);
+  await completeJob(ctx, replacement!.id, CLOSING_ANSWER);
+  assert.equal((await ctx.stores.proposals.get(merged.id))?.closureStatus, "verified_closed");
+
+  // The operator retries the originally-failed re-ask and it now answers "low".
+  await ctx.jobs.retry(first!.id);
+  await completeJob(ctx, first!.id, { answer: "?", confidence: "low", citations: [] });
+
+  assert.equal((await ctx.stores.proposals.get(merged.id))?.closureStatus, "verified_closed");
+  assert.equal(await ctx.stores.gapClosureVerifications.countPriorStillOpen(log.id), 0);
+});
+
+// --- The stalled-verification sweep ------------------------------------------------
+// Nothing fires when a re-ask ends without its continuation running, so each
+// reconcile tick calls redriveStalledGapClosure for every merged proposal that has
+// no verdict. One test per way a verification can get stuck.
+
+const PROVIDER_DOWN = { code: "provider_down", message: "provider unavailable", category: "provider" } as const;
+
+test("sweep: a re-ask that completed but whose continuation was lost is applied", async () => {
+  // The job reached `completed` in the broker, but the dispatcher's side effects
+  // never ran: the watcher exhausted its complete() retries, or the API restarted.
+  const ctx = makeTestContext();
+  const { merged } = await mergedProposalWithGap(ctx);
+  await proposals.verifyGapClosure(ctx, merged);
+  const [reask] = await reaskJobs(ctx);
+  await ctx.jobs.complete(reask!.id, { result: CLOSING_ANSWER, executor: "watcher" });
+  assert.equal((await ctx.stores.proposals.get(merged.id))?.closureStatus, undefined, "stuck: nothing applied it");
+
+  assert.equal(await proposals.redriveStalledGapClosure(ctx, merged), true);
+
+  assert.equal((await ctx.stores.proposals.get(merged.id))?.closureStatus, "verified_closed");
+  assert.equal((await reaskJobs(ctx)).length, 1, "the answer already paid for is used, not re-bought");
+});
+
+test("sweep: a CANCELLED re-ask is replaced", async () => {
+  const ctx = makeTestContext();
+  const { log, merged } = await mergedProposalWithGap(ctx);
+  await proposals.verifyGapClosure(ctx, merged);
+  const [cancelled] = await reaskJobs(ctx);
+  await ctx.jobs.cancel(cancelled!.id);
+
+  assert.equal(await proposals.redriveStalledGapClosure(ctx, merged), false, "re-asked, not yet settled");
+
+  const jobs = await reaskJobs(ctx);
+  assert.equal(jobs.length, 2);
+  await completeJob(ctx, jobs.find((job) => job.id !== cancelled!.id)!.id, CLOSING_ANSWER);
+  assert.equal((await ctx.stores.proposals.get(merged.id))?.closureStatus, "verified_closed");
+  assert.equal(await ctx.stores.gapClosureVerifications.countPriorStillOpen(log.id), 0);
+});
+
+test("sweep: a re-ask that failed terminally (failJob) is replaced", async () => {
+  const ctx = makeTestContext();
+  const { merged } = await mergedProposalWithGap(ctx);
+  await proposals.verifyGapClosure(ctx, merged);
+  const [failed] = await reaskJobs(ctx);
+  await failJob(ctx, failed!.id, PROVIDER_DOWN, { terminal: true });
+
+  assert.equal(await proposals.redriveStalledGapClosure(ctx, merged), false);
+  assert.equal((await reaskJobs(ctx)).length, 2);
+});
+
+test("sweep: a re-ask that expired/dead-lettered inside the queue (no failJob) is replaced", async () => {
+  // pg-boss fails an expired job itself; the API's failJob hook never runs.
+  const ctx = makeTestContext();
+  const { merged } = await mergedProposalWithGap(ctx);
+  await proposals.verifyGapClosure(ctx, merged);
+  const [expired] = await reaskJobs(ctx);
+  await ctx.jobs.failTerminal(expired!.id, { code: "expired", message: "job expired", category: "timeout" });
+
+  assert.equal(await proposals.redriveStalledGapClosure(ctx, merged), false);
+  assert.equal((await reaskJobs(ctx)).length, 2);
+});
+
+test("sweep: a re-ask whose job row is gone is replaced", async () => {
+  const ctx = makeTestContext();
+  const { merged } = await mergedProposalWithGap(ctx);
+  await proposals.verifyGapClosure(ctx, merged);
+  const [gone] = await reaskJobs(ctx);
+  const realGet = ctx.jobs.get.bind(ctx.jobs);
+  ctx.jobs.get = async (id) => (id === gone!.id ? undefined : realGet(id));
+
+  assert.equal(await proposals.redriveStalledGapClosure(ctx, merged), false);
+  const { jobs } = await ctx.jobs.list({ type: "answer_question", limit: 50 });
+  assert.equal(jobs.length, 2, "a replacement was enqueued for the vanished re-ask");
+});
+
+test("sweep: a re-ask still queued or running is left alone", async () => {
+  const ctx = makeTestContext();
+  const { merged } = await mergedProposalWithGap(ctx);
+  await proposals.verifyGapClosure(ctx, merged);
+
+  assert.equal(await proposals.redriveStalledGapClosure(ctx, merged), false);
+  await ctx.jobs.claim("watcher", ["codex"]);
+  assert.equal(await proposals.redriveStalledGapClosure(ctx, merged), false);
+
+  assert.equal((await reaskJobs(ctx)).length, 1, "no duplicate while the re-ask is in flight");
+});
+
+test("sweep: ignores a proposal with no re-asks, one already verified, and one not merged", async () => {
+  const ctx = makeTestContext();
+  const { merged } = await mergedProposalWithGap(ctx);
+  // No re-ask rows: a cascade that never started is mergeCascadeIncomplete's case.
+  assert.equal(await proposals.redriveStalledGapClosure(ctx, merged), false);
+  assert.equal((await reaskJobs(ctx)).length, 0);
+
+  await ctx.stores.proposals.setClosureStatus(merged.id, "verified_closed");
+  const verified = await ctx.stores.proposals.get(merged.id);
+  assert.equal(await proposals.redriveStalledGapClosure(ctx, verified!), false);
+  assert.equal(await proposals.redriveStalledGapClosure(ctx, { ...merged, status: "pr-opened" }), false);
+});
+
+test("sweep: after the re-ask attempt cap the proposal goes to needs_attention — parked, with NO still_open", async () => {
+  const ctx = makeTestContext();
+  const { log, merged } = await mergedProposalWithGap(ctx);
+  await proposals.verifyGapClosure(ctx, merged);
+
+  // Three re-asks, each ending without an answer; the sweep replaces the first two.
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    const jobs = await reaskJobs(ctx);
+    assert.equal(jobs.length, attempt);
+    const live = jobs.find((job) => job.state === "created");
+    assert.ok(live);
+    await failJob(ctx, live.id, PROVIDER_DOWN, { terminal: true });
+    if (attempt < 3) {
+      assert.equal(await proposals.redriveStalledGapClosure(ctx, merged), false, "re-asked again");
+    }
+  }
+
+  // The third failure exhausts the cap: the sweep stops re-asking and escalates.
+  assert.equal(await proposals.redriveStalledGapClosure(ctx, merged), true);
+  assert.equal((await reaskJobs(ctx)).length, 3, "no fourth re-ask is bought");
+  assert.equal((await ctx.stores.proposals.get(merged.id))?.closureStatus, "needs_attention");
+
+  // The invariant: an infrastructure failure never becomes a content verdict.
+  assert.equal(await ctx.stores.gapClosureVerifications.countPriorStillOpen(log.id), 0, "no still_open recorded");
+  assert.equal((await ctx.stores.gapClosureVerifications.questionsWithClosedVerdict(merged.id)).size, 0);
+  // It is not silent either: the question is parked for a human, saying why.
+  const parked = (await ctx.stores.questionLogs.get(log.id))?.gaps?.find((gap) => gap.source === "verification");
+  assert.ok(parked?.parkedAt, "the question is parked");
+  assert.match(parked?.note ?? "", /Could not verify: 3 re-ask attempt\(s\) ended without an answer/);
+  const candidates = await ctx.stores.questionLogs.listGapCandidates(50);
+  assert.equal(
+    candidates.some((candidate) => candidate.questionIds.includes(log.id) && candidate.summary === parked?.summary),
+    false,
+    "a parked question is not re-drafted"
+  );
+
+  // Terminal: a further sweep does nothing.
+  const settled = await ctx.stores.proposals.get(merged.id);
+  assert.equal(await proposals.redriveStalledGapClosure(ctx, settled!), false);
+  assert.deepEqual(await ctx.stores.orchestrationFollowups.listByScope("verify_gap_closure", merged.id), []);
+});
+
+test("sweep: an exhausted question escalates the proposal even when its sibling verified closed", async () => {
+  const ctx = makeTestContext();
+  const { q1, q2, merged } = await twoQuestionMergedProposal(ctx);
+  await proposals.verifyGapClosure(ctx, merged);
+  const [first] = await reaskJobs(ctx);
+  await completeJob(ctx, first!.id, CLOSING_ANSWER);
+
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    const live = (await reaskJobs(ctx)).find((job) => job.state === "created");
+    assert.ok(live);
+    await failJob(ctx, live.id, PROVIDER_DOWN, { terminal: true });
+    await proposals.redriveStalledGapClosure(ctx, merged);
+  }
+
+  assert.equal((await ctx.stores.proposals.get(merged.id))?.closureStatus, "needs_attention");
+  assert.deepEqual([...(await ctx.stores.gapClosureVerifications.questionsWithClosedVerdict(merged.id))], [q1.id]);
+  assert.equal(await ctx.stores.gapClosureVerifications.countPriorStillOpen(q2.id), 0);
+});
+
+test("a re-ask that completes between enqueue and register is still picked up in the same call", async () => {
+  // The completion-side continuation finds no follow-up row (it does not exist
+  // yet) and does nothing. verifyGapClosure reads the job back right after
+  // registering, so the answer is not lost.
+  const ctx = makeTestContext();
+  const { merged } = await mergedProposalWithGap(ctx);
+  const broker = ctx.jobs;
+  const realCreate = broker.create.bind(broker);
+  broker.create = async (type, input) => {
+    const job = await realCreate(type, input);
+    if (type === "answer_question") {
+      // A watcher claims and completes it through the real dispatcher before the
+      // caller has had the chance to register the row. The caller still holds the
+      // pre-completion view (`created`).
+      const completion = await completeJob(ctx, job.id, CLOSING_ANSWER);
+      assert.equal(completion.ok, true);
+    }
+    return job;
+  };
+
+  const result = await proposals.verifyGapClosure(ctx, merged);
+
+  assert.equal(result.closureStatus, "verified_closed");
+});
+
+test("a completed answer job that is not a re-ask never touches gap-closure state", async () => {
+  const ctx = makeTestContext();
+  const { merged } = await mergedProposalWithGap(ctx);
+  const live = await ctx.stores.questionLogs.record({
+    question: "Live?",
+    chatProvider: "codex",
+    retrievedSectionIds: []
+  });
+  const job = await ctx.jobs.create("answer_question", {
+    questionLogId: live.id,
+    question: "Live?",
+    flows: [],
+    expectedOutput: "answer_result",
+    provider: "codex"
+  });
+
+  assert.equal((await completeJob(ctx, job.id, CLOSING_ANSWER)).ok, true);
+  assert.equal((await ctx.stores.proposals.get(merged.id))?.closureStatus, undefined);
 });
 
 test("draftFromGaps always enqueues a catalog-valid draft_markdown_proposal job", async () => {

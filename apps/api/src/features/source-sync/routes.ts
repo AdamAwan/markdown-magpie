@@ -16,8 +16,8 @@ export function sourceSyncRoutes(ctx: AppContext): Hono {
   });
 
   // Thin orchestration endpoint the maintenance watcher's source_change_sync
-  // runner POSTs. The heavy gather (checkout/diff/candidate retrieval) and the
-  // generative step (an enqueued AI job the API bounded-waits on) stay here. The
+  // runner POSTs. The heavy gather (checkout/diff/candidate retrieval) stays here;
+  // the generative step is enqueued and its completion finishes the run. The
   // body is optional; an absent flowId watches every configured git source.
   // Same admin scope as /api/gaps/reconcile.
   app.post("/run", requireScopes("manage:jobs"), rateLimit(ctx, "trigger"), async (c) => {

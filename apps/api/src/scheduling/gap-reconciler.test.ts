@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { describe, it, mock } from "node:test";
 import type { EmbeddingProvider } from "@magpie/core";
 import type { JobType, JobView } from "@magpie/jobs";
 import { reconcileGapClustersOutputSchema } from "@magpie/jobs";
@@ -9,7 +9,9 @@ import { RuntimeConfigHolder } from "../config-holder.js";
 import { FakeJobBroker } from "../jobs/fake-broker.js";
 import { makeTestContext } from "../test-support/context.js";
 import type { GapClusterMembershipRecord, GapClusterRecord } from "../stores/gap-cluster-store.js";
-import { reconcileGaps, reshapeCompositionHash } from "./gap-reconciler.js";
+import { completeJob, failJob } from "../features/jobs/service.js";
+import * as proposalsService from "../features/proposals/service.js";
+import { reconcileGaps, reshapeCompositionHash, RESHAPE_STALL_MS } from "./gap-reconciler.js";
 
 function cluster(id: string): GapClusterRecord {
   return { id, title: id, status: "active", reconciliationRevision: 1, createdAt: "t", updatedAt: "t" };
@@ -47,10 +49,17 @@ describe("reshapeCompositionHash", () => {
 
 type ReconcileOutput = z.infer<typeof reconcileGapClustersOutputSchema>;
 
+// A reshape that proposes nothing: for tests about what happens AFTER a reshape.
+const NO_VERDICTS = (): ReconcileOutput => ({ merges: [], splits: [], dismissals: [] });
+
 // A broker that immediately completes any reconcile_gap_clusters job with the
-// output the watcher's chat runner would have produced, so the reconciler's
-// enqueue+bounded-wait resolves to a terminal job in-process. Other job types
-// behave exactly like the FakeJobBroker (created, never completed).
+// output the watcher's chat runner would have produced. The reconciler never
+// waits on a reshape; a job that is ALREADY complete when it is enqueued is
+// applied inline through the same routine the completion handler uses, so these
+// tests exercise verdict application without driving a completion. Other job
+// types behave exactly like the FakeJobBroker (created, never completed). The
+// asynchronous path — a plain broker, completion via completeJob — is covered by
+// the "non-blocking reshape" suite below.
 class ReshapingJobBroker extends FakeJobBroker {
   constructor(private readonly buildOutput: (input: unknown) => ReconcileOutput) {
     super();
@@ -82,10 +91,11 @@ class EnvelopedReshapingJobBroker extends FakeJobBroker {
   }
 }
 
-// A broker that enqueues the reconcile job normally but then throws when the
-// bounded-wait polls it (runJobToCompletion -> waitForJob -> get). This mirrors a
-// broker dying mid-poll: requestReshape's try/catch must swallow it and skip the
-// reshape, leaving the rest of reconcileGaps to run.
+// A broker that enqueues the reconcile job normally but then throws when its
+// state is read back. This mirrors a broker blip while a later tick checks on a
+// reshape it left in flight: the tick must treat the reshape as still running
+// (never write its outcome off, never fail), leaving the rest of reconcileGaps
+// to run.
 class ThrowingPollJobBroker extends FakeJobBroker {
   private reshapeJobId: string | undefined;
 
@@ -161,8 +171,8 @@ describe("reconcileGaps clustering", () => {
     });
     await ctx.stores.questionLogs.recordManualGap(log.id, "How to configure X");
 
-    // The plain broker never completes the reshape job, so the bounded-wait falls
-    // back and the reconciler skips reshape — the single new cluster stands.
+    // The plain broker never completes the reshape job; the reconciler enqueues it
+    // and moves on without waiting — the single new cluster stands.
     await reconcileGaps(ctx, undefined, { fetchPullRequestStatus: async () => undefined });
 
     const clusters = await ctx.stores.gapClusters.listActiveClusters();
@@ -258,37 +268,11 @@ describe("reconcileGaps clustering", () => {
     assert.equal(merge.applied, true, "a confirmed merge from an enveloped output is applied");
   });
 
-  it("skips reshape (without throwing) when the reshape job never reaches a watcher", async () => {
-    // A plain FakeJobBroker never completes the enqueued reconcile job, so the
-    // bounded-wait hits its (tiny) deadline. Reshape is best-effort: the rest of
-    // reconcileGaps must still run, exactly as the old code only reshaped when it
-    // could. We drive a tiny deadline via the runtime config.
-    const ctx = makeTestContext({
-      config: new RuntimeConfigHolder({ aiProvider: "openai-compatible" })
-    });
-    ctx.settings.jobs.runToCompletionTimeoutMs = 20;
-    await seedTwoClustersWithGaps(ctx);
-
-    const before = await ctx.stores.gapClusters.listActiveClusters();
-    await reconcileGaps(ctx, undefined, { fetchPullRequestStatus: async () => undefined });
-    const after = await ctx.stores.gapClusters.listActiveClusters();
-
-    assert.equal(
-      (await ctx.jobs.list({ type: "reconcile_gap_clusters" })).jobs.length,
-      1,
-      "the reshape job was enqueued"
-    );
-    assert.equal(after.length, before.length, "no reshape applied on timeout");
-    assert.deepEqual(await ctx.stores.reconciliations.list(50), [], "no decision recorded when the job never ran");
-  });
-
-  it("skips reshape (without throwing) when the broker throws mid-poll", async () => {
-    // The broker enqueues the reshape job but then throws when the bounded-wait
-    // polls it. requestReshape wraps enqueue+wait in try/catch and treats a throw
-    // as "skip reshape, continue reconcile" — so no merge/split is applied, no
-    // reconciliation is recorded, no error escapes reconcileGaps, and the rest of
-    // the run (e.g. drafting) still happens. Distinct from the timeout-skip test:
-    // here the failure is a thrown error from the broker, not a quiet deadline.
+  it("treats a reshape whose state the broker cannot report as still in flight (never fails the tick)", async () => {
+    // Tick 1 enqueues the reshape and returns. On tick 2 the broker throws when
+    // the reconciler reads the job back. That must not fail the tick, must not
+    // write the reshape off as failed (which would draft the un-judged clusters),
+    // and must not enqueue a second reshape.
     const jobs = new ThrowingPollJobBroker();
     const ctx = makeTestContext({
       jobs,
@@ -297,22 +281,22 @@ describe("reconcileGaps clustering", () => {
     await seedTwoClustersWithGaps(ctx);
 
     const before = await ctx.stores.gapClusters.listActiveClusters();
-    // Must resolve, not reject: the broker throw is caught inside requestReshape.
+    await reconcileGaps(ctx, undefined, { fetchPullRequestStatus: async () => undefined });
+    // Must resolve, not reject: the broker throw is caught.
     await reconcileGaps(ctx, undefined, { fetchPullRequestStatus: async () => undefined });
     const after = await ctx.stores.gapClusters.listActiveClusters();
 
     assert.equal(
       (await ctx.jobs.list({ type: "reconcile_gap_clusters" })).jobs.length,
       1,
-      "the reshape job was enqueued"
+      "the reshape job was enqueued once"
     );
     assert.equal(after.length, before.length, "no reshape applied when the broker threw");
     assert.deepEqual(await ctx.stores.reconciliations.list(50), [], "no decision recorded when the reshape threw");
-    // The rest of reconcileGaps still ran: each uncovered cluster got a draft job.
     assert.equal(
       (await ctx.jobs.list({ type: "draft_markdown_proposal" })).jobs.length,
-      before.length,
-      "reconcile continued past the skipped reshape and drafted the uncovered clusters"
+      0,
+      "nothing is drafted while the reshape's outcome is unknown"
     );
   });
 });
@@ -378,24 +362,42 @@ describe("reconcileGaps reshape composition short-circuit (#168)", () => {
     );
   });
 
-  it("does not record the composition hash when the reshape fails, so the next tick retries", async () => {
-    // A plain FakeJobBroker never completes the reshape job, so the bounded wait
-    // times out and requestReshape returns undefined. A failed reshape must NOT
-    // record the hash, or the gate would wedge on an unjudged composition.
+  it("does not record the composition hash when the reshape fails, so a later tick retries", async () => {
+    // A reshape that failed must NOT record the hash, or the gate would wedge on an
+    // unjudged composition.
     const ctx = makeTestContext({ config: new RuntimeConfigHolder({ aiProvider: "openai-compatible" }) });
-    ctx.settings.jobs.runToCompletionTimeoutMs = 20;
     await seedTwoClustersWithGaps(ctx);
 
     await reconcileGaps(ctx, undefined, deps);
-    assert.equal((await ctx.jobs.list({ type: "reconcile_gap_clusters" })).jobs.length, 1);
+    const [reshape] = (await ctx.jobs.list({ type: "reconcile_gap_clusters" })).jobs;
+    assert.ok(reshape);
+    await failJob(
+      ctx,
+      reshape.id,
+      { code: "provider_down", message: "down", category: "provider" },
+      { terminal: true }
+    );
+
+    // The next tick finds the failed reshape. Best effort: it drafts without it.
+    await reconcileGaps(ctx, undefined, deps);
     assert.equal(
       await ctx.stores.gapClusters.getReshapeCompositionHash(undefined),
       undefined,
       "a failed reshape records no composition hash"
     );
+    assert.equal(
+      (await ctx.jobs.list({ type: "reconcile_gap_clusters" })).jobs.length,
+      1,
+      "the reshape of the composition that just failed is not immediately re-bought"
+    );
+    assert.equal(
+      (await ctx.jobs.list({ type: "draft_markdown_proposal" })).jobs.length,
+      2,
+      "the un-reshaped clusters are drafted rather than starved"
+    );
 
-    // Reopen the gate on an unchanged composition; because no hash was recorded the
-    // reshape is retried rather than skipped.
+    // Reopen the gate on the unchanged composition; because no hash was recorded
+    // (and no failure is on record any more) the reshape is retried, not skipped.
     await ctx.stores.gapClusters.setProcessedRevision(undefined, 0, new Date().toISOString());
     await reconcileGaps(ctx, undefined, deps);
     assert.equal(
@@ -413,6 +415,7 @@ describe("reconcileGaps autonomous drafting", () => {
   // tests assert the enqueue, not a synchronous proposal.
   it("enqueues a draft job for a brand-new cluster", async () => {
     const ctx = makeTestContext({
+      jobs: new ReshapingJobBroker(NO_VERDICTS),
       config: new RuntimeConfigHolder({ aiProvider: "openai-compatible" })
     });
     const log = await ctx.stores.questionLogs.record({
@@ -423,8 +426,8 @@ describe("reconcileGaps autonomous drafting", () => {
     });
     await ctx.stores.questionLogs.recordManualGap(log.id, "How to configure X");
 
-    // The plain broker never completes the reshape job, so the scope check is
-    // skipped and the on-topic single cluster proceeds to drafting.
+    // The reshape proposes nothing, so the on-topic single cluster proceeds to
+    // drafting.
     await reconcileGaps(ctx, undefined, {
       fetchPullRequestStatus: async () => undefined,
       publishProposal: async () => {},
@@ -641,7 +644,7 @@ describe("reconcileGaps autonomous drafting", () => {
   });
 
   it("holds the processed revision when the fan-out budget/capacity sheds drafting (#288b)", async () => {
-    const ctx = makeTestContext();
+    const ctx = makeTestContext({ jobs: new ReshapingJobBroker(NO_VERDICTS) });
     // Every atomic admission this tick is rejected (global ceiling full): the
     // reshape is skipped and every cluster draft is shed by capacity.
     ctx.jobs.createIfAdmitted = async () => ({ admitted: false, inFlight: 99 });
@@ -852,7 +855,10 @@ describe("reconcileGaps in-flight draft coverage", () => {
     // Control for the case above: a completed (terminal) draft no longer covers the
     // cluster on its own — coverage then comes from the proposal row the completion
     // creates. With neither present, the cluster is genuinely uncovered and drafts.
-    const ctx = makeTestContext({ config: new RuntimeConfigHolder({ aiProvider: "openai-compatible" }) });
+    const ctx = makeTestContext({
+      jobs: new ReshapingJobBroker(NO_VERDICTS),
+      config: new RuntimeConfigHolder({ aiProvider: "openai-compatible" })
+    });
     const clusterId = await seedOneClusterWithOpenGap(ctx);
     const job = await ctx.jobs.create("draft_markdown_proposal", draftInputFor(clusterId));
     await ctx.jobs.complete(job.id, { title: "t", targetPath: "t.md", markdown: "#", rationale: "r" });
@@ -1070,6 +1076,7 @@ describe("reconcileGaps audit", () => {
       pullRequestsChecked: 0,
       pullRequestTransitions: 0,
       mergedCascadesRecovered: 0,
+      stalledVerificationsRedriven: 0,
       overlapsDetected: 0,
       clustersCreated: 0,
       mergeDecisions: 0,
@@ -1080,6 +1087,7 @@ describe("reconcileGaps audit", () => {
       publicationActionsDrained: 0,
       skippedModelWork: true,
       reshapeSkipped: false,
+      reshapePending: false,
       // The per-tick fan-out budget summary (#288b): nothing enqueued this no-op tick.
       fanout: {
         taskType: "process_gaps_to_pull_requests",
@@ -1171,6 +1179,9 @@ describe("reconcileGaps embedding-based assignment", () => {
 
   it("joins a later paraphrase to the existing cluster instead of seeding a new one", async () => {
     const ctx = makeTestContext({
+      // The reshape must finish between ticks: a tick that finds one still in
+      // flight skips clustering altogether.
+      jobs: new ReshapingJobBroker(NO_VERDICTS),
       providers: {
         embedding: fakeEmbeddingProvider({
           "TLS versions for data in transit": EAST,
@@ -1193,6 +1204,7 @@ describe("reconcileGaps embedding-based assignment", () => {
 
   it("recomputes a nulled representative from member summaries before matching", async () => {
     const ctx = makeTestContext({
+      jobs: new ReshapingJobBroker(NO_VERDICTS),
       providers: {
         embedding: fakeEmbeddingProvider({
           "TLS versions for data in transit": EAST,
@@ -1263,5 +1275,416 @@ describe("reconcileGaps embedding-based assignment", () => {
     const clusters = await ctx.stores.gapClusters.listActiveClusters();
     assert.equal(clusters.length, 1, "merge left one survivor");
     assert.equal(clusters[0].representativeEmbedding, undefined, "survivor representative nulled for lazy recompute");
+  });
+});
+
+// --- Non-blocking reshape --------------------------------------------------------
+// The reconciler enqueues the reshape and returns; the job's completion applies
+// the verdicts and finishes the tick's work. These tests use a plain FakeJobBroker
+// and complete the reshape the way a watcher does (completeJob), so nothing
+// completes "by itself" — a single watcher is enough.
+describe("reconcileGaps non-blocking reshape", () => {
+  const published: string[] = [];
+  const deps = {
+    fetchPullRequestStatus: async () => undefined,
+    publishProposal: async (_ctx: AppContext, proposal: { id: string }) => {
+      published.push(proposal.id);
+    },
+    supersedeProposal: async () => {}
+  };
+
+  function newContext(): AppContext {
+    return makeTestContext({ config: new RuntimeConfigHolder({ aiProvider: "openai-compatible" }) });
+  }
+
+  async function reshapeJobs(ctx: AppContext): Promise<JobView[]> {
+    return (await ctx.jobs.list({ type: "reconcile_gap_clusters" })).jobs;
+  }
+
+  async function draftCount(ctx: AppContext): Promise<number> {
+    return (await ctx.jobs.list({ type: "draft_markdown_proposal" })).jobs.length;
+  }
+
+  function clusterIdsOf(job: JobView): string[] {
+    return (job.input as { clusters: Array<{ id: string }> }).clusters.map((c) => c.id);
+  }
+
+  it("enqueues the reshape and returns without drafting, holding the processed revision", async () => {
+    const ctx = newContext();
+    await seedTwoClustersWithGaps(ctx);
+
+    await reconcileGaps(ctx, undefined, deps);
+
+    const [reshape] = await reshapeJobs(ctx);
+    assert.equal(reshape?.state, "created", "the reshape is queued for a watcher — never cancelled, never waited on");
+    assert.equal(await draftCount(ctx), 0, "un-judged clusters are not drafted");
+    assert.notEqual(
+      await ctx.stores.gapClusters.getProcessedRevision(undefined),
+      await ctx.stores.questionLogs.getGapCatalogRevision(undefined),
+      "the revision is held until the reshape's verdicts are applied"
+    );
+    const [run] = await ctx.stores.maintenanceRuns.list({ taskType: "process_gaps_to_pull_requests", limit: 5 });
+    assert.equal(run?.status, "completed");
+    assert.equal(run?.details.reshapePending, true);
+    assert.equal(run?.details.proposalsDrafted, 0);
+  });
+
+  it("a later tick finds the reshape in flight: no second reshape, no clustering, no drafts", async () => {
+    const ctx = newContext();
+    await seedTwoClustersWithGaps(ctx);
+    await reconcileGaps(ctx, undefined, deps);
+
+    // A new gap arrives while the reshape is still queued.
+    const log = await ctx.stores.questionLogs.record({
+      question: "q3?",
+      chatProvider: "codex",
+      retrievedSectionIds: []
+    });
+    await ctx.stores.questionLogs.recordManualGap(log.id, "Dogs");
+    await reconcileGaps(ctx, undefined, deps);
+
+    assert.equal((await reshapeJobs(ctx)).length, 1, "the in-flight reshape is reused, not duplicated");
+    const [latest] = await ctx.stores.maintenanceRuns.list({ taskType: "process_gaps_to_pull_requests", limit: 5 });
+    assert.equal(
+      (latest?.details.fanout as { attempted: number }).attempted,
+      0,
+      "reusing the in-flight reshape spends no fan-out budget (#288b)"
+    );
+    assert.equal((await ctx.stores.gapClusters.listActiveClusters()).length, 2, "clustering waits for the reshape");
+    assert.equal(await draftCount(ctx), 0);
+  });
+
+  it("the reshape's completion applies the verdicts, drafts, and marks the revision processed", async () => {
+    const ctx = newContext();
+    await seedTwoClustersWithGaps(ctx);
+    await reconcileGaps(ctx, undefined, deps);
+    const catalogRevision = await ctx.stores.questionLogs.getGapCatalogRevision(undefined);
+
+    // The lone watcher, free again, claims the reshape and completes it: merge both.
+    const claimed = await ctx.jobs.claim("watcher", ["openai-compatible"]);
+    assert.equal(claimed?.type, "reconcile_gap_clusters");
+    const completion = await completeJob(ctx, claimed!.id, {
+      merges: [{ clusterIds: clusterIdsOf(claimed!), rationale: "same topic", confirmed: true }],
+      splits: [],
+      dismissals: []
+    });
+    assert.equal(completion.ok, true);
+
+    assert.equal((await ctx.stores.gapClusters.listActiveClusters()).length, 1, "the confirmed merge was applied");
+    assert.equal(await draftCount(ctx), 1, "the merged cluster — not the two it replaced — is drafted");
+    assert.equal(await ctx.stores.gapClusters.getProcessedRevision(undefined), catalogRevision);
+    assert.ok(await ctx.stores.gapClusters.getReshapeCompositionHash(undefined), "the judged composition is recorded");
+
+    const runs = await ctx.stores.maintenanceRuns.list({ taskType: "process_gaps_to_pull_requests", limit: 5 });
+    assert.equal(runs.length, 2, "the tick and the continuation each leave an audit row");
+    assert.equal(runs[0]?.summary, "applied reshape for flow default");
+    assert.equal(runs[0]?.details.reshapeJobId, claimed!.id);
+    assert.equal(runs[0]?.details.mergeDecisions, 1);
+    assert.equal(runs[0]?.details.proposalsDrafted, 1);
+
+    // The next tick has nothing left to do.
+    await reconcileGaps(ctx, undefined, deps);
+    assert.equal((await reshapeJobs(ctx)).length, 1);
+    assert.equal(await draftCount(ctx), 1);
+  });
+
+  it("a replayed completion applies nothing twice", async () => {
+    const ctx = newContext();
+    await seedTwoClustersWithGaps(ctx);
+    await reconcileGaps(ctx, undefined, deps);
+    const [reshape] = await reshapeJobs(ctx);
+    const output = {
+      merges: [{ clusterIds: clusterIdsOf(reshape!), rationale: "same topic", confirmed: true }],
+      splits: [],
+      dismissals: []
+    };
+
+    await completeJob(ctx, reshape!.id, output);
+    await completeJob(ctx, reshape!.id, output);
+
+    assert.equal((await ctx.stores.reconciliations.list(50)).length, 1, "the merge decision is recorded once");
+    assert.equal(await draftCount(ctx), 1, "the replay enqueues no second draft");
+    assert.equal(
+      (await ctx.stores.maintenanceRuns.list({ taskType: "process_gaps_to_pull_requests", limit: 5 })).length,
+      2,
+      "the replay records no second continuation run"
+    );
+  });
+
+  it("a dismissed cluster is never drafted", async () => {
+    const ctx = newContext();
+    await seedTwoClustersWithGaps(ctx);
+    await reconcileGaps(ctx, undefined, deps);
+    const [reshape] = await reshapeJobs(ctx);
+    const [dismissed] = clusterIdsOf(reshape!);
+
+    await completeJob(ctx, reshape!.id, {
+      merges: [],
+      splits: [],
+      dismissals: [{ clusterId: dismissed!, rationale: "off-topic", confirmed: true }]
+    });
+
+    const drafts = (await ctx.jobs.list({ type: "draft_markdown_proposal" })).jobs;
+    assert.equal(drafts.length, 1);
+    assert.notEqual((drafts[0]?.input as { gapClusterId?: string }).gapClusterId, dismissed);
+  });
+
+  it("applies the verdicts but leaves drafting to the next tick when the composition moved in flight", async () => {
+    const ctx = newContext();
+    await seedTwoClustersWithGaps(ctx);
+    await reconcileGaps(ctx, undefined, deps);
+    const [reshape] = await reshapeJobs(ctx);
+
+    // While the reshape is queued, a third cluster appears that it never judged.
+    const log = await ctx.stores.questionLogs.record({
+      question: "q3?",
+      chatProvider: "codex",
+      retrievedSectionIds: []
+    });
+    await ctx.stores.questionLogs.recordManualGap(log.id, "Dogs");
+    const extra = await ctx.stores.gapClusters.createCluster({ title: "Dogs", revision: 1 });
+    const [gapId] = await ctx.stores.questionLogs.gapIdsForSummary("Dogs");
+    await ctx.stores.gapClusters.assignGapToCluster(extra.id, gapId!);
+
+    await completeJob(ctx, reshape!.id, {
+      merges: [{ clusterIds: clusterIdsOf(reshape!), rationale: "same topic", confirmed: true }],
+      splits: [],
+      dismissals: []
+    });
+
+    assert.equal((await ctx.stores.gapClusters.listActiveClusters()).length, 2, "the judged clusters were merged");
+    assert.equal(await draftCount(ctx), 0, "the un-judged cluster is not drafted by the continuation");
+
+    // The next tick re-judges the new composition before anything is drafted.
+    await reconcileGaps(ctx, undefined, deps);
+    assert.equal((await reshapeJobs(ctx)).length, 2);
+    assert.equal(await draftCount(ctx), 0);
+  });
+
+  it("self-heals: a tick applies a completed reshape whose completion-side continuation never ran", async () => {
+    const ctx = newContext();
+    await seedTwoClustersWithGaps(ctx);
+    await reconcileGaps(ctx, undefined, deps);
+    const [reshape] = await reshapeJobs(ctx);
+
+    // The job reached `completed` in the broker, but the dispatcher's side effects
+    // never ran (the watcher gave up re-POSTing; the API restarted mid-completion).
+    await ctx.jobs.complete(reshape!.id, {
+      result: {
+        merges: [{ clusterIds: clusterIdsOf(reshape!), rationale: "same topic", confirmed: true }],
+        splits: [],
+        dismissals: []
+      },
+      executor: "watcher"
+    });
+    assert.equal((await ctx.stores.gapClusters.listActiveClusters()).length, 2, "nothing applied yet");
+
+    await reconcileGaps(ctx, undefined, deps);
+
+    assert.equal((await ctx.stores.gapClusters.listActiveClusters()).length, 1, "the next tick applied the verdicts");
+    assert.equal((await ctx.stores.reconciliations.list(50)).length, 1);
+  });
+
+  it("a replayed completion that died before the row settled records each decision once", async () => {
+    // The verdicts were applied and their audit rows written, then the settle
+    // failed. The watcher re-POSTs the completion, which re-applies the reshape.
+    const ctx = newContext();
+    await seedTwoClustersWithGaps(ctx);
+    await reconcileGaps(ctx, undefined, deps);
+    const [reshape] = await reshapeJobs(ctx);
+    const output = {
+      merges: [{ clusterIds: clusterIdsOf(reshape!), rationale: "same topic", confirmed: true }],
+      splits: [],
+      dismissals: []
+    };
+    const store = ctx.stores.orchestrationFollowups;
+    const realSettle = store.settle.bind(store);
+    let failures = 1;
+    store.settle = async (jobId, result) => {
+      if (failures > 0) {
+        failures -= 1;
+        throw new Error("database blip");
+      }
+      return realSettle(jobId, result);
+    };
+
+    assert.deepEqual(await completeJob(ctx, reshape!.id, output), { ok: false, code: "side_effects_failed" });
+    assert.equal((await completeJob(ctx, reshape!.id, output)).ok, true);
+
+    assert.equal((await ctx.stores.reconciliations.list(50)).length, 1, "the merge decision is on record once");
+    assert.equal((await ctx.stores.gapClusters.listActiveClusters()).length, 1);
+    // The replay sees a composition that no longer matches what was judged (its
+    // own first attempt merged it) and takes the safe branch: it does not draft,
+    // and leaves the merged set to the next tick to judge and draft.
+    assert.equal(await draftCount(ctx), 0);
+    await reconcileGaps(ctx, undefined, deps);
+    assert.equal((await reshapeJobs(ctx)).length, 2, "the next tick re-judges the merged set");
+  });
+
+  it("applies a reshape that completed between enqueue and register in the same tick", async () => {
+    // The completion-side continuation found no follow-up row and did nothing. The
+    // tick reads the job back after registering, so it does not wait a whole tick.
+    class RacingBroker extends FakeJobBroker {
+      override async create(type: JobType, input: unknown): Promise<JobView> {
+        const job = await super.create(type, input);
+        if (type === "reconcile_gap_clusters") {
+          // Completed behind the caller's back; it still holds the `created` view.
+          await super.complete(job.id, {
+            result: {
+              merges: [
+                {
+                  clusterIds: (input as { clusters: Array<{ id: string }> }).clusters.map((c) => c.id),
+                  rationale: "same topic",
+                  confirmed: true
+                }
+              ],
+              splits: [],
+              dismissals: []
+            },
+            executor: "watcher"
+          });
+        }
+        return job;
+      }
+    }
+    const ctx = makeTestContext({
+      jobs: new RacingBroker(),
+      config: new RuntimeConfigHolder({ aiProvider: "openai-compatible" })
+    });
+    await seedTwoClustersWithGaps(ctx);
+
+    await reconcileGaps(ctx, undefined, deps);
+
+    assert.equal((await ctx.stores.gapClusters.listActiveClusters()).length, 1, "applied in the same tick");
+    assert.equal(await draftCount(ctx), 1);
+  });
+
+  it("writes off a reshape nobody claims: cancels it and drafts without it", async () => {
+    // No capable watcher. Waiting forever would freeze this flow's clustering and
+    // drafting; a reshape that cannot be obtained has always meant "draft anyway".
+    const ctx = newContext();
+    await seedTwoClustersWithGaps(ctx);
+    const start = Date.now();
+    mock.timers.enable({ apis: ["Date"], now: start });
+    try {
+      await reconcileGaps(ctx, undefined, deps);
+      const [reshape] = await reshapeJobs(ctx);
+
+      // Still inside the deadline: the tick keeps waiting.
+      mock.timers.setTime(start + RESHAPE_STALL_MS - 1);
+      await reconcileGaps(ctx, undefined, deps);
+      assert.equal((await ctx.jobs.get(reshape!.id))?.state, "created");
+      assert.equal(await draftCount(ctx), 0);
+
+      // Past it: written off.
+      mock.timers.setTime(start + RESHAPE_STALL_MS);
+      await reconcileGaps(ctx, undefined, deps);
+      assert.equal(
+        (await ctx.jobs.get(reshape!.id))?.state,
+        "cancelled",
+        "cancelled, so a watcher that turns up later runs no paid generation nobody reads"
+      );
+      assert.equal(await draftCount(ctx), 2, "the un-reshaped clusters are drafted");
+      assert.equal((await reshapeJobs(ctx)).length, 1, "and the same composition is not immediately re-bought");
+      assert.equal(await ctx.stores.gapClusters.getReshapeCompositionHash(undefined), undefined);
+      assert.equal(
+        await ctx.stores.gapClusters.getProcessedRevision(undefined),
+        await ctx.stores.questionLogs.getGapCatalogRevision(undefined),
+        "the flow is unblocked"
+      );
+    } finally {
+      mock.timers.reset();
+    }
+  });
+
+  it("never writes off a reshape a watcher is actually running", async () => {
+    const ctx = newContext();
+    await seedTwoClustersWithGaps(ctx);
+    const start = Date.now();
+    mock.timers.enable({ apis: ["Date"], now: start });
+    try {
+      await reconcileGaps(ctx, undefined, deps);
+      const claimed = await ctx.jobs.claim("watcher", ["openai-compatible"]);
+      mock.timers.setTime(start + RESHAPE_STALL_MS * 2);
+      await reconcileGaps(ctx, undefined, deps);
+
+      assert.equal((await ctx.jobs.get(claimed!.id))?.state, "active");
+      assert.equal(await draftCount(ctx), 0);
+    } finally {
+      mock.timers.reset();
+    }
+  });
+
+  it("the tick re-drives a stalled gap-closure verification (lost continuation) to a verdict", async () => {
+    const ctx = newContext();
+    const log = await ctx.stores.questionLogs.record({
+      question: "How do I configure X?",
+      chatProvider: "codex",
+      retrievedSectionIds: []
+    });
+    await ctx.stores.questionLogs.recordManualGap(log.id, "How to configure X");
+    const proposal = await ctx.stores.proposals.create({
+      title: "Configure X",
+      targetPath: "configure-x.md",
+      markdown: "# Configure X",
+      rationale: "r",
+      evidence: [],
+      gapSummary: "How to configure X",
+      triggeringQuestionIds: [log.id]
+    });
+    await ctx.stores.proposals.updateStatus(proposal.id, "merged");
+    const merged = await ctx.stores.proposals.get(proposal.id);
+    assert.ok(merged);
+    assert.equal((await proposalsService.verifyGapClosure(ctx, merged)).closureStatus, "pending");
+    // The re-ask completed in the broker, but its continuation never ran.
+    const [reask] = (await ctx.jobs.list({ type: "answer_question" })).jobs;
+    await ctx.jobs.complete(reask!.id, {
+      result: {
+        answer: "Set the X flag.",
+        confidence: "high",
+        citations: [
+          {
+            documentId: "d",
+            sectionId: "s",
+            path: "configure-x.md",
+            heading: "h",
+            anchor: "a",
+            excerpt: "e",
+            relevance: 0.9
+          }
+        ]
+      },
+      executor: "watcher"
+    });
+
+    await reconcileGaps(ctx, undefined, deps);
+
+    assert.equal((await ctx.stores.proposals.get(merged.id))?.closureStatus, "verified_closed");
+    const [run] = await ctx.stores.maintenanceRuns.list({ taskType: "process_gaps_to_pull_requests", limit: 5 });
+    assert.equal(run?.details.stalledVerificationsRedriven, 1);
+  });
+
+  it("a reshape with no follow-up row (created by hand) completes without touching the reconciler", async () => {
+    const ctx = newContext();
+    await seedTwoClustersWithGaps(ctx);
+    const clusters = await ctx.stores.gapClusters.listActiveClusters();
+    const job = await ctx.jobs.create("reconcile_gap_clusters", {
+      clusters: clusters.map((c) => ({ id: c.id, title: c.title })),
+      provider: "openai-compatible"
+    });
+
+    const completion = await completeJob(ctx, job.id, {
+      merges: [{ clusterIds: clusters.map((c) => c.id), rationale: "x", confirmed: true }],
+      splits: [],
+      dismissals: []
+    });
+
+    assert.equal(completion.ok, true);
+    assert.equal(
+      (await ctx.stores.gapClusters.listActiveClusters()).length,
+      2,
+      "no tick asked for it; nothing applied"
+    );
+    assert.equal(published.length, 0);
   });
 });

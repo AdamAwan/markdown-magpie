@@ -10,10 +10,13 @@ export function fixPatrolRoutes(ctx: AppContext): Hono {
   const app = new Hono();
 
   // Thin orchestration endpoint the maintenance watcher's correctness_patrol runner POSTs.
-  // Selects the next batch of documents to patrol, runs the verify lens over them,
-  // advances the cursor, and records a maintenance run with its findings. Body
-  // optional; an absent flowId patrols the default (unscoped) flow. (Run history is
-  // read via GET /api/maintenance-runs.)
+  // Selects the next batch of documents to patrol, ENQUEUES a verify_document job
+  // for each, advances the cursor, records a maintenance run, and returns — it
+  // never waits on the verifies. Each one's completion applies its verdict and adds
+  // its findings to the run, so `findingCount` here counts only verdicts already in
+  // hand and `pendingVerifyCount` the verifies still to answer. Body optional; an
+  // absent flowId patrols the default (unscoped) flow. (Run history is read via
+  // GET /api/maintenance-runs.)
   app.post("/run", requireScopes("manage:jobs"), rateLimit(ctx, "trigger"), async (c) => {
     const payload = await readJsonBody<{ flowId?: string }>(c);
     const outcome = await patrolService.runFixPatrol(ctx, {
@@ -26,7 +29,8 @@ export function fixPatrolRoutes(ctx: AppContext): Hono {
     return c.json({
       runId: outcome.runId,
       selectedCount: outcome.selectedCount,
-      findingCount: outcome.findings.length
+      findingCount: outcome.findings.length,
+      pendingVerifyCount: outcome.pendingVerifyCount
     });
   });
 

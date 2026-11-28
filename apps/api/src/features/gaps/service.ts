@@ -8,8 +8,9 @@ export async function listCandidates(ctx: AppContext, limit: number): Promise<Ga
   return ctx.stores.questionLogs.listGapCandidates(limit);
 }
 
-// Runs the full gap→PR reconciliation for one configured flow (clustering, the
-// reshape AI job the API bounded-waits on, drafting and publication enqueue).
+// Runs one gap→PR reconcile tick for a configured flow (clustering, then drafting
+// and publication enqueue — or, when the cluster set needs re-judging, enqueueing
+// the reshape AI job, whose completion drafts). Never waits on a job.
 // This is the thin endpoint the maintenance watcher's process_gaps_to_pull_requests
 // runner POSTs; the heavy orchestration stays here in the API.
 export async function reconcileFlow(ctx: AppContext, flowId: string): Promise<void> {

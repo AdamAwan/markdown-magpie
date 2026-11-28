@@ -103,8 +103,8 @@ spec owns the **contract** they all share.
   controls can count in-flight AI work without re-deriving the list.
 - **J10** — **Interactive class.** `INTERACTIVE_AI_JOB_TYPES = {answer_question,
   outline_flow_seed}` names the AI jobs a live caller is waiting on right now (a `/api/ask`
-  answer — including a `verify_gap_closure` re-ask a blocked orchestrator bounded-waits on —
-  and a console flow outline). `answer_question_batch` (questionnaire drip) shares the answer
+  answer and a console flow outline). A `verify_gap_closure` re-ask is an `answer_question`
+  job too and so rides the same lane, although nothing waits on it any more (J22a). `answer_question_batch` (questionnaire drip) shares the answer
   contract but is **deliberately not interactive**, so a bulk questionnaire can never erode
   the interactive reserve protecting `/api/ask`. This split drives the claim-side lane order
   (J17) and the AI capacity gate's interactive reserve (see
@@ -199,11 +199,33 @@ paid-for generation away and force pg-boss to redo the whole job; both are close
   completed row, so the output survives and a later manual re-POST of `/complete` can still
   replay the bookkeeping.
 - **J22** — **Reading a completed job's output back (#184).** Because the persisted output is
-  the `{result, executor, usage?, provider?, model?}` envelope, any API-side consumer of
-  `runJobToCompletion` MUST parse it through `parseCompletedJobOutput(schema, job.output)`,
+  the `{result, executor, usage?, provider?, model?}` envelope, any API-side code that reads
+  a result off the job row MUST parse it through `parseCompletedJobOutput(schema, job.output)`,
   never run the raw output schema against `JobView.output` directly — the raw parse only
   succeeds against envelope-less test fakes and silently discards real watcher results. Gap
-  reshape, the patrol verify lens, and gap-closure re-asks all read through this helper.
+  reshape, the patrol verify, and gap-closure re-asks all read through this helper when a
+  tick picks up a completion nobody applied (J22a).
+- **J22a** — **Orchestrators never wait on a job; completions continue them.** The API has
+  no "create a job and wait for it" path. A maintenance orchestrator that needs an AI step
+  (`verify_gap_closure` → `answer_question` re-asks; `process_gaps_to_pull_requests` →
+  `reconcile_gap_clusters`; `correctness_patrol` → `verify_document`) **enqueues** it,
+  records an `orchestration_followups` row keyed by the follow-up job's id (migration 0070:
+  which orchestration, which scope, and what it was in the middle of), and **returns** — so
+  the watcher that claimed the orchestrator is free at once and the same watcher can run the
+  follow-up. The orchestration resumes as one more side effect in the completion dispatcher
+  (J18–J19), inheriting its replay contract: a continuation that fails returns `500`, the
+  watcher re-POSTs, and the replay re-runs the continuation — never the generation. Three
+  properties hold for every continuation: it is **serialised** under an advisory lock
+  against whatever it could race (`withFlowRunLockWaiting` — it waits rather than skips, so
+  an outcome is never dropped); it is **idempotent** (a settled row is a no-op, and paid
+  enqueues precede the settle); and it is **self-healing** — the broker stays the source of
+  truth for job state, so a periodic tick applies any `completed` follow-up whose
+  continuation never ran and writes off or replaces any that died (the patrol and the
+  reshape on their own tick; gap-closure re-asks on the reconcile tick, bounded — see
+  gaps-and-maintenance G23b). A continuation pins one pooled connection while it holds its
+  lock, so at most half the pool may be held this way per process; the rest wait. A job with no row is not an
+  orchestrated follow-up and every continuation ignores it. **One watcher is enough.**
+  (Design: `superpowers/specs/2026-11-27-non-blocking-orchestrators-design.md`.)
 
 ## Token usage, execution identity & cost (#241)
 
@@ -214,9 +236,49 @@ paid-for generation away and force pg-boss to redo the whole job; both are close
   persists it beside the output as `{result, executor, usage}` — on the **envelope**, not the
   job's own output, so it can never collide with schema-stripping. CLI providers emit raw
   text and report nothing, so their completions carry **no** usage (unmetered, not zero).
-- **J24** — **Valid output strips undeclared keys, never fails on them.** Output schemas are
-  `z.object`, so a valid parse strips fields the contract does not declare; the strip is
-  logged (never a failure) so a watcher shipping extra fields is observable.
+- **J24** — **An undeclared output field is stripped in production and a hard failure
+  everywhere else.** Output schemas are `z.object`, so a valid parse drops any field the
+  contract does not declare. Every boundary that parses a job output goes through one
+  function, `validateJobOutput(type, output, policy)` (`packages/jobs/src/output-validation.ts`),
+  whose policy is one of:
+  - **`strip`** (production default) — the field is dropped and the strip is logged with its
+    path (`strippedKeys`, including paths inside arrays such as `provenance[0].sources[0].x`),
+    never failed on: a model emitting one stray field must not cost a paid generation.
+  - **`reject`** (`MAGPIE_JOB_OUTPUT_STRICT=true`) — the output is refused. Set by the API's
+    test context, the golden eval, and the e2e compose override, and the **default** of every
+    watcher runner constructed without an explicit policy (i.e. every unit test).
+
+  There are two such boundaries, and the first one is the one that matters: (a) the
+  **watcher's** `parseJobOutput` parses the model's reply *before* the API ever sees it — an
+  undeclared model-authored field is dropped here, so under `strip` the watcher logs it and
+  under `reject` the run throws; (b) the **API's** `completeJob` validates what the watcher
+  sent — under `reject` it terminal-fails the job with `undeclared_output_fields` (naming
+  the paths) and never routes it to a repair (J28), because a reshape would drop the field
+  and hide the defect. `createConfiguredRunners` passes the operator's policy to every AI
+  runner; a test pins that it is `strip` unless the variable is `true`.
+- **J24a** — **Three checks keep a field from being undeclared in the first place**, so the
+  runtime policy is a backstop rather than the detector:
+  1. **Compile time, domain ⇄ schema.** Each schema is built with `contract<Domain>()(…)`
+     in `schemas.ts`. `satisfies z.ZodType<Domain>` alone only proves the schema's output is
+     assignable to the `@magpie/core` type — an *optional* domain field the schema forgot
+     still type-checks, and is then stripped at runtime. `contract` also requires every
+     field the domain type declares (at any depth, through arrays and unions) to be declared
+     on the schema; the compile error names the missing path.
+  2. **Compile time, code-built outputs.** Outputs a runner assembles in code go through
+     `buildJobOutput(schema, {...})`, whose argument is typed as the schema's input, so an
+     undeclared key in the literal is an excess-property error. The answer runner's
+     `AnswerOutput` *is* `z.output<typeof answerQuestionOutputSchema>`, not a mirror of it.
+  3. **Test time, prompt ⇄ schema.** `apps/watcher/src/output-contract.test.ts` reads every
+     field each catalog prompt tells the model to return — its `outputShape`, its trailing
+     `Return JSON:` example, and inline JSON examples in its rules — and asserts the job's
+     output schema declares each one (`declaredOutputFieldPaths`). Every provider job must
+     either have a catalog prompt or a stated exemption there.
+  > ⚠️ **Known gap (input side).** `sources[].tokenEnv` on a git `SourceDescriptor` is set by
+  > the API but **not** declared on `sourceDescriptorSchema`, so it is stripped at enqueue
+  > and source-grounded jobs clone with the host-default token only. It is pinned as the one
+  > exclusion in `schemas.ts` (`QueuedSourceDescriptor`) rather than declared, because
+  > `POST /api/jobs` accepts caller-built descriptors: declaring it as-is would let a
+  > `manage:jobs` caller pair an arbitrary https url with an arbitrary watcher env-var name.
 - **J25** — **Execution identity rides the envelope too.** Each AI runner exposes an
   `aiIdentity` — its provider plus the *configured* model (chat model / Azure deployment /
   CLI `--model`) — and the worker loop stamps flat `provider`/`model` envelope fields on
@@ -239,7 +301,8 @@ paid-for generation away and force pg-boss to redo the whole job; both are close
 
 ## Schema-invalid output & one informed repair (#288d)
 
-- **J28** — When completion output fails its contract, the job takes one of two paths per
+- **J28** — When completion output fails its contract (a missing or mistyped *declared*
+  field — an *undeclared* field is J24, and is never repaired), the job takes one of two paths per
   `decideRepairOrTerminal`: (a) a **repairable** type with repair enabled and no prior repair
   context is offered **one** informed repair; (b) everything else takes the **terminal-fail
   backstop** — no more blind, paid retries.
@@ -289,7 +352,9 @@ paid-for generation away and force pg-boss to redo the whole job; both are close
   (J17); `POST /api/jobs/:id/heartbeat` (keep a claim alive; the response flags `cancelled`
   so the runner aborts); `POST /api/jobs/:id/complete` (`{output, executor, usage?,
   provider?, model?}` → the envelope of J18–J25; 500 `side_effects_failed`, 404
-  `job_not_found`, 409 `job_cancelled`, 400 `invalid_output`/`repair_enqueued`); `POST
+  `job_not_found`, 409 `job_cancelled`, 400 `invalid_output`/`repair_enqueued` — under the
+  strict output policy an undeclared field is also a 400 `invalid_output`, the job failing
+  with error code `undeclared_output_fields`, J24); `POST
   /api/jobs/:id/fail` (a structured `{error: {code, message, category}}`).
 - **J35** — Answer-path callbacks the watcher makes while running `answer_question`:
   `POST /api/retrieve` (scoped context for a flow) and `POST /api/route` (embedding-similarity
@@ -453,9 +518,11 @@ paid-for generation away and force pg-boss to redo the whole job; both are close
 | Concern | Code |
 | --- | --- |
 | Job contract (types, catalog, I/O schemas) | `packages/jobs/src/{types,catalog,schemas}.ts` |
+| Output validation + undeclared-field policy, `buildJobOutput`, declared-path introspection | `packages/jobs/src/output-validation.ts` |
 | pg-boss broker (enqueue, claim, complete/fail, dead-letter, admission) | `apps/api/src/jobs/{broker,pg-boss-broker}.ts`, fake: `apps/api/src/jobs/fake-broker.ts` |
 | Schedule reconciliation | `apps/api/src/jobs/schedule-reconciler.ts` |
 | Jobs feature (routes, persist-first complete, replay, repair, `parseCompletedJobOutput`) | `apps/api/src/features/jobs/{routes,service,schema}.ts` |
+| Orchestrator continuations (J22a) | state: `apps/api/src/stores/{orchestration-followup-store,postgres-orchestration-followup-store}.ts`; lock: `apps/api/src/scheduling/run-lock.ts`; resumed from `completeJob` into `features/proposals/service.ts`, `scheduling/gap-reconciler.ts`, `features/patrol/service.ts` |
 | AI capacity gate (interactive reserve) | `apps/api/src/platform/ai-capacity.ts` (see [rate-limiting.md](./rate-limiting.md)) |
 | Cost pricing (read-time) | `apps/api/src/platform/ai-pricing.ts` |
 | Worker loop (claim/execute/heartbeat/usage) | `apps/watcher/src/worker-loop.ts`, `apps/watcher/src/usage.ts` |
@@ -469,13 +536,14 @@ paid-for generation away and force pg-boss to redo the whole job; both are close
 
 ## Tests (behavioural contract)
 
-`packages/jobs/src/{catalog,schemas}.test.ts`,
+`packages/jobs/src/{catalog,schemas,output-validation}.test.ts`,
 `apps/api/src/jobs/{fake-broker,pg-boss-broker,pg-boss-broker.integration,schedule-reconciler}.test.ts`,
 `apps/api/src/features/jobs/{routes,service,fold-dispatch}.test.ts`,
-`apps/watcher/src/{worker-loop,capabilities,config,http-client,usage,job-prompts,source-tools,source-workspace,fetch-url,health-server}.test.ts`,
+`apps/watcher/src/{worker-loop,capabilities,config,http-client,usage,job-prompts,output-contract,source-tools,source-workspace,fetch-url,health-server}.test.ts`,
 `apps/watcher/src/runners/{chat,cli,generative,maintenance,publication,publication-comment,publication-crosslink,refresh-flow-snapshot,repair,source-agent}.test.ts`,
 `apps/api/src/features/source-map/routes.test.ts`,
-`apps/api/src/stores/{source-map-store,postgres-source-map-store}.test.ts`.
+`apps/api/src/stores/{source-map-store,postgres-source-map-store,orchestration-followup-store}.test.ts`,
+`apps/api/src/scheduling/run-lock.test.ts`.
 
 ## Provenance (design history)
 
@@ -492,7 +560,9 @@ publish capability, `publish_proposal` fan-out, and coverage banner),
 `2026-07-06-source-agentic-grounding-design.md` (source-grounded workspaces, the tool loop,
 `mapUpdates`, and `#242` internet fetching),
 `2026-07-15-ai-cost-chart-redesign-design.md` (`#241` usage/identity envelope and read-time
-pricing). The completion re-billing fix (`#161`/`#184`/`#241`), the interactive claim lane
+pricing), `2026-11-27-non-blocking-orchestrators-design.md` (J22a — orchestrators enqueue
+and continue from the follow-up's completion; removes the bounded wait and with it the
+two-watcher requirement). The completion re-billing fix (`#161`/`#184`/`#241`), the interactive claim lane
 (`#240`), and the informed-repair contract (`#288d`) are as-built in code (J18–J32) ahead of
 a dedicated design record; the earlier "repair reprompt is out of scope" note is superseded
 (see the J32 drift marker).

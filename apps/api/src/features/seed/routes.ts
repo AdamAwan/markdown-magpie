@@ -55,8 +55,8 @@ export function seedRoutes(ctx: AppContext): Hono {
 
   // Thin orchestration endpoint the maintenance watcher's seed_bootstrap runner
   // POSTs. Checks the sparse-flow guards and, when they all pass, enqueues an
-  // auto-origin outline_flow_seed job — it never bounded-waits on it (the plan
-  // lands via the completion handler).
+  // auto-origin outline_flow_seed job and returns (the plan lands via the
+  // completion handler).
   app.post("/:flowId/seed-bootstrap/run", requireScopes("manage:jobs"), rateLimit(ctx, "trigger"), async (c) => {
     const flowId = c.req.param("flowId");
     const outcome = await runSeedBootstrap(ctx, flowId);
