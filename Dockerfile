@@ -35,8 +35,10 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 
+# tini is PID 1 (see ENTRYPOINT): it forwards SIGTERM to the node process and
+# reaps the git / provider-CLI children the watcher spawns.
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends ca-certificates git \
+  && apt-get install -y --no-install-recommends ca-certificates git tini \
   && rm -rf /var/lib/apt/lists/*
 
 COPY --from=build /app/package.json /app/package-lock.json ./
@@ -69,4 +71,14 @@ ENV MAGPIE_BUILD_COMMITTED_AT=$GIT_COMMITTED_AT
 
 EXPOSE 3000 4000 4001
 
-CMD ["npm", "run", "start", "-w", "@magpie/api"]
+# Signals must reach node, which drains in-flight work on SIGTERM (docs/api.md
+# API37, docs/ai-jobs.md J53/J54). So no `npm run start` and no shell: npm does
+# not reliably forward SIGTERM to its child, and node as PID 1 would get no
+# default signal handling and leave zombies. tini (PID 1) execs node directly and
+# forwards the signal to it alone — deliberately not to the process group
+# (`tini -g`), so a provider CLI the watcher is running is wound down by the
+# watcher's own abort, not killed out from under it. The workdir stays /app: the
+# API resolves relative KNOWLEDGE_* / data paths against it, as it did when npm
+# ran it from the repo root. Override CMD (exec form) to run another app.
+ENTRYPOINT ["/usr/bin/tini", "--"]
+CMD ["node", "apps/api/dist/main.js"]

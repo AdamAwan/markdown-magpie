@@ -25,7 +25,9 @@ to break the app.
   comes from the trace id (O7), not a bespoke correlation header.
 - **O4** — The watcher binds a **per-job child logger** `{ jobId, jobType }` and logs
   `job claimed` and a terminal `job done` / `job failed` / `job cancelled` with
-  `{ durationMs, outcome }`.
+  `{ durationMs, outcome }` — or, when the watcher is shutting down mid-job,
+  `job released to the queue for shutdown` with `outcome: "released"`
+  ([ai-jobs.md](./ai-jobs.md) J53).
 
 ## Crash handlers
 
@@ -67,7 +69,8 @@ to break the app.
 
 - **O11** — The watcher records `magpie.jobs.finished` (counter by `job.type` /
   `job.outcome`) and `magpie.jobs.duration` (histogram, ms) for every job reaching a
-  terminal state, under the `@magpie/telemetry` meter. HTTP server latency/status metrics
+  terminal state — plus `job.outcome = "released"` for a job handed back on shutdown
+  (not terminal; it runs again, J53) — under the `@magpie/telemetry` meter. HTTP server latency/status metrics
   come from auto-instrumentation. Everything exports over **OTLP** — there is **no bespoke
   `/metrics` endpoint** (run an OTel Collector with a Prometheus exporter if a scrape
   endpoint is wanted).
@@ -82,7 +85,8 @@ to break the app.
 ## Health / liveness
 
 - **O13** — The **watcher** exposes a minimal HTTP server: `GET /health` (liveness — 200
-  when the poll loop ticked within `WATCHER_HEALTH_STALE_AFTER_MS`, else 503 `stale`) and
+  when the poll loop — or, while a job runs, its heartbeat ([ai-jobs.md](./ai-jobs.md)
+  J55) — ticked within `WATCHER_HEALTH_STALE_AFTER_MS`, else 503 `stale`) and
   `GET /ready` (readiness — 200 iff it advertises ≥1 runnable capability, else 503).
 - **O14** — The **API** also exposes health endpoints (auth-exempt): `GET /health`
   (shallow liveness), `GET /ready` (deep readiness — broker started **and** Postgres

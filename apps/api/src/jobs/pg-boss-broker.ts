@@ -449,6 +449,35 @@ export class PgBossJobBroker implements JobBroker {
     });
   }
 
+  // Give an active job back to its queue without spending a retry (J53). pg-boss
+  // has no public "un-claim", so this is our own scoped UPDATE (the failTerminal
+  // precedent above). The retry accounting it relies on lives in pg-boss's
+  // fetchNextJob: a claim increments retry_count only when `started_on IS NOT
+  // NULL`, i.e. when the job ran before. Clearing started_on therefore makes the
+  // next claim count exactly as this released one did — retry_count, retry_limit
+  // and the backoff schedule are untouched. The state goes back to what a fetch
+  // would have found (`retry` once the job has failed before, else `created`),
+  // start_after moves up to now so it is claimable immediately, and keep_until
+  // moves by the same amount (pg-boss's own convention whenever start_after moves,
+  // so the retention sweep measures from the new start). `state = 'active'`
+  // makes it a no-op on a job a cancel, completion or expiry sweep already
+  // settled. The schema name is guarded by SCHEMA_IDENTIFIER in the constructor.
+  async release(id: string, fence: JobAttemptFence = {}): Promise<JobView> {
+    return this.mutate(id, async (queueName) => {
+      const fenced = fence.attempt !== undefined;
+      await this.boss.getDb().executeSql(
+        `UPDATE "${this.schema}".job
+            SET state = (CASE WHEN retry_count > 0 THEN 'retry' ELSE 'created' END)::"${this.schema}".job_state,
+                started_on = NULL,
+                heartbeat_on = NULL,
+                keep_until = GREATEST(start_after, "${this.schema}".job_now()) + (keep_until - start_after),
+                start_after = GREATEST(start_after, "${this.schema}".job_now())
+          WHERE name = $1 AND id = $2 AND state = 'active'${fenced ? " AND retry_count = $3" : ""}`,
+        fenced ? [queueName, id, fence.attempt] : [queueName, id]
+      );
+    });
+  }
+
   async cancel(id: string): Promise<JobView> {
     return this.mutate(id, (queueName) => this.boss.cancel(queueName, id));
   }

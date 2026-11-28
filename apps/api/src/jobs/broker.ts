@@ -159,6 +159,17 @@ export interface JobBroker {
   // so an upgrade never replays side effects for historical failures that the
   // old POST /fail path already handled.
   listUnsettledFailures(limit: number): Promise<JobView[]>;
+  // Hand an ACTIVE job back to its queue, claimable again at once, WITHOUT
+  // spending a retry: the released attempt is not counted, so the job's
+  // retryCount and remaining budget are exactly what they were before the claim
+  // that is being given back. Used by a watcher shutting down mid-job (J53) — the
+  // work was interrupted, not failed. A no-op on a job that is not active (already
+  // completed/failed/cancelled, or already released), so a release that races a
+  // cancellation or a heartbeat-expiry sweep never resurrects the job.
+  // Fenced like the other lifecycle calls (J60): with `attempt`, only that
+  // attempt is released, so a watcher whose claim lapsed cannot un-claim the
+  // attempt another watcher now holds.
+  release(id: string, fence?: JobAttemptFence): Promise<JobView>;
   cancel(id: string): Promise<JobView>;
   retry(id: string): Promise<JobView>;
   get(id: string): Promise<JobView | undefined>;

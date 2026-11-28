@@ -77,11 +77,13 @@ function parsePositiveInt(value: string | undefined, name: string, fallback: num
   return parsed;
 }
 
-// Tracks the last time the worker loop completed an iteration ("ticked"),
-// independent of whether that iteration claimed a job. The loop calls tick()
-// on every pass (claimed or idle-poll), so a healthy idle watcher still ticks
-// every pollIntervalMs; only a loop stuck inside a single claim/execute call
-// (or one that crashed out of run() entirely) goes stale.
+// Tracks the last time the worker loop showed it was alive ("ticked"). The loop
+// calls tick() on every pass (claimed or idle-poll), so a healthy idle watcher
+// ticks every pollIntervalMs; and while a job runs, after every per-job
+// heartbeat round trip (half the job's heartbeat window — 30s by default), so a
+// job longer than staleAfterMs does not read as a dead watcher (J55). Only a
+// loop that is neither polling nor heartbeating (wedged, or crashed out of run())
+// goes stale. staleAfterMs must therefore exceed the heartbeat cadence.
 export class TickTracker {
   private lastTickAt = Date.now();
 

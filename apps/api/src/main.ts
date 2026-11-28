@@ -1,4 +1,4 @@
-import { serve } from "@hono/node-server";
+import { getRequestListener } from "@hono/node-server";
 import { hydrateGithubTokenFromGhCli } from "@magpie/git";
 import { installCrashHandlers } from "@magpie/logger";
 import { initTelemetry, type TelemetryHandle } from "@magpie/telemetry";
@@ -11,6 +11,7 @@ import { startFailureSweep } from "./features/jobs/failure-sweep.js";
 import { preflightDataPaths } from "./platform/preflight.js";
 import { checkoutRoot, snapshotRoot } from "./platform/repositories.js";
 import { logger } from "./logger.js";
+import { createDrainableServer, installGracefulShutdown } from "./shutdown.js";
 
 // Capture crashes outside handled paths (uncaught throws, unhandled rejections)
 // with structured context and a clean non-zero exit for the restart policy,
@@ -58,45 +59,35 @@ async function start(): Promise<void> {
     logger
   );
   const app = buildApp(ctx);
-  const server = serve({ fetch: app.fetch, port }, () => {
+  // A drainable node:http server (rather than @hono/node-server's serve(), whose
+  // HTTP/1-or-2 union type hides http.Server's connection controls) so SIGTERM
+  // can finish in-flight requests before teardown — see shutdown.ts.
+  const server = createDrainableServer(getRequestListener(app.fetch));
+  server.server.listen(port, () => {
     logger.info({ port }, "Markdown Magpie API listening");
     configService.logStartupConfig(ctx);
   });
 
-  // On a normal stop, stop accepting connections and give in-flight background
-  // work (merge cascades, crunch planning, manual task runs) a bounded window to
-  // finish so it isn't silently dropped mid-flight.
-  let shuttingDown = false;
-  const shutdown = (signal: string) => {
-    if (shuttingDown) {
-      return;
-    }
-    shuttingDown = true;
-    logger.info({ signal }, "received signal; draining background work before exit");
-    server.close();
-    Promise.race([ctx.background.whenIdle(), new Promise((resolve) => setTimeout(resolve, config.apiShutdownDrainMs))])
-      .then(() => failureSweep.stop())
-      .then(() => ctx.jobs.stop())
-      // Close the shared store pool after the broker so no store query is mid-flight
-      // when its connections are torn down. Best-effort: shutdown exits regardless.
-      .then(() => ctx.pool?.end())
-      // Flush and stop telemetry last so any span/metric from the drain is exported.
-      .then(() => telemetry.shutdown())
-      .catch((error) =>
-        logger.warn(
-          { err: error instanceof Error ? error.message : "Unknown error" },
-          "error draining background work on shutdown"
-        )
-      )
-      .finally(() => {
-        if (ctx.background.pending > 0) {
-          logger.warn({ pending: ctx.background.pending }, "exiting with background tasks still in flight");
-        }
-        process.exit(0);
-      });
-  };
-  process.once("SIGINT", () => shutdown("SIGINT"));
-  process.once("SIGTERM", () => shutdown("SIGTERM"));
+  // On SIGTERM/SIGINT: stop accepting connections, let in-flight HTTP handlers
+  // and background work (merge cascades, manual task runs) finish within the
+  // drain window, then stop the broker, then end the store pool — after the
+  // broker, so no store query is mid-flight when its connections go — and flush
+  // telemetry last so any span/metric from the drain is exported. A second
+  // signal exits at once. See shutdown.ts and docs/api.md API37/API38.
+  installGracefulShutdown({
+    server,
+    drainMs: config.apiShutdownDrainMs,
+    background: ctx.background,
+    steps: [
+      { name: "failure sweep", run: () => failureSweep.stop() },
+      { name: "job broker", run: () => ctx.jobs.stop() },
+      { name: "store pool", run: async () => ctx.pool?.end() },
+      { name: "telemetry", run: () => telemetry.shutdown() }
+    ],
+    logger,
+    exit: (code) => process.exit(code),
+    signals: process
+  });
 }
 
 void start().catch((error) => {

@@ -10,7 +10,13 @@ services:
     build:
       context: .
     image: markdown-magpie:latest
-    command: npm run start -w @magpie/api
+    # Exec form, node directly (under the image's tini entrypoint): an
+    # `npm run start` wrapper swallows SIGTERM, so the API never drains. See the
+    # Dockerfile's ENTRYPOINT note.
+    command: ["node", "apps/api/dist/main.js"]
+    # Longer than the API's own drain (API_SHUTDOWN_DRAIN_MS, default 10s) plus
+    # its teardown backstop (10s), so the drain finishes before Docker SIGKILLs.
+    stop_grace_period: 30s
     env_file: *magpie-env
     environment:
       PORT: 4000
@@ -53,7 +59,11 @@ services:
 
   web:
     image: markdown-magpie:latest
-    command: npm run start -w @magpie/web
+    # `next start <dir>` from the repo root: the same app `npm run start -w
+    # @magpie/web` served, but with node (which Next's own SIGTERM handler runs
+    # in) as tini's direct child.
+    command: ["node", "node_modules/next/dist/bin/next", "start", "apps/web", "-p", "3000"]
+    stop_grace_period: 30s
     env_file: *magpie-env
     environment:
       PORT: 3000
@@ -68,7 +78,11 @@ services:
 
   watcher:
     image: markdown-magpie:latest
-    command: npm run start -w @magpie/watcher
+    command: ["node", "apps/watcher/dist/main.js"]
+    # Longer than the watcher's own forced-exit deadline
+    # (WATCHER_SHUTDOWN_TIMEOUT_MS, default 20s), so a SIGTERM always gets to
+    # release the in-flight job back to the queue before Docker SIGKILLs.
+    stop_grace_period: 30s
     env_file: *magpie-env
     environment:
       MAGPIE_CHECKOUT_ROOT: /data/checkouts
@@ -110,7 +124,7 @@ services:
 
   mcp:
     image: markdown-magpie:latest
-    command: npm run start -w @magpie/mcp
+    command: ["node", "apps/mcp/dist/main.js"]
     env_file: *magpie-env
     profiles:
       - mcp
@@ -122,7 +136,7 @@ services:
 
   mcp-http:
     image: markdown-magpie:latest
-    command: npm run start:http -w @magpie/mcp
+    command: ["node", "apps/mcp/dist/http.js"]
     env_file: *magpie-env
     environment:
       MCP_HTTP_PORT: "4001"
@@ -150,7 +164,7 @@ services:
 
   migrate:
     image: markdown-magpie:latest
-    command: npm run db:migrate
+    command: ["node", "scripts/migrate.mjs"]
     env_file: *magpie-env
     profiles:
       - app

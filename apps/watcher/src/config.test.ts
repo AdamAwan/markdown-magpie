@@ -58,6 +58,19 @@ describe("loadWatcherConfig — dev (auth disabled)", () => {
     const config = loadWatcherConfig({ AUTH_REQUIRED: "false", WATCHER_MAINTENANCE_TIMEOUT_MS: "600000" });
     assert.equal(config.maintenanceTimeoutMs, 600000);
   });
+
+  it("defaults the shutdown timeout to 20 seconds and parses WATCHER_SHUTDOWN_TIMEOUT_MS (J54)", () => {
+    assert.equal(loadWatcherConfig({ AUTH_REQUIRED: "false" }).shutdownTimeoutMs, 20_000);
+    const config = loadWatcherConfig({ AUTH_REQUIRED: "false", WATCHER_SHUTDOWN_TIMEOUT_MS: "45000" });
+    assert.equal(config.shutdownTimeoutMs, 45_000);
+  });
+
+  it("rejects a non-positive WATCHER_SHUTDOWN_TIMEOUT_MS", () => {
+    assert.throws(
+      () => loadWatcherConfig({ AUTH_REQUIRED: "false", WATCHER_SHUTDOWN_TIMEOUT_MS: "0" }),
+      /WATCHER_SHUTDOWN_TIMEOUT_MS/
+    );
+  });
 });
 
 describe("loadWatcherConfig — field validation", () => {

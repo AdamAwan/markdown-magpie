@@ -23,7 +23,7 @@ export interface HeartbeatReply {
   active?: boolean;
 }
 
-export interface WatcherApiClient {
+interface WatcherApiClient {
   claim(workerName: string, capabilities: JobCapability[]): Promise<JobView | undefined>;
   heartbeat(job: ClaimedJob): Promise<HeartbeatReply>;
   // `usage` is the run's summed provider-reported token usage (#241), omitted
@@ -33,6 +33,16 @@ export interface WatcherApiClient {
   // persists it beside usage so token spend can be priced per model.
   complete(job: ClaimedJob, output: unknown, usage?: AiUsage, identity?: AiExecutionIdentity): Promise<void>;
   fail(job: ClaimedJob, error: JobError): Promise<void>;
+}
+
+// The worker loop's own surface: the lifecycle above plus the shutdown hand-back,
+// which only the loop ever calls (runners never release a job), so it is kept off
+// the WatcherApi the runners are built against.
+export interface WorkerLoopApiClient extends WatcherApiClient {
+  // Hands a claimed job back to the queue without spending a retry (J53) — the
+  // shutdown path's alternative to leaving it active until the heartbeat sweep
+  // fails it. `signal` bounds the call so a draining watcher cannot hang on it.
+  release(job: ClaimedJob, signal?: AbortSignal): Promise<void>;
 }
 
 // A retrieved section as returned by POST /api/retrieve. Mirrors the API's
@@ -239,7 +249,7 @@ function sleep(ms: number): Promise<void> {
 // The watcher's only conduit to the API. It owns the URL shapes and the worker
 // identity that the API records on terminal transitions (so a failed/completed
 // job's diagnostics show which executor handled it).
-export class HttpWatcherApi implements WatcherApi {
+export class HttpWatcherApi implements WatcherApi, WorkerLoopApiClient {
   private readonly base: string;
   private readonly workerName: string;
   private readonly token?: ApiTokenProvider;
@@ -330,6 +340,12 @@ export class HttpWatcherApi implements WatcherApi {
         await sleep(delayMs);
       }
     }
+  }
+
+  async release(job: ClaimedJob, signal?: AbortSignal): Promise<void> {
+    // The worker name lets the API mark this watcher idle in the registry; the
+    // attempt fences the release to the claim this watcher holds (J60).
+    await this.post(`/api/jobs/${job.id}/release`, { workerName: this.workerName, attempt: job.retryCount }, signal);
   }
 
   async retrieve(

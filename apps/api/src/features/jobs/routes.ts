@@ -13,7 +13,8 @@ import {
   createJobBodySchema,
   failJobBodySchema,
   heartbeatJobBodySchema,
-  listJobsQuerySchema
+  listJobsQuerySchema,
+  releaseJobBodySchema
 } from "./schema.js";
 
 export function jobRoutes(ctx: AppContext): Hono {
@@ -88,6 +89,22 @@ export function jobRoutes(ctx: AppContext): Hono {
       jobsService.heartbeatJob(ctx, c.req.param("id"), workerName, attempt === undefined ? {} : { attempt })
     );
     return c.json({ job, cancelled: job.state === "cancelled", active });
+  });
+
+  // A watcher draining for shutdown gives its claimed job back to the queue
+  // without spending a retry (J53, API36). Service-only like the rest of the
+  // lifecycle: a human must not be able to bounce another worker's job.
+  app.post("/:id/release", requireScopes("manage:jobs"), requireServicePrincipal(), async (c) => {
+    const parsed = releaseJobBodySchema.safeParse(await readJsonBody(c));
+    const workerName = parsed.success ? parsed.data.workerName : undefined;
+    const attempt = parsed.success ? parsed.data.attempt : undefined;
+    try {
+      return c.json({
+        job: await jobsService.releaseJob(ctx, c.req.param("id"), workerName, attempt === undefined ? {} : { attempt })
+      });
+    } catch {
+      throw new HttpError(404, "job_not_found");
+    }
   });
 
   app.post(

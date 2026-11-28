@@ -486,7 +486,7 @@ paid-for generation away and force pg-boss to redo the whole job; both are close
 - **J36** — The worker loop runs **one job at a time**: claim → dispatch to the supporting
   runner under an `AbortController` → heartbeat on a quarter of the job's window (aborting the runner
   if the server reports the job cancelled or no longer held by this attempt, J60) → report the single terminal outcome (complete or
-  fail). A claim/transition error is logged and backed off, never crashes the process; a
+  fail) — or, when the watcher itself is shutting down, release the job (J53). A claim/transition error is logged and backed off, never crashes the process; a
   server-side cancellation is not re-reported as a failure. The job runs inside a span
   parented on the enqueueing request's `traceContext` carried across the queue.
 - **J37** — **CLI environment isolation.** A local agent CLI boots as a full interactive
@@ -605,6 +605,51 @@ specific but never leaks the provider's response body.
   and charges its rendered result against the loop's 400 KB read budget (refusing once it is
   spent, like `read_file`). When a cap stops the scan the result says so, so the model can
   narrow the query.
+
+## Watcher shutdown & liveness
+
+- **J53** — **A shutdown releases the claimed job; it never fails it or leaves it claimed.**
+  On SIGTERM/SIGINT the worker loop stops polling and aborts its runner with a dedicated
+  `WatcherShutdownError` reason, so the loop can tell its own shutdown from a server-side
+  cancellation on the same signal. The runner gets a bounded grace (5 s) to wind down; a
+  runner that ignores its signal is abandoned once the grace ends. The loop then calls
+  `POST /api/jobs/:id/release` (service-only like the rest of J34, bounded at 5 s), which
+  returns the job to the queue — `created`, or `retry` if it had failed before — claimable
+  at once and **without spending a retry**: pg-boss counts an attempt at claim time
+  (`retry_count` is bumped when `started_on` is already set), so the release clears
+  `started_on` and the next claim counts exactly as the released one did. Why: an
+  interrupted job is not a failed one, and before this a deploy left it `active` until the
+  heartbeat-expiry sweep failed it, burning one of its retries every restart. Specifically:
+  - a runner that **resolves** after the shutdown abort is still released, not completed —
+    a wound-down partial result cannot be told apart from a finished one;
+  - a job **claimed after** `stop()` (the claim was in flight) is released without running;
+  - a job the **server cancelled** is never released (its abort reason is the
+    cancellation, and the release is a no-op on any non-`active` job anyway, so a release
+    racing a cancel, completion or expiry sweep never resurrects it);
+  - a failed **completion POST** during shutdown is an ordinary failure (`fail()`), not a
+    release — only an interrupted *run* is released;
+  - if the release call itself fails (the API is restarting in the same deploy), the job
+    stays `active` and the heartbeat-expiry sweep remains the backstop (the old behaviour).
+  The release keeps the job id, so the question-log linkage and any pending repair
+  context (#288d) carry over to the next claim. The outcome is logged and metered as
+  `released`.
+- **J54** — **Signals and forced exit.** The first SIGTERM or SIGINT starts the graceful
+  stop above, then closes the health server and flushes telemetry; the process then exits
+  0 explicitly (an abandoned runner may still hold the event loop). A **second** signal, or
+  the graceful stop overrunning `WATCHER_SHUTDOWN_TIMEOUT_MS` (default 20 s), exits 1 at
+  once. The container's stop grace period MUST exceed `WATCHER_SHUTDOWN_TIMEOUT_MS`
+  (compose sets `stop_grace_period: 30s`), and the process MUST receive the signal
+  directly: the image runs `tini` as PID 1 and execs node in exec form, never under
+  `npm run` or a shell, which do not reliably forward SIGTERM. `tini` forwards to node
+  alone (not the process group), so a provider CLI the runner spawned is wound down by the
+  runner's abort rather than killed underneath it — which would read as a job failure.
+- **J55** — **Liveness ticks from the job heartbeat as well as the poll loop.** `/health`
+  reports 503 once the loop has not ticked within `WATCHER_HEALTH_STALE_AFTER_MS` (default
+  120 s). The loop ticks after every poll iteration and also after every per-job heartbeat
+  round trip settles (success or failure, as an erroring claim also ticks), so a job running
+  longer than the threshold no longer makes a healthy watcher read as dead and get
+  restarted mid-job. The threshold MUST stay above the heartbeat cadence (a quarter of the job's
+  `heartbeatSeconds` — 30 s by default).
 
 ## Source-grounded jobs & their I/O
 
@@ -737,6 +782,8 @@ specific but never leaks the provider's response body.
 | complete/fail retry | 1 s → 60 s backoff, 8 min budget | `apps/watcher/src/http-client.ts` (`SETTLE_RETRY_POLICY`) |
 | terminal-failure sweep | ~60 s (jittered), 50 per pass, 10 min claim lease | `apps/api/src/features/jobs/failure-sweep.ts`, `apps/api/src/jobs/pg-boss-broker.ts` |
 | scheduled-tick retention | one cron interval (60 s – 14 d) | `apps/api/src/jobs/pg-boss-broker.ts` (`scheduledTickRetentionSeconds`) |
+| shutdown runner grace / release timeout (J53) | 5 000 ms / 5 000 ms | `apps/watcher/src/worker-loop.ts` |
+| `WATCHER_SHUTDOWN_TIMEOUT_MS` (J54) | 20 000 ms | `apps/watcher/src/config.ts` |
 | interactive vs maintenance `retryLimit` | 3 vs 2 | `packages/jobs/src/catalog.ts` (`policy`) |
 | `AI_ADMISSION_LOCK_KEY` | fixed advisory key | `apps/api/src/jobs/pg-boss-broker.ts` |
 
@@ -754,6 +801,7 @@ specific but never leaks the provider's response body.
 | AI capacity gate (interactive reserve) | `apps/api/src/platform/ai-capacity.ts` (see [rate-limiting.md](./rate-limiting.md)) |
 | Cost pricing (read-time) | `apps/api/src/platform/ai-pricing.ts` |
 | Worker loop (claim/execute/heartbeat/usage) | `apps/watcher/src/worker-loop.ts`, `apps/watcher/src/usage.ts` |
+| Shutdown release + liveness (J53–J55) | loop: `apps/watcher/src/worker-loop.ts`; signals: `apps/watcher/src/shutdown-signals.ts`, `apps/watcher/src/main.ts`; health: `apps/watcher/src/health-server.ts`; release: `apps/api/src/jobs/pg-boss-broker.ts` (`release`), `apps/api/src/features/jobs/{routes,service}.ts`; containers: `Dockerfile`, `docker-compose*.yml` |
 | Runner factory + capability gates | `apps/watcher/src/runners/index.ts`, `apps/watcher/src/capabilities.ts` |
 | Chat / CLI runners + isolation | `apps/watcher/src/runners/{chat,cli}.ts` |
 | CLI process-tree kill + output bounds (J85) | `apps/watcher/src/runners/cli-process.ts` |
@@ -768,11 +816,11 @@ specific but never leaks the provider's response body.
 ## Tests (behavioural contract)
 
 `packages/jobs/src/{catalog,schemas,output-validation}.test.ts`,
-`apps/api/src/jobs/{fake-broker,pg-boss-broker,pg-boss-broker.integration,schedule-reconciler}.test.ts`,
-`apps/api/src/features/jobs/{routes,service,fold-dispatch,lifecycle}.test.ts` (J60–J65, J67),
+`apps/api/src/jobs/{fake-broker,pg-boss-broker,pg-boss-broker.integration,pg-boss-broker.release.integration,schedule-reconciler}.test.ts`,
+`apps/api/src/features/jobs/{routes,service,fold-dispatch,lifecycle,release}.test.ts` (J53, J60–J65, J67),
 `apps/api/src/jobs/pg-boss-broker.integration.test.ts` "fences, salvages and settles lost
 work" (J60–J64, J66 against real pg-boss),
-`apps/watcher/src/{worker-loop,capabilities,config,http-client,usage,job-prompts,output-contract,source-tools,source-workspace,fetch-url,health-server}.test.ts`,
+`apps/watcher/src/{worker-loop,capabilities,config,http-client,http-client.release,shutdown-signals,usage,job-prompts,output-contract,source-tools,source-workspace,fetch-url,health-server}.test.ts`,
 `apps/watcher/src/runners/{chat,cli,cli-process,generative,maintenance,publication,publication-comment,publication-crosslink,refresh-flow-snapshot,repair,source-agent}.test.ts`,
 `packages/retrieval/src/{http,query-embedding}.test.ts` (J81–J83, J86),
 `apps/api/src/features/source-map/routes.test.ts`,
