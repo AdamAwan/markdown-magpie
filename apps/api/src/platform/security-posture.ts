@@ -15,7 +15,7 @@ export interface SecurityPosture {
   productionOverrides: string[];
 }
 
-export function securityPosture(config: AppConfig): SecurityPosture {
+function securityPosture(config: AppConfig): SecurityPosture {
   const memoryStores = STORE_ENV_NAMES.filter((name) => storeBackend(config, name) === "memory");
   return {
     nodeEnv: config.nodeEnv,
