@@ -53,7 +53,7 @@ Every place the system reads text it did not author is a potential injection vec
 | ID | Threat | Status |
 | --- | --- | --- |
 | **T1** | **Content manipulation** — injected instructions cause the model to write misleading, biased, or attacker-chosen documentation. | Primary, residual risk; caught by the review gate (TM12). |
-| **T2** | **Path / write-scope escape** — generated output tries to write outside the destination checkout (path traversal, absolute paths, touching CI or secrets). | Mitigated by TM5. |
+| **T2** | **Path / write-scope escape** — generated output tries to write or delete outside the destination's configured subpath (path traversal, absolute paths, symlinks, touching CI, manifests or secrets). Multi-file changesets (dedupe, split, fold) are the exposed surface: the model chooses their paths. | Mitigated by TM5. |
 | **T3** | **Command injection** — injected text tries to execute commands on the watcher host via the agent CLI. | Mitigated by TM4. |
 | **T4** | **Unreviewed publication** — generated content reaches the source of truth without a human approving it. | Mitigated by the human-review gate (TM11–TM15). |
 | **T5** | **Git transport abuse** — a source/destination URL selects a dangerous git transport: `ext::sh -c …` (RCE on the watcher host), `file://` / internal `http://` (SSRF), or a `-`-prefixed URL misread as a git option (argument injection). | Mitigated by TM9. |
@@ -90,12 +90,33 @@ without realising it was load-bearing.
   element or over stdin (`promptMode`), so there is no shell to interpret injected
   metacharacters. There MUST be no `shell: true`, `exec`, or string interpolation into a
   command line. **Invariant to preserve:** never route agent invocation through a shell.
-- **TM5** — **Write paths constrained to the checkout** (mitigates T2). The Git publisher
-  validates every proposal target path with `assertWithinRoot`
-  (`packages/git/src/index.ts`), which rejects any path resolving outside the repository
-  checkout (`..` prefixes and absolute paths throw). Even if the model emits a hostile
-  path, the publisher refuses to write it. **Invariant to preserve:** all proposal writes
-  go through the path-scoping check; do not add a write path that bypasses it.
+- **TM5** — **Writes and deletes confined to Markdown documents under the destination
+  subpath** (mitigates T2). One shared policy, `checkDocumentPath` /
+  `findUnsafeChangesetPath` (`packages/git/src/document-path.ts`), decides which files
+  Magpie may touch: a path MUST be relative and already canonical (posix `/`, no empty
+  segment, no backslash, colon/drive letter, leading `/` or `~`, control or invisible
+  Unicode format character), contain no `..`, no dot-segment (`.github`, `.git`, `./`,
+  dot-files) and no `node_modules`, end in `.md` (case-insensitive — what the indexer
+  accepts), and — joined onto the destination subtree — stay under that subtree. It is
+  enforced three times, so one missed check cannot reach the working tree:
+  1. **API, when the job output is consumed** — the dedupe, split, `fold_changeset_proposal`
+     and source-sync completion handlers reject an offending model-chosen changeset
+     before any proposal is created or changed (`rejectUnsafeChangeset`,
+     `apps/api/src/scheduling/changeset.ts`; see
+     [proposals-and-publishing.md#P21](./proposals-and-publishing.md)). Dedupe and fold are
+     further held to the paths the job was offered; source-sync to its candidate documents.
+  2. **Watcher publication runner** — re-checks the whole file-set (or single target)
+     before any checkout work (`apps/watcher/src/runners/publication.ts`).
+  3. **Git publisher** — validates the whole changeset before touching git, resolves each
+     path against the destination subtree (`relativePathFromRoot`), refuses any target
+     whose existing path passes through a symlink (write **or** delete), and after `mkdir`
+     re-checks the realpath of the parent against the subtree, on top of
+     `assertWithinRoot` (`packages/git/src/index.ts`).
+  The same rule applies to single-file publishes. As a consequence an automated proposal
+  can never edit CI configuration (`.github/workflows/*`), package manifests, or any
+  non-Markdown file, even when steered by an injected document. **Invariant to preserve:**
+  every proposal write and delete goes through this one policy; do not add a write path
+  that bypasses it, and do not fork a second copy of the rules.
 - **TM6** — **The watcher is sandboxed from data** (mitigates T1/T2 blast radius). The
   watcher has **no database access**. It receives a tightly scoped job payload, calls back
   into the API only over the HTTP surface, and its only write is posting the job result
@@ -207,7 +228,11 @@ commitments.
 - **TM18** — **Sensitive-path flagging**: flag or block proposals that touch a configurable
   sensitive-path set (CI, auth, security, ownership) so reviewers get an explicit warning
   instead of a diff among many.
-  > ⚠️ NOT YET IMPLEMENTED.
+  > ⚠️ PARTIAL: the hard cases are now **blocked** by TM5 — no automated proposal can
+  > write or delete a dot-directory path (so no `.github/` CI or `CODEOWNERS` change), a
+  > non-Markdown file (`package.json`, lockfiles, scripts), or anything outside the
+  > destination subpath. A configurable sensitive-path set for *Markdown* documents inside
+  > the subpath (e.g. `SECURITY.md`) that flags rather than blocks is not implemented.
 - **TM19** — **Provenance surfacing in the review UI**: show which source
   documents/questions fed a proposal so a reviewer can judge whether the input was
   trustworthy.
@@ -230,7 +255,9 @@ The non-negotiable is TM9: the human-review gate stays mandatory and enforced.
 | Untrusted-content contract & delimiters (TM3) | `packages/prompts/src/catalog.ts` (`UNTRUSTED_CONTENT_CONTRACT`, `UNTRUSTED_CONTENT_OPEN/CLOSE`, `wrapUntrusted`, `VERIFY_ANSWER`) |
 | Wrapping at assembly points (TM3) | `apps/watcher/src/runners/generative.ts`, `apps/watcher/src/job-prompts.ts`, `apps/watcher/src/runners/source-agent.ts`, `apps/watcher/src/runners/repair.ts` |
 | Argv-only CLI spawn (TM4) | `apps/watcher/src/runners/cli.ts` (`spawnCli`) |
-| Path-scoping on writes (TM5) | `packages/git/src/index.ts` (`assertWithinRoot`) |
+| Document-path policy (TM5) | `packages/git/src/document-path.ts` (`checkDocumentPath`, `findUnsafeChangesetPath`) |
+| Path-scoping at the API (TM5) | `apps/api/src/scheduling/changeset.ts` (`rejectUnsafeChangeset`), callers in `apps/api/src/features/proposals/service.ts`, `apps/api/src/scheduling/fold.ts`, `apps/api/src/features/source-sync/service.ts` (`constrainToCandidates`) |
+| Path-scoping at publish (TM5) | `apps/watcher/src/runners/publication.ts` (`assertPublishablePaths`), `packages/git/src/index.ts` (`resolveTargetPath`, `assertWithinRoot`, `assertNoSymlinkOnPath`, `assertRealParentWithin`) |
 | Watcher HTTP-only, no DB (TM6) | `apps/watcher/src/http-client.ts`, `apps/watcher/src/worker-loop.ts` |
 | Bounded, allowlisted web fetch (TM7) | `apps/watcher/src/fetch-url.ts`, `apps/watcher/src/source-tools.ts`, `apps/watcher/src/runners/source-agent.ts` |
 | Git-transport allowlist (TM8) | `packages/core/src/index.ts` (`isAllowedGitCloneUrl`), `packages/git/src/index.ts` (`assertAllowedGitUrl`, `GIT_ALLOW_PROTOCOL`), `packages/jobs/src/schemas.ts`, `apps/api/src/features/jobs/service.ts` |
@@ -244,6 +271,11 @@ The non-negotiable is TM9: the human-review gate stays mandatory and enforced.
   `apps/watcher/src/job-prompts.test.ts`, `apps/watcher/src/runners/source-agent.test.ts`,
   `apps/watcher/src/runners/generative.test.ts` (grounding-verifier steer resistance).
 - Argv-only CLI spawn (TM4): `apps/watcher/src/runners/cli.test.ts`.
+- Write/delete path confinement (TM5): `packages/git/src/document-path.test.ts` (the
+  policy), `packages/git/src/publisher.test.ts` (publisher refusals incl. symlink escape),
+  `apps/watcher/src/runners/publication.test.ts`, `apps/api/src/features/proposals/service.test.ts`
+  (dedupe/split), `apps/api/src/scheduling/fold.test.ts` (changeset fold),
+  `apps/api/src/features/source-sync/service.test.ts` (`constrainToCandidates`).
 - Bounded, allowlisted web fetch (TM7): `apps/watcher/src/fetch-url.test.ts`.
 - Git-transport allowlist (TM8): `packages/git/src/checkout-url-guard.test.ts`.
 - Review gate — merge guard & no self-asserted merge (TM12):

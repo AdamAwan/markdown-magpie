@@ -72,6 +72,43 @@ that changes the source of truth is always a human action.
   `MAGPIE_GIT_AUTHOR_EMAIL`); the publisher throws if unset. Publishes are ordinary queued
   `publish_proposal` jobs — there is no separate "publications outbox" store; the reconcile
   gate re-publishes folded survivors through the same `enqueuePublishProposal` path.
+- **P20** — **Every path a proposal writes or deletes MUST pass the destination
+  document-path policy** (`checkDocumentPath`, `packages/git/src/document-path.ts`): a
+  canonical relative posix path (no leading `/`, `~`, backslash, colon/drive letter, empty
+  segment, control or invisible format character), with no `..`, no dot-segment
+  (`.github`, `.git`, `./`, dot-files) and no `node_modules` segment, ending in `.md`
+  (case-insensitive, matching the indexer), and lying under the destination's indexed
+  subtree. Single-file targets are system-owned (`resolveProposalTargetPath`, or the
+  indexed document path for correct/improve) and satisfy it by construction; multi-file
+  changeset paths are **model-chosen**, so they are checked. A changeset entry is
+  `{ path, content?, delete? }` — `path` is the only path-bearing field and is both the
+  write and the delete target (a move is a delete + a write, both checked). Why: a
+  prompt-injected document could otherwise steer a dedupe/split/fold at
+  `.github/workflows/*`, `package.json`, or outside the subpath, and the branch is pushed
+  and a PR opened automatically — where host CI may run it before any human reviews it
+  ([threat-model.md#TM5](./threat-model.md)).
+- **P21** — **The API rejects an unsafe model-chosen changeset when the job output is
+  consumed, before any proposal is created or changed** (`rejectUnsafeChangeset`,
+  `apps/api/src/scheduling/changeset.ts`). Per producer:
+  - `dedupe_documents` — every path must also be the reviewed document or one of the
+    neighbours the job was given;
+  - `split_document` — new paths are allowed (they must still pass P20);
+  - `fold_changeset_proposal` — every path must be in the union of the survivor's and the
+    rival's file-sets; a rejected fold leaves the survivor untouched and falls back to
+    publishing the rival as its own PR (the same fallback as a failed fold);
+  - source-sync — writes are restricted to the offered candidate documents, re-keyed to the
+    candidate's indexed path, and a candidate outside P20 is never written.
+
+  A rejection is logged (`changeset rejected: …` with job id, type, path and reason) and
+  the output is dropped like any other malformed completion: the job stays completed, no
+  proposal is created, the dispatcher does not throw (so no 500/replay loop) and no paid
+  generation is retried. The **watcher publication runner** re-checks the whole file-set
+  before any checkout, and the **git publisher** checks it again against the destination
+  subtree (`relativePathFromRoot`) before touching git, and refuses a target whose
+  existing path passes through a symlink (writes and deletes) or whose parent's realpath
+  leaves the subtree — so a bad path cannot reach the working tree even if an API check is
+  missed. A publish refused there fails the `publish_proposal` job with a `Refusing to
+  publish …` error; nothing is pushed.
 
 ## Stale-PR auto-regeneration
 
@@ -151,6 +188,8 @@ Mounted at `/api/proposals`. Mutating routes require `manage:knowledge`;
 | Provenance fold | `apps/api/src/features/proposals/provenance.ts` |
 | Git publishing (all in one module) | `packages/git/src/index.ts` (`LocalGitProposalPublisher`, `raisePullRequest`, mergeability, review decision) |
 | Watcher publication runner | `apps/watcher/src/runners/publication.ts`, `refresh-flow-snapshot.ts` |
+| Document-path policy (P20) | `packages/git/src/document-path.ts` (`checkDocumentPath`, `findUnsafeChangesetPath`) |
+| Changeset path enforcement (P21) | `apps/api/src/scheduling/changeset.ts` (`rejectUnsafeChangeset`); callers `apps/api/src/features/proposals/service.ts` (dedupe/split), `apps/api/src/scheduling/fold.ts` (`applyChangesetFoldFromCompletedJob`), `apps/api/src/features/source-sync/service.ts` (`constrainToCandidates`); publish-time `apps/watcher/src/runners/publication.ts` (`assertPublishablePaths`), `packages/git/src/index.ts` (`resolveTargetPath`, `assertNoSymlinkOnPath`, `assertRealParentWithin`) |
 | PR transitions & crosslink | `apps/api/src/scheduling/gap-reconciler.ts` (`applyPullRequestTransition`, `detectOverlaps`), `apps/api/src/stores/postgres-pr-crosslink-store.ts` |
 | Job contracts | `packages/jobs/src/{schemas,catalog}.ts` (`publish_proposal`, `draft_markdown_proposal`) |
 
@@ -158,7 +197,8 @@ Mounted at `/api/proposals`. Mutating routes require `manage:knowledge`;
 
 `apps/api/src/features/proposals/{service,closure-eval,link-cluster,provenance,regeneration,register-check,routes.bulk,routes.flow-scope,routes.merge-guard,routes.merge-idempotency,routes.merge,routes.validation}.test.ts`,
 `apps/api/src/stores/{postgres-proposal-store,proposal-store,proposal-path,pr-crosslink-store}.test.ts`,
-`packages/git/src/{publisher,publisher-concurrency,proposal-merge,comment,mergeability,review-decision}.test.ts`,
+`packages/git/src/{publisher,publisher-concurrency,proposal-merge,comment,mergeability,review-decision,document-path}.test.ts`,
+`apps/api/src/scheduling/fold.test.ts`, `apps/api/src/features/source-sync/service.test.ts` (P21),
 `apps/watcher/src/runners/{publication,publication-comment,publication-crosslink,refresh-flow-snapshot}.test.ts`.
 
 ## Provenance (design history)
