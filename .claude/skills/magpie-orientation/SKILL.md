@@ -279,7 +279,9 @@ design in `maintenance-redesign.md`). When in doubt, trust the code.
     claim went missing fails CLOSED). Identity provider is `AUTH_PROVIDER` = `auth0`
     (default) | `entra`; all per-provider differences live in
     `packages/auth/src/provider.ts` (legacy `AUTH0_*` env names still work). Cross-flow ids read as 404,
-    not 403 (`docs/authorization.md`).
+    not 403 (`docs/authorization.md`). On Entra (delegated scopes reach every user)
+    privileged routes also need the `admin`/`ops` capability on `*` from a human's
+    roles (`requirePrivilege`, AZ27), and the API won't boot without role grants.
 19. **MCP** (`apps/mcp`) — thin client over the HTTP API, stdio + Streamable-HTTP
     transports, **ten tools**: `kb_ask`, `kb_search`, `kb_citation`, `kb_feedback`,
     `kb_flows`, `kb_outline`, `kb_seed`, `kb_questionnaire_create`,

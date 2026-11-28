@@ -87,3 +87,28 @@ export function requireScopes(...scopes: string[]): MiddlewareHandler {
     await next();
   };
 }
+
+// Restricts a route to genuine service (machine-to-machine) principals — the
+// positive `isService` marker the verifier computed (Auth0 client-credentials
+// `gty`, Entra `idtyp: "app"`). Used for the watcher's job-lifecycle endpoints:
+// human operators hold the same `manage:jobs` scope, and must not be able to
+// claim jobs (reading their inputs) or post completions/failures for them. An
+// on-behalf-of delegated principal stands for its end user and is not a service.
+// Fails closed like requireScopes: a principal-absent request passes only when
+// auth was explicitly disabled. Mount after the route's requireScopes gate.
+export function requireServicePrincipal(): MiddlewareHandler {
+  return async (c, next) => {
+    const principal = c.get("principal");
+    if (!principal) {
+      if (c.get("authRequired") === false) {
+        await next();
+        return;
+      }
+      return c.json({ error: "unauthorized" }, 401);
+    }
+    if (!principal.isService) {
+      return c.json({ error: "forbidden" }, 403);
+    }
+    await next();
+  };
+}

@@ -310,8 +310,10 @@ paid-for generation away and force pg-boss to redo the whole job; both are close
   > the API but **not** declared on `sourceDescriptorSchema`, so it is stripped at enqueue
   > and source-grounded jobs clone with the host-default token only. It is pinned as the one
   > exclusion in `schemas.ts` (`QueuedSourceDescriptor`) rather than declared, because
-  > `POST /api/jobs` accepts caller-built descriptors: declaring it as-is would let a
-  > `manage:jobs` caller pair an arbitrary https url with an arbitrary watcher env-var name.
+  > `POST /api/jobs` used to accept caller-built descriptors: declaring it as-is would have
+  > let a `manage:jobs` caller pair an arbitrary https url with an arbitrary watcher env-var
+  > name. `POST /api/jobs` now only accepts descriptors matching operator config (J49), so
+  > declaring it is unblocked but remains a deliberate follow-up.
 - **J25** — **Execution identity rides the envelope too.** Each AI runner exposes an
   `aiIdentity` — its provider plus the *configured* model (chat model / Azure deployment /
   CLI `--model`) — and the worker loop stamps flat `provider`/`model` envelope fields on
@@ -381,7 +383,9 @@ paid-for generation away and force pg-boss to redo the whole job; both are close
   `job_not_failed` unless the job is `failed`); `POST /api/jobs/:id/accept-failure`
   (acknowledge a failure without changing queue state — it stays inspectable/retryable but
   stops warning).
-- **J34** — Watcher-only surface (operators rarely call directly): `POST /api/jobs/claim`
+- **J34** — Watcher-only surface, restricted to service principals when auth is on
+  (a human `manage:jobs` holder gets 403 —
+  [authorization.md](./authorization.md) AZ29): `POST /api/jobs/claim`
   (J17); `POST /api/jobs/:id/heartbeat` (keep a claim alive; the response flags `cancelled`
   so the runner aborts); `POST /api/jobs/:id/complete` (`{output, executor, usage?,
   provider?, model?}` → the envelope of J18–J25; 500 `side_effects_failed`, 404
@@ -489,6 +493,25 @@ paid-for generation away and force pg-boss to redo the whole job; both are close
   (falling back to full re-derivation). A draft that omits provenance is warned about but
   still published — quality is enforced by review, never by rejecting drafts.
   `dedupe_documents`/`split_document` changesets carry no per-claim provenance by design.
+- **J49** — **Source descriptors come only from operator config.** A source descriptor is a
+  direct line to the watcher host: a `local` `path` picks the directory the agent reads, a
+  `subpath` narrows (or, unchecked, escapes) the root, a git `url` picks what is cloned, and
+  an `internet` `allowedHosts` list picks what the fetch tool may reach. So:
+  1. **At the API boundary**, `POST /api/jobs` (`submitJob`,
+     `apps/api/src/features/jobs/service.ts`) MUST reject — `400 unconfigured_job_source`,
+     nothing enqueued — any input whose `sources` contains a descriptor that is not exactly
+     what the API itself projects from the configured sources (same id, kind, name, url,
+     path, subpath and allowlist; `unconfiguredSourceDescriptorIds`,
+     `apps/api/src/platform/source-descriptors.ts`). Every type whose input carries a
+     top-level `sources` array is checked (`jobInputSourcesSchema`, `@magpie/jobs`). Internal
+     enqueues build descriptors from config with `projectSourceDescriptors` and are
+     unaffected. Nothing in the repo (console, MCP, scripts) calls `POST /api/jobs`; it is an
+     operator surface.
+  2. **In the watcher**, as defence in depth, a descriptor's `subpath` MUST resolve inside
+     its source root (`prepareSourceWorkspaces`, `apps/watcher/src/source-workspace.ts`): an
+     absolute subpath, a `..` escape, or a symlink whose real path leaves the root is
+     rejected, degrading that source to an "unavailable" note (and failing the job when no
+     filesystem source resolves, as for any resolution failure).
 
 ## Source conflicts (the sources disagreeing with each other)
 

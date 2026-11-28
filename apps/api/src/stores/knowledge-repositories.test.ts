@@ -6,6 +6,8 @@ import {
   getConfiguredKnowledgeRepositories,
   getConfiguredKnowledgeSources,
   getConfiguredRoleGrants,
+  knowledgeConfigIssues,
+  parseRoleGrants,
   resolveConfiguredRepositorySelection,
   resolveKnowledgeRepositorySelection
 } from "./knowledge-repositories.js";
@@ -373,20 +375,125 @@ describe("knowledge repository configuration", () => {
       });
     });
 
-    it("drops unknown capabilities, de-duplicates, and prunes empty entries", () => {
+    it("de-duplicates capabilities and prunes flows that grant nothing", () => {
       const grants = getConfiguredRoleGrants({
         KNOWLEDGE_ROLE_GRANTS: JSON.stringify({
-          "kb-hr": { hr: ["read", "read", "bogus", "manage"] },
-          "kb-empty": { hr: ["nope"] },
-          "kb-nonarray": { hr: "read" }
+          "kb-hr": { hr: ["read", "read", "manage"] },
+          "kb-empty": { hr: [] },
+          "kb-ops": { "*": ["ops", "admin"] }
         })
       });
-      assert.deepEqual(grants, { "kb-hr": { hr: ["read", "manage"] } });
+      assert.deepEqual(grants, { "kb-hr": { hr: ["read", "manage"] }, "kb-ops": { "*": ["ops", "admin"] } });
+    });
+  });
+
+  // A malformed KNOWLEDGE_ROLE_GRANTS used to parse to {} — "flow-scoping inactive" —
+  // so a typo failed authorization OPEN. It is now a reported error (boot fails).
+  describe("parseRoleGrants (strict)", () => {
+    const errorsFor = (value: unknown) =>
+      parseRoleGrants(typeof value === "string" ? value : JSON.stringify(value)).errors;
+
+    it("reports unparseable JSON instead of returning an empty map", () => {
+      const result = parseRoleGrants("{not json");
+      assert.deepEqual(result.grants, {});
+      assert.equal(result.errors.length, 1);
+      assert.match(result.errors[0]!, /not valid JSON/);
     });
 
-    it("returns an empty map for malformed JSON rather than throwing", () => {
-      assert.deepEqual(getConfiguredRoleGrants({ KNOWLEDGE_ROLE_GRANTS: "{not json" }), {});
-      assert.deepEqual(getConfiguredRoleGrants({ KNOWLEDGE_ROLE_GRANTS: "[1,2,3]" }), {});
+    it("rejects a non-object top level", () => {
+      assert.equal(errorsFor([1, 2, 3]).length, 1);
+      assert.equal(errorsFor("null").length, 1);
+      assert.equal(errorsFor('"kb-super"').length, 1);
+    });
+
+    it("rejects malformed role and flow entries", () => {
+      assert.match(errorsFor({ "kb-hr": ["read"] })[0]!, /role "kb-hr" must map flow ids/);
+      assert.match(errorsFor({ "kb-hr": { hr: "read" } })[0]!, /must be an array of capabilities/);
+      assert.match(errorsFor({ " ": { hr: ["read"] } })[0]!, /empty role name/);
+    });
+
+    it("rejects unknown and non-string capabilities", () => {
+      assert.match(errorsFor({ "kb-hr": { hr: ["read", "bogus"] } })[0]!, /unknown capability "bogus"/);
+      assert.match(errorsFor({ "kb-hr": { hr: [7] } })[0]!, /unknown capability 7/);
+    });
+
+    it("rejects admin/ops granted on a specific flow (they only mean anything on *)", () => {
+      assert.match(errorsFor({ "kb-hr": { hr: ["admin"] } })[0]!, /"admin" may only be granted on "\*"/);
+      assert.match(errorsFor({ "kb-hr": { hr: ["ops"] } })[0]!, /"ops" may only be granted on "\*"/);
+    });
+
+    it("accepts a valid map with no errors", () => {
+      assert.deepEqual(errorsFor({ "kb-hr": { hr: ["read", "manage"] }, "kb-super": { "*": ["admin", "ops"] } }), []);
+    });
+
+    it("getConfiguredRoleGrants throws rather than returning a partial map", () => {
+      assert.throws(() => getConfiguredRoleGrants({ KNOWLEDGE_ROLE_GRANTS: "{not json" }), /KNOWLEDGE_ROLE_GRANTS/);
+    });
+  });
+
+  describe("knowledgeConfigIssues", () => {
+    const sources = JSON.stringify([{ id: "src", url: "https://github.com/example/src.git" }]);
+    const destinations = JSON.stringify([{ id: "kb", url: "https://github.com/example/kb.git" }]);
+    const variables = (env: Record<string, string>) => knowledgeConfigIssues(env).map((issue) => issue.variable);
+
+    it("is clean for an unset config and for the documented plain-string forms", () => {
+      assert.deepEqual(knowledgeConfigIssues({}), []);
+      assert.deepEqual(
+        knowledgeConfigIssues({ KNOWLEDGE_SOURCES: "[]", KNOWLEDGE_DESTINATIONS: "[]", KNOWLEDGE_FLOWS: "[]" }),
+        []
+      );
+      assert.deepEqual(
+        knowledgeConfigIssues({ SOURCE: "agent", DESTINATION: "https://github.com/example/docs.git" }),
+        []
+      );
+      assert.deepEqual(knowledgeConfigIssues({ KNOWLEDGE_SOURCES: "knowledge-bases/product" }), []);
+    });
+
+    it("reports JSON-shaped values that do not parse, naming the variable that supplied them", () => {
+      assert.deepEqual(variables({ KNOWLEDGE_SOURCES: '[{"id": ' }), ["KNOWLEDGE_SOURCES"]);
+      assert.deepEqual(variables({ KNOWLEDGE_DESTINATION: "{oops}" }), ["KNOWLEDGE_DESTINATION"]);
+      assert.deepEqual(variables({ KNOWLEDGE_FLOWS: "[" }), ["KNOWLEDGE_FLOWS"]);
+      assert.deepEqual(variables({ KNOWLEDGE_REPOSITORIES: "[,]" }), ["KNOWLEDGE_REPOSITORIES"]);
+    });
+
+    it("reports an invalid KNOWLEDGE_ROLE_GRANTS", () => {
+      assert.deepEqual(variables({ KNOWLEDGE_ROLE_GRANTS: "{nope" }), ["KNOWLEDGE_ROLE_GRANTS"]);
+    });
+
+    it("reports flows that reference unknown source or destination ids", () => {
+      const issues = knowledgeConfigIssues({
+        KNOWLEDGE_SOURCES: sources,
+        KNOWLEDGE_DESTINATIONS: destinations,
+        KNOWLEDGE_FLOWS: JSON.stringify([
+          { id: "ok", sourceIds: ["src"], destinationId: "kb" },
+          { id: "bad", sourceIds: ["src", "ghost"], destinationId: "nowhere" }
+        ])
+      });
+      assert.deepEqual(
+        issues.map((issue) => issue.message),
+        ['flow "bad" references unknown source id(s) "ghost"', 'flow "bad" references unknown destination id "nowhere"']
+      );
+    });
+
+    it("reports flow entries missing a destination or sources", () => {
+      const issues = knowledgeConfigIssues({
+        KNOWLEDGE_SOURCES: sources,
+        KNOWLEDGE_DESTINATIONS: destinations,
+        KNOWLEDGE_FLOWS: JSON.stringify([{ id: "no-dest", sourceIds: ["src"] }])
+      });
+      assert.equal(issues.length, 1);
+      assert.match(issues[0]!.message, /entry 0 must be an object naming a destinationId/);
+    });
+
+    it("accepts flows whose references all resolve", () => {
+      assert.deepEqual(
+        knowledgeConfigIssues({
+          KNOWLEDGE_SOURCES: sources,
+          KNOWLEDGE_DESTINATIONS: destinations,
+          KNOWLEDGE_FLOWS: JSON.stringify([{ id: "ok", sourceIds: ["src"], destinationId: "kb" }])
+        }),
+        []
+      );
     });
   });
 

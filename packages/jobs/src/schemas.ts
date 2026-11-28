@@ -89,12 +89,13 @@ function contract<Domain>() {
 // NAME of a per-source PAT env var) and the API's descriptor builder sets it, but
 // sourceDescriptorSchema below does not declare it — so it is stripped at enqueue
 // and the watcher clones the source with the host-default token only. It is NOT
-// simply declared here because POST /api/jobs accepts caller-built descriptors:
-// declaring it would let a `manage:jobs` caller pair an arbitrary https url with
-// an arbitrary watcher env var name and have the watcher send that variable's
-// value as a git credential. Declaring it needs a deliberate decision (e.g. only
-// honouring names the operator configured), so the contract excludes exactly
-// this one field and still checks every other one.
+// simply declared here because POST /api/jobs used to accept caller-built
+// descriptors: declaring it would have let a `manage:jobs` caller pair an
+// arbitrary https url with an arbitrary watcher env var name and have the watcher
+// send that variable's value as a git credential. POST /api/jobs now rejects any
+// descriptor that does not match operator config (docs/ai-jobs.md J49), so
+// declaring it is unblocked — but it remains a deliberate follow-up, so the
+// contract excludes exactly this one field and still checks every other one.
 type QueuedSourceDescriptor = SourceDescriptor extends infer Descriptor
   ? Descriptor extends unknown
     ? Omit<Descriptor, "tokenEnv">
@@ -289,6 +290,11 @@ const sourceDescriptorSchema = z.discriminatedUnion("kind", [
   }),
   z.object({ id: z.string(), name: z.string(), kind: z.literal("agent") })
 ]);
+// The `sources` carried by any source-grounded job input, for callers that must
+// inspect them without knowing the job type — the API's external job-submission
+// boundary checks each one against operator config (docs/ai-jobs.md J49). A job
+// input without a `sources` array does not match.
+export const jobInputSourcesSchema = z.object({ sources: z.array(sourceDescriptorSchema) });
 // Mirrors @magpie/core SourceMapUpdate — an optional, agent-contributed
 // source-map hint on source-grounded outputs. Must be on the schema or the
 // broker strips it from the completed output before the API can apply it.

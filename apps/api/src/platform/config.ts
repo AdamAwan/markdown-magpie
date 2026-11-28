@@ -6,7 +6,14 @@ import {
   type AiProviderName,
   type UndeclaredOutputFieldPolicy
 } from "@magpie/jobs";
-import { authEnvIssues, authSettingsFromEnv, isAuthRequired, type ResolvedAuthSettings } from "@magpie/auth";
+import {
+  authEnvIssues,
+  authSettingsFromEnv,
+  isAuthRequired,
+  parseAuthProvider,
+  providerProfile,
+  type ResolvedAuthSettings
+} from "@magpie/auth";
 import { resolveTelemetryConfig, type TelemetryConfig } from "@magpie/telemetry";
 import { parseAiPricing, type AiPricingEntry } from "./ai-pricing.js";
 import {
@@ -15,8 +22,11 @@ import {
   getConfiguredKnowledgeRepositories,
   getConfiguredKnowledgeSources,
   getConfiguredRoleGrants,
+  knowledgeConfigIssues,
+  parseRoleGrants,
   type ConfiguredKnowledgeFlow,
   type ConfiguredKnowledgeRepository,
+  type KnowledgeConfigIssue,
   type KnowledgeRoleGrants
 } from "../stores/knowledge-repositories.js";
 
@@ -467,17 +477,51 @@ function parseAllowedOrigins(value: string | undefined): "*" | string[] {
   return origins.length > 0 ? origins : "*";
 }
 
+// Authorization config that must cohere at boot. On a provider whose user-token
+// scopes are NOT per-user (Entra: every consented delegated scope reaches every
+// user who can sign in), privileged actions are authorized from app roles via
+// KNOWLEDGE_ROLE_GRANTS (docs/authorization.md AZ27). Booting such a deployment
+// with auth on and no grants would leave no human able to administer it — and,
+// before AZ27, left every signed-in user effectively an admin — so it fails loud.
+function authorizationConfigIssues(env: NodeJS.ProcessEnv): KnowledgeConfigIssue[] {
+  const provider = parseAuthProvider(env.AUTH_PROVIDER);
+  // An unrecognised provider is already reported by the schema's auth check.
+  if (provider === undefined || !isAuthRequired(env.AUTH_REQUIRED) || providerProfile(provider).perUserScopes) {
+    return [];
+  }
+  const { grants, errors } = parseRoleGrants(env.KNOWLEDGE_ROLE_GRANTS);
+  // An invalid value is reported by knowledgeConfigIssues; don't pile on.
+  if (errors.length > 0 || Object.keys(grants).length > 0) {
+    return [];
+  }
+  return [
+    {
+      variable: "KNOWLEDGE_ROLE_GRANTS",
+      message:
+        `is required when AUTH_PROVIDER=${provider} and auth is enabled: ${provider} grants every delegated scope to ` +
+        "every user who can sign in, so admin and job/schedule management are authorized from app roles mapped in " +
+        'KNOWLEDGE_ROLE_GRANTS (e.g. {"magpie-admins":{"*":["read","manage","ask","admin","ops"]}}). ' +
+        "See docs/authorization.md AZ27."
+    }
+  ];
+}
+
 // Reads and validates the API's environment once at startup, returning a typed
 // config object. Throws a single aggregated Error naming every offending var on
 // invalid/missing-required config. `env` is injectable so tests need not mutate
 // process.env.
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const result = schema.safeParse(env);
-  if (!result.success) {
-    const lines = result.error.issues.map((issue) => {
-      const name = issue.path.join(".") || "(root)";
-      return `  - ${name}: ${issue.message}`;
-    });
+  const lines = result.success
+    ? []
+    : result.error.issues.map((issue) => {
+        const name = issue.path.join(".") || "(root)";
+        return `  - ${name}: ${issue.message}`;
+      });
+  for (const issue of [...knowledgeConfigIssues(env), ...authorizationConfigIssues(env)]) {
+    lines.push(`  - ${issue.variable}: ${issue.message}`);
+  }
+  if (!result.success || lines.length > 0) {
     throw new Error(`Invalid API configuration:\n${lines.join("\n")}`);
   }
 

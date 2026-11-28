@@ -87,12 +87,24 @@ and opens pull requests to the configured destination repositories.
 
 - **Authentication fails closed.** Auth is required unless `AUTH_REQUIRED` is set
   *exactly* to `false`; a blank/typo'd value keeps auth on. With auth required the
-  API refuses to start unless Auth0 is configured with a real audience. The API,
-  web app, and both MCP transports validate Auth0-issued JWTs.
-- **Scoped authorization.** Routes enforce per-scope checks (`read:knowledge`,
-  `manage:knowledge`, `manage:jobs`, `ask:knowledge`) that fail closed. The
-  authorization model is currently flat — treat `manage:knowledge` as a
-  privileged role (tracked in issue #88).
+  API refuses to start unless the identity provider (`AUTH_PROVIDER`: Auth0 or
+  Microsoft Entra ID) is configured with a real audience and issuer. The API, web
+  app, and both MCP transports validate the provider's JWTs.
+- **Two-layer authorization.** Routes enforce global-scope checks
+  (`read:knowledge`, `ask:knowledge`, `manage:knowledge`, `manage:jobs`,
+  `manage:admin`, `feedback:questions`) that fail closed, plus flow-scoped
+  capabilities mapped from IdP role names via `KNOWLEDGE_ROLE_GRANTS`
+  ([authorization.md](authorization.md)). On Entra, whose delegated scopes reach
+  every user who can sign in, privileged actions (config writes, deletes, reset,
+  job and schedule management) are authorized from app roles (`admin` / `ops`
+  capabilities, AZ27), and the API refuses to start without role grants (AZ28).
+  The watcher's job claim/heartbeat/complete/fail endpoints accept only service
+  (client-credentials) principals, so a human operator cannot read job inputs by
+  claiming jobs or forge job results (AZ29). Jobs submitted through `POST /api/jobs`
+  may only reference operator-configured sources — a caller cannot point the watcher's
+  agent at a host path, a different repository, or extra fetch hosts — and the watcher
+  confines every source `subpath` to its root, including through symlinks
+  ([ai-jobs.md](ai-jobs.md) J49).
 - **Mandatory human review of AI output.** No AI-generated content reaches a
   destination repository's default branch without a human merging a pull
   request. See [threat-model.md](threat-model.md) (control C4) and the operator
@@ -137,9 +149,13 @@ completed for a production/internal deployment:
       this item does not apply.
 - [ ] **Set `CORS_ALLOWED_ORIGINS`** to your web origin(s); do not ship the `*`
       default.
-- [ ] **Configure Auth0 for real** (`AUTH_REQUIRED` unset/true, real
-      `AUTH0_*`), wired to your corporate IdP, and grant `manage:knowledge` /
-      `manage:jobs` narrowly.
+- [ ] **Configure the identity provider for real** (`AUTH_REQUIRED` unset/true,
+      real `AUTH_*` / legacy `AUTH0_*`). On Auth0, grant `manage:knowledge` /
+      `manage:jobs` / `manage:admin` narrowly via RBAC. On Entra, scopes cannot be
+      restricted per user: set *Assignment required*, define app roles, and map
+      them in `KNOWLEDGE_ROLE_GRANTS` (`admin` / `ops` on `*` only for the people
+      who administer the deployment) — see [authorization.md](authorization.md)
+      AZ27/AZ28.
 - [ ] **Enable branch protection** on destination repositories: require human
       approval, disallow direct pushes, and ensure the bot account cannot
       approve/merge its own PRs. Never wire an auto-merge path for AI-authored
@@ -166,7 +182,11 @@ Tracked, not yet implemented — disclose these to reviewers:
   (14/30 days), but stored questions/answers accumulate indefinitely. Add a
   retention job matching your policy. (Log retention is separate and lives in
   whatever log backend you deploy — e.g. 7 days in the example logging stack.)
-- **Flat authorization model** (issue #88): `manage:knowledge` is broad.
+- **Scope-only routes on Entra.** A few routes outside the AZ27 list still rely
+  on Entra's non-per-user scopes: `GET /api/config` (masked runtime config),
+  `POST /api/knowledge/repositories/index` (re-index), and
+  `POST /api/proposals/:id/verify-closure` (see
+  [authorization.md](authorization.md) AZ27 residual note).
 - **Report-only image/config scans.** Trivy scans are non-gating today
   (`exit-code: 0`); flip to gating once the baseline is clean.
 - **No SAST / CodeQL** in CI, and **no license-compliance gate** (the project

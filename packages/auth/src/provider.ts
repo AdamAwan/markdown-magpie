@@ -107,6 +107,15 @@ interface ProviderProfile {
   defaultJwksUri(issuer: string): string;
   defaultTokenUrl(issuer: string): string;
   defaultRolesClaim: string;
+  // Whether a USER token's scopes are filtered per user by the IdP. Auth0 RBAC
+  // issues each user only the permissions their roles carry, so a scope gate is
+  // a per-user check. Entra grants every consented delegated scope to every user
+  // who can sign in, so a user token's `scp` says nothing about the user — the
+  // API then authorizes privileged actions from the user's app ROLES instead
+  // (`requirePrivilege`, apps/api/src/auth/capabilities.ts; docs/authorization.md
+  // AZ27). Service (app-only) tokens are unaffected: their scopes are
+  // per-application grants an administrator consented to.
+  perUserScopes: boolean;
   // Entra only: the API Application ID URI used to build scope strings.
   defaultApiIdUri(audience: string): string | undefined;
   claims(payload: JWTPayload, rolesClaim: string): TokenClaims;
@@ -136,6 +145,7 @@ const auth0Profile: ProviderProfile = {
   defaultJwksUri: (issuer) => `${issuer}.well-known/jwks.json`,
   defaultTokenUrl: (issuer) => `${issuer}oauth/token`,
   defaultRolesClaim: DEFAULT_ROLES_CLAIM,
+  perUserScopes: true,
   defaultApiIdUri: () => undefined,
   claims: (payload, rolesClaim) => ({
     subject: payload.sub ?? "",
@@ -169,6 +179,7 @@ const entraProfile: ProviderProfile = {
   defaultJwksUri: (issuer) => `${entraAuthorityBase(issuer)}/discovery/v2.0/keys`,
   defaultTokenUrl: (issuer) => `${entraAuthorityBase(issuer)}/oauth2/v2.0/token`,
   defaultRolesClaim: ENTRA_ROLES_CLAIM,
+  perUserScopes: false,
   defaultApiIdUri: (audience) => `api://${audience}`,
   claims: (payload, rolesClaim) => {
     // Entra's `sub` is pairwise (unique per user PER APPLICATION); `oid` is the
