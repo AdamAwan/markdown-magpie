@@ -190,6 +190,186 @@ export function createHttpMcpApp(options: HttpMcpOptions): Express {
     }
   };
 
+  // Bind to loopback by default; require an explicit opt-in (e.g.
+  // MCP_HTTP_HOST=0.0.0.0) to expose the server on all interfaces. Passing the
+  // host to createMcpExpressApp also keeps DNS-rebinding protection enabled for
+  // localhost binds.
+  const host = process.env.MCP_HTTP_HOST ?? "127.0.0.1";
+  const app = createMcpExpressApp({ host });
+
+  // Standard security headers on every response as defense-in-depth (the MCP
+  // transport otherwise emits only the WWW-Authenticate challenge). Mirrors the
+  // web API's secureHeaders. HSTS is only honoured by browsers over HTTPS, so it
+  // is inert for plain-HTTP/loopback binds; production terminates TLS upstream.
+  app.use((_req: Request, res: Response, next: NextFunction) => {
+    res.set({
+      "X-Content-Type-Options": "nosniff",
+      "X-Frame-Options": "SAMEORIGIN",
+      "Referrer-Policy": "no-referrer",
+      "Strict-Transport-Security": "max-age=15552000; includeSubDomains",
+      "Cross-Origin-Resource-Policy": "same-origin",
+      "Cross-Origin-Opener-Policy": "same-origin"
+    });
+    next();
+  });
+
+  // ── OAuth protected-resource metadata ─────────────────────────────────────
+  // Scopes are advertised in the provider's form (Entra: fully qualified with the
+  // MCP Application ID URI) while tokens are still checked against the short names.
+  const profile = providerProfile(options.auth.provider);
+  const resourceIdUri = options.auth.resourceIdUri ?? options.resourceUrl;
+  const advertisedScopes = (scopes: readonly string[]): string[] =>
+    scopes.map((scope) => profile.advertisedMcpScope(scope, resourceIdUri));
+  const metadata = {
+    resource: options.resourceUrl,
+    authorization_servers: [
+      options.auth.authorizationServer ?? profile.defaultMcpAuthorizationServer(options.auth.issuer)
+    ],
+    bearer_methods_supported: ["header"],
+    scopes_supported: advertisedScopes(SCOPES_SUPPORTED)
+  };
+
+  // The discovery URL is derived from the resource origin so we never hardcode
+  // the production host (RFC 9728 §3.1 anchors it at the resource's origin).
+  const signInScopes = advertisedScopes(profile.mcpSignInScopes({ all: SCOPES_SUPPORTED, basic: BASIC_SCOPES }));
+
+  const metadataUrl = `${new URL(options.resourceUrl).origin}/.well-known/oauth-protected-resource`;
+
+  const serveMetadata = (_req: Request, res: Response): void => {
+    res.json(metadata);
+  };
+  app.get("/.well-known/oauth-protected-resource", serveMetadata);
+  app.get("/.well-known/oauth-protected-resource/mcp", serveMetadata);
+
+  const verifier = options.auth.required ? createRemoteAuthVerifier(options.auth) : undefined;
+
+  // 401: point the client at the metadata and name the scopes to request (the
+  // same set and form as scopes_supported, so Auth0 clients that already fell back
+  // to scopes_supported request exactly what they did before).
+  function challenge(res: Response): void {
+    res
+      .status(401)
+      .set("WWW-Authenticate", `Bearer resource_metadata="${metadataUrl}", scope="${signInScopes.join(" ")}"`)
+      .json({ error: "unauthorized" });
+  }
+
+  // 403: RFC 6750 §3.1 insufficient_scope, so a client can step up its
+  // authorization. The `scope` names the scopes the token already holds PLUS the
+  // ones this request needs (in SCOPES_SUPPORTED order): a client re-authorizing
+  // with only the missing scope would lose the ones it had and ping-pong.
+  function insufficientScope(res: Response, principal: Principal, requiredScopes: readonly string[]): void {
+    const stepUpScopes = SCOPES_SUPPORTED.filter(
+      (scope) => principal.scopes.includes(scope) || requiredScopes.includes(scope)
+    );
+    res
+      .status(403)
+      .set(
+        "WWW-Authenticate",
+        `Bearer error="insufficient_scope", scope="${advertisedScopes(stepUpScopes).join(" ")}", resource_metadata="${metadataUrl}"`
+      )
+      .json({ error: "forbidden" });
+  }
+
+  // Validates the inbound token (when auth is required) and, for tools/call,
+  // enforces the per-tool scope. On success returns the verified principal (or
+  // undefined when auth is disabled) so the caller can forward the user identity
+  // downstream; on failure it has already written the response.
+  async function authorize(req: Request, res: Response): Promise<{ ok: true; principal?: Principal } | { ok: false }> {
+    if (!verifier) {
+      return { ok: true, principal: undefined };
+    }
+
+    let principal: Principal;
+    try {
+      principal = await verifier.verify(parseBearerToken(req.header("authorization")));
+    } catch (error) {
+      if (error instanceof AuthError) {
+        challenge(res);
+        return { ok: false };
+      }
+      throw error;
+    }
+
+    const requiredScopes = requiredToolScopes(req.body);
+    if (requiredScopes.length > 0 && !hasScopes(principal, requiredScopes)) {
+      insufficientScope(res, principal, requiredScopes);
+      return { ok: false };
+    }
+
+    return { ok: true, principal };
+  }
+
+  const handle = async (req: Request, res: Response, body?: unknown): Promise<void> => {
+    const startMs = Date.now();
+    try {
+      const authorized = await authorize(req, res);
+      if (!authorized.ok) {
+        logger.info(
+          { method: req.method, path: req.path, status: res.statusCode, durationMs: Date.now() - startMs },
+          "request completed"
+        );
+        return;
+      }
+      // Stateless mode (no sessionIdGenerator). The SDK's stateless transport is
+      // single-use — a second handleRequest throws — so every request gets its
+      // own McpServer + transport pair. Closing the server also closes its
+      // transport; do it once the response finishes or the client disconnects so
+      // nothing outlives the request.
+      const server = createMcpServer(kbOptions);
+      const transport = new NodeStreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+      res.on("close", () => {
+        server.close().catch((closeErr: unknown) => {
+          logger.warn({ err: closeErr, method: req.method, path: req.path }, "MCP transport close failed");
+        });
+      });
+      await server.connect(transport);
+      // Make the verified user available to the tool handlers so downstream API
+      // calls can be made on behalf of this user.
+      await requestContext.run({ principal: authorized.principal }, () => transport.handleRequest(req, res, body));
+      logger.info(
+        { method: req.method, path: req.path, status: res.statusCode, durationMs: Date.now() - startMs },
+        "request completed"
+      );
+    } catch (err) {
+      // Never echo internal error text to the client; the real error is logged.
+      if (!res.headersSent) {
+        res.status(500).json({ error: "internal_error" });
+      }
+      logger.error(
+        { err, method: req.method, path: req.path, status: 500, durationMs: Date.now() - startMs },
+        "request error"
+      );
+    }
+  };
+
+  // POST: client sends JSON-RPC requests
+  app.post("/mcp", (req: Request, res: Response) => {
+    void handle(req, res, req.body);
+  });
+
+  // GET: server-initiated messages via SSE
+  app.get("/mcp", (req: Request, res: Response) => {
+    void handle(req, res);
+  });
+
+  // DELETE: session teardown
+  app.delete("/mcp", (req: Request, res: Response) => {
+    void handle(req, res);
+  });
+
+  // Health check
+  app.get("/health", (_req: Request, res: Response) => {
+    res.json({ status: "ok" });
+  });
+
+  return app;
+}
+
+// Builds an McpServer with every Magpie tool registered. Called once per HTTP
+// request (the stateless transport is single-use); registration is cheap and the
+// handlers share the app-level kbOptions (service token provider + on-behalf-of
+// resolver reading the per-request principal from requestContext).
+function createMcpServer(kbOptions: KbClientOptions): McpServer {
   const server = new McpServer({
     name: "markdown-magpie",
     version: "0.1.0"
@@ -436,178 +616,7 @@ export function createHttpMcpApp(options: HttpMcpOptions): Express {
     }
   );
 
-  // Stateless transport — each request is independent.
-  // Omit sessionIdGenerator so the SDK treats it as stateless.
-  const transport = new NodeStreamableHTTPServerTransport({
-    sessionIdGenerator: undefined
-  });
-
-  // Start connecting eagerly but await it lazily inside `handle` (see below), so
-  // that importing this module (e.g. from tests) never boots a live connection.
-  // Any connect rejection is surfaced through the per-request try/catch as a 500.
-  const connected = server.connect(transport);
-
-  // Bind to loopback by default; require an explicit opt-in (e.g.
-  // MCP_HTTP_HOST=0.0.0.0) to expose the server on all interfaces. Passing the
-  // host to createMcpExpressApp also keeps DNS-rebinding protection enabled for
-  // localhost binds.
-  const host = process.env.MCP_HTTP_HOST ?? "127.0.0.1";
-  const app = createMcpExpressApp({ host });
-
-  // Standard security headers on every response as defense-in-depth (the MCP
-  // transport otherwise emits only the WWW-Authenticate challenge). Mirrors the
-  // web API's secureHeaders. HSTS is only honoured by browsers over HTTPS, so it
-  // is inert for plain-HTTP/loopback binds; production terminates TLS upstream.
-  app.use((_req: Request, res: Response, next: NextFunction) => {
-    res.set({
-      "X-Content-Type-Options": "nosniff",
-      "X-Frame-Options": "SAMEORIGIN",
-      "Referrer-Policy": "no-referrer",
-      "Strict-Transport-Security": "max-age=15552000; includeSubDomains",
-      "Cross-Origin-Resource-Policy": "same-origin",
-      "Cross-Origin-Opener-Policy": "same-origin"
-    });
-    next();
-  });
-
-  // ── OAuth protected-resource metadata ─────────────────────────────────────
-  // Scopes are advertised in the provider's form (Entra: fully qualified with the
-  // MCP Application ID URI) while tokens are still checked against the short names.
-  const profile = providerProfile(options.auth.provider);
-  const resourceIdUri = options.auth.resourceIdUri ?? options.resourceUrl;
-  const advertisedScopes = (scopes: readonly string[]): string[] =>
-    scopes.map((scope) => profile.advertisedMcpScope(scope, resourceIdUri));
-  const metadata = {
-    resource: options.resourceUrl,
-    authorization_servers: [
-      options.auth.authorizationServer ?? profile.defaultMcpAuthorizationServer(options.auth.issuer)
-    ],
-    bearer_methods_supported: ["header"],
-    scopes_supported: advertisedScopes(SCOPES_SUPPORTED)
-  };
-
-  // The discovery URL is derived from the resource origin so we never hardcode
-  // the production host (RFC 9728 §3.1 anchors it at the resource's origin).
-  const signInScopes = advertisedScopes(profile.mcpSignInScopes({ all: SCOPES_SUPPORTED, basic: BASIC_SCOPES }));
-
-  const metadataUrl = `${new URL(options.resourceUrl).origin}/.well-known/oauth-protected-resource`;
-
-  const serveMetadata = (_req: Request, res: Response): void => {
-    res.json(metadata);
-  };
-  app.get("/.well-known/oauth-protected-resource", serveMetadata);
-  app.get("/.well-known/oauth-protected-resource/mcp", serveMetadata);
-
-  const verifier = options.auth.required ? createRemoteAuthVerifier(options.auth) : undefined;
-
-  // 401: point the client at the metadata and name the scopes to request (the
-  // same set and form as scopes_supported, so Auth0 clients that already fell back
-  // to scopes_supported request exactly what they did before).
-  function challenge(res: Response): void {
-    res
-      .status(401)
-      .set("WWW-Authenticate", `Bearer resource_metadata="${metadataUrl}", scope="${signInScopes.join(" ")}"`)
-      .json({ error: "unauthorized" });
-  }
-
-  // 403: RFC 6750 §3.1 insufficient_scope, so a client can step up its
-  // authorization. The `scope` names the scopes the token already holds PLUS the
-  // ones this request needs (in SCOPES_SUPPORTED order): a client re-authorizing
-  // with only the missing scope would lose the ones it had and ping-pong.
-  function insufficientScope(res: Response, principal: Principal, requiredScopes: readonly string[]): void {
-    const stepUpScopes = SCOPES_SUPPORTED.filter(
-      (scope) => principal.scopes.includes(scope) || requiredScopes.includes(scope)
-    );
-    res
-      .status(403)
-      .set(
-        "WWW-Authenticate",
-        `Bearer error="insufficient_scope", scope="${advertisedScopes(stepUpScopes).join(" ")}", resource_metadata="${metadataUrl}"`
-      )
-      .json({ error: "forbidden" });
-  }
-
-  // Validates the inbound token (when auth is required) and, for tools/call,
-  // enforces the per-tool scope. On success returns the verified principal (or
-  // undefined when auth is disabled) so the caller can forward the user identity
-  // downstream; on failure it has already written the response.
-  async function authorize(req: Request, res: Response): Promise<{ ok: true; principal?: Principal } | { ok: false }> {
-    if (!verifier) {
-      return { ok: true, principal: undefined };
-    }
-
-    let principal: Principal;
-    try {
-      principal = await verifier.verify(parseBearerToken(req.header("authorization")));
-    } catch (error) {
-      if (error instanceof AuthError) {
-        challenge(res);
-        return { ok: false };
-      }
-      throw error;
-    }
-
-    const requiredScopes = requiredToolScopes(req.body);
-    if (requiredScopes.length > 0 && !hasScopes(principal, requiredScopes)) {
-      insufficientScope(res, principal, requiredScopes);
-      return { ok: false };
-    }
-
-    return { ok: true, principal };
-  }
-
-  const handle = async (req: Request, res: Response, body?: unknown): Promise<void> => {
-    const startMs = Date.now();
-    try {
-      const authorized = await authorize(req, res);
-      if (!authorized.ok) {
-        logger.info(
-          { method: req.method, path: req.path, status: res.statusCode, durationMs: Date.now() - startMs },
-          "request completed"
-        );
-        return;
-      }
-      await connected;
-      // Make the verified user available to the tool handlers so downstream API
-      // calls can be made on behalf of this user.
-      await requestContext.run({ principal: authorized.principal }, () => transport.handleRequest(req, res, body));
-      logger.info(
-        { method: req.method, path: req.path, status: res.statusCode, durationMs: Date.now() - startMs },
-        "request completed"
-      );
-    } catch (err) {
-      if (!res.headersSent) {
-        const message = err instanceof Error ? err.message : "Internal server error";
-        res.status(500).json({ error: message });
-      }
-      logger.error(
-        { err, method: req.method, path: req.path, status: 500, durationMs: Date.now() - startMs },
-        "request error"
-      );
-    }
-  };
-
-  // POST: client sends JSON-RPC requests
-  app.post("/mcp", (req: Request, res: Response) => {
-    void handle(req, res, req.body);
-  });
-
-  // GET: server-initiated messages via SSE
-  app.get("/mcp", (req: Request, res: Response) => {
-    void handle(req, res);
-  });
-
-  // DELETE: session teardown
-  app.delete("/mcp", (req: Request, res: Response) => {
-    void handle(req, res);
-  });
-
-  // Health check
-  app.get("/health", (_req: Request, res: Response) => {
-    res.json({ status: "ok" });
-  });
-
-  return app;
+  return server;
 }
 
 // Computes the scopes a parsed JSON-RPC body requires. A body may be a single
