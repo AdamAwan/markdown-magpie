@@ -55,7 +55,9 @@ export function buildApp(ctx: AppContext, options?: ApiAuthOptions): Hono {
       // Defaults to "*" (any origin); set CORS_ALLOWED_ORIGINS to a comma-
       // separated allow-list to restrict which web origins may call the API.
       origin: ctx.settings.cors.allowedOrigins,
-      allowMethods: ["GET", "POST", "DELETE", "OPTIONS"],
+      // PATCH is used by the console (seed-plan edits); without it the browser
+      // preflight rejects every cross-origin PATCH.
+      allowMethods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
       allowHeaders: ["content-type", "authorization"]
     })
   );

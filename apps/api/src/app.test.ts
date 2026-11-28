@@ -246,6 +246,21 @@ test("OPTIONS preflight returns 204", async () => {
   assert.equal(res.status, 204);
 });
 
+test("CORS preflight allows PATCH (seed-plan, source-conflict and asserted-claim edits)", async () => {
+  const app = buildApp(makeTestContext());
+  const res = await app.request("/api/seed-plans/plan-1", {
+    method: "OPTIONS",
+    headers: {
+      origin: "https://console.example",
+      "access-control-request-method": "PATCH",
+      "access-control-request-headers": "content-type, authorization"
+    }
+  });
+  assert.equal(res.status, 204);
+  const allowed = (res.headers.get("access-control-allow-methods") ?? "").split(",").map((method) => method.trim());
+  assert.ok(allowed.includes("PATCH"), `expected PATCH in ${allowed.join(",")}`);
+});
+
 test("CORS defaults to allow-any-origin", async () => {
   const app = buildApp(makeTestContext());
   const res = await app.request("/api/health", {
