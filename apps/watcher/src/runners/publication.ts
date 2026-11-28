@@ -17,6 +17,7 @@ import {
 } from "@magpie/jobs";
 import {
   ensureGitCheckout,
+  findUnsafeChangesetPath,
   LocalGitProposalPublisher,
   raisePullRequest,
   commentOnPullRequest,
@@ -197,6 +198,11 @@ export class PublicationRunner {
     );
     const context = await this.api.proposalExecutionContext(proposalId);
     const { proposal, repository } = parseProposalContext(context);
+    // Defence in depth before any checkout work: the file-set must pass the shared
+    // destination document-path policy (the API already rejected unsafe model output
+    // and the git publisher re-checks against the destination subtree; this guards
+    // whatever PublicationDeps implementation is wired in).
+    assertPublishablePaths(proposal);
     const preparedRepository = await this.deps.prepareRepository(toRepositoryRef(repository));
 
     const branchName = createProposalBranchName(proposal);
@@ -336,6 +342,17 @@ export class PublicationRunner {
       ...(tokenEnv ? { tokenEnv } : {})
     });
     return buildJobOutput(commentPullRequestOutputSchema, commentUrl ? { commentUrl } : {});
+  }
+}
+
+function assertPublishablePaths(proposal: PublishProposal): void {
+  const changes =
+    proposal.changeset && proposal.changeset.length > 0
+      ? proposal.changeset
+      : [{ path: proposal.targetPath, content: proposal.markdown }];
+  const unsafe = findUnsafeChangesetPath(changes);
+  if (unsafe) {
+    throw new Error(`Refusing to publish proposal ${proposal.id}: ${JSON.stringify(unsafe.path)} — ${unsafe.reason}`);
   }
 }
 

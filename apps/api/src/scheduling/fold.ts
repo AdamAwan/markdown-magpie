@@ -8,7 +8,7 @@ import { selectDestinationForProposal } from "../platform/repositories.js";
 import type { ChangeIntent } from "./intent.js";
 import { decideReconciliation, openPullRequestSummaries, sharedTargets } from "./reconcile-gate.js";
 import { proposalFlowId, sameFlowOpenProposals } from "./flow.js";
-import { proposalChangeset, proposalTargets } from "./changeset.js";
+import { proposalChangeset, proposalTargets, rejectUnsafeChangeset } from "./changeset.js";
 import { collectAdvisoryHeadings } from "../features/proposals/register-check.js";
 
 // At-draft fold: when a freshly-created draft proposal overlaps a touchable open
@@ -443,6 +443,16 @@ export async function applyChangesetFoldFromCompletedJob(
   const survivor = await ctx.stores.proposals.get(input.survivorProposalId);
   const rival = await ctx.stores.proposals.get(input.rivalProposalId);
   if (!survivor || !rival || rival.status === "superseded") {
+    return;
+  }
+
+  // Model-chosen paths: the fold must stay on the union of the two file-sets it was
+  // given ("use the paths exactly as provided") and pass the destination policy. A
+  // rejected fold is treated like a failed one — the survivor is left untouched and
+  // the rival publishes as its own PR, so neither change is lost.
+  const offeredPaths = new Set([...proposalTargets(survivor), ...proposalTargets(rival)]);
+  if (rejectUnsafeChangeset(job, parsed.data.changeset, offeredPaths)) {
+    await enqueueFoldFallback(ctx, job);
     return;
   }
 

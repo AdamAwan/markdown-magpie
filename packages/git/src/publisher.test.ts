@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
+import { mkdir, symlink, writeFile } from "node:fs/promises";
+import path from "node:path";
 import { promisify } from "node:util";
 import { before, describe, it } from "node:test";
 import { LocalGitProposalPublisher } from "./index.js";
@@ -150,5 +152,136 @@ describe("LocalGitProposalPublisher create-or-update", () => {
     });
 
     assert.notEqual(second.commitSha, first.commitSha, "a new commit lands on the existing changeset branch");
+  });
+});
+
+describe("LocalGitProposalPublisher path confinement", () => {
+  before(() => {
+    process.env.MAGPIE_GIT_AUTHOR_NAME = "Magpie Bot";
+    process.env.MAGPIE_GIT_AUTHOR_EMAIL = "bot@example.com";
+  });
+
+  async function remoteHasBranch(clonePath: string, branch: string): Promise<boolean> {
+    return Boolean(await git(clonePath, ["ls-remote", "--heads", "origin", branch]));
+  }
+
+  it("refuses a changeset that writes outside the document policy and pushes nothing", async () => {
+    const { repository, clonePath } = await initBareRemoteWithClone();
+    const publisher = new LocalGitProposalPublisher();
+    for (const unsafe of [".github/workflows/x.yml", "package.json", "../escape.md", "docs/../../x.md"]) {
+      await assert.rejects(
+        () =>
+          publisher.publishChangeset({
+            repository,
+            branchName: "magpie/evil",
+            title: "docs: evil",
+            changes: [
+              { path: "docs/fine.md", content: "# fine\n" },
+              { path: unsafe, content: "pwned" }
+            ]
+          }),
+        /Refusing to publish changeset/
+      );
+    }
+    assert.equal(await remoteHasBranch(clonePath, "magpie/evil"), false, "no branch was pushed");
+  });
+
+  it("refuses a changeset delete outside the policy (deletes are confined like writes)", async () => {
+    const { repository, clonePath } = await initBareRemoteWithClone();
+    const publisher = new LocalGitProposalPublisher();
+    await assert.rejects(
+      () =>
+        publisher.publishChangeset({
+          repository,
+          branchName: "magpie/evil-delete",
+          title: "docs: evil delete",
+          changes: [{ path: ".github/CODEOWNERS.md", delete: true }]
+        }),
+      /dot-segment/
+    );
+    assert.equal(await remoteHasBranch(clonePath, "magpie/evil-delete"), false);
+  });
+
+  it("confines changeset paths to the destination subtree", async () => {
+    const { repository, clonePath } = await initBareRemoteWithClone();
+    const publisher = new LocalGitProposalPublisher();
+    const subtreeRepository = {
+      ...repository,
+      git: { scope: "subdirectory" as const, indexedPath: path.join(clonePath, "kb"), relativePathFromRoot: "kb" }
+    };
+    const published = await publisher.publishChangeset({
+      repository: subtreeRepository,
+      branchName: "magpie/subtree",
+      title: "docs: subtree",
+      changes: [{ path: "guide.md", content: "# guide\n" }]
+    });
+    const files = await git(clonePath, ["ls-tree", "-r", "--name-only", published.commitSha]);
+    assert.ok(files.split("\n").includes("kb/guide.md"), files);
+  });
+
+  it("refuses a single-file publish into a dot-directory", async () => {
+    const { repository } = await initBareRemoteWithClone();
+    const publisher = new LocalGitProposalPublisher();
+    await assert.rejects(
+      () =>
+        publisher.publish({
+          repository,
+          branchName: "magpie/single-evil",
+          title: "docs: single evil",
+          markdown: "# x\n",
+          targetPath: ".github/workflows/ci.md"
+        }),
+      /Refusing to publish/
+    );
+  });
+
+  it("refuses a write or delete that a committed symlink would redirect", async () => {
+    const { repository, clonePath } = await initBareRemoteWithClone();
+    // The destination repo itself carries docs/link -> ../.github and
+    // docs/alias.md -> ../README.md (a hostile or careless commit). Writing
+    // docs/link/x.md must not land in .github/, nor may alias.md be followed.
+    await mkdir(path.join(clonePath, ".github"), { recursive: true });
+    await writeFile(path.join(clonePath, ".github", "keep.md"), "# keep\n", "utf8");
+    await mkdir(path.join(clonePath, "docs"), { recursive: true });
+    await symlink("../.github", path.join(clonePath, "docs", "link"));
+    await symlink("../README.md", path.join(clonePath, "docs", "alias.md"));
+    await git(clonePath, ["add", "-A"]);
+    await git(clonePath, ["-c", "user.name=Seed", "-c", "user.email=seed@example.com", "commit", "-m", "links"]);
+    await git(clonePath, ["push", "origin", "main"]);
+    await git(clonePath, ["fetch", "origin"]);
+
+    const publisher = new LocalGitProposalPublisher();
+    await assert.rejects(
+      () =>
+        publisher.publishChangeset({
+          repository,
+          branchName: "magpie/symlink-dir",
+          title: "docs: symlink dir",
+          changes: [{ path: "docs/link/x.md", content: "pwned" }]
+        }),
+      /symlink/
+    );
+    await assert.rejects(
+      () =>
+        publisher.publishChangeset({
+          repository,
+          branchName: "magpie/symlink-file",
+          title: "docs: symlink file",
+          changes: [{ path: "docs/alias.md", delete: true }]
+        }),
+      /symlink/
+    );
+    await assert.rejects(
+      () =>
+        publisher.publish({
+          repository,
+          branchName: "magpie/symlink-single",
+          title: "docs: symlink single",
+          markdown: "pwned",
+          targetPath: "docs/alias.md"
+        }),
+      /symlink/
+    );
+    assert.equal(await remoteHasBranch(clonePath, "magpie/symlink-dir"), false);
   });
 });

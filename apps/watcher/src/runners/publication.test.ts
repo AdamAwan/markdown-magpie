@@ -177,6 +177,78 @@ describe("PublicationRunner", () => {
     assert.equal(parsed.pullRequestUrl, "https://github.com/acme/docs/pull/9");
   });
 
+  it("refuses a changeset with a path outside the document policy before any checkout or publish", async () => {
+    for (const unsafePath of [".github/workflows/ci.yml", "../package.json", "/etc/x.md"]) {
+      let touched = false;
+      const evilContext: ProposalExecutionContext = {
+        proposal: {
+          id: "prop-12345678",
+          title: "Dedupe deploy guide",
+          markdown: "# Deploy\nmerged",
+          targetPath: "ops/deploy.md",
+          changeset: [
+            { path: "ops/deploy.md", content: "# Deploy\nmerged" },
+            { path: unsafePath, delete: true }
+          ]
+        },
+        repository: REPOSITORY
+      };
+      const runner = new PublicationRunner(fakeApi({ proposalExecutionContext: async () => evilContext }), {
+        prepareRepository: async (repository) => {
+          touched = true;
+          return repository;
+        },
+        publishProposal: async () => {
+          touched = true;
+          return { branchName: "b", commitSha: "c" };
+        },
+        publishChangeset: async () => {
+          touched = true;
+          return { branchName: "b", commitSha: "c" };
+        },
+        raisePullRequest: async () => {
+          touched = true;
+          return undefined;
+        },
+        commentOnPullRequest: async () => undefined
+      });
+
+      await assert.rejects(
+        () => runner.run(job("publish_proposal", { proposalId: "prop-12345678" }), new AbortController().signal),
+        /Refusing to publish proposal/
+      );
+      assert.equal(touched, false, `${unsafePath}: no checkout, publish or PR`);
+    }
+  });
+
+  it("refuses a single-file proposal whose target breaks the document policy", async () => {
+    const evilContext: ProposalExecutionContext = {
+      proposal: {
+        id: "prop-12345678",
+        title: "Deploy guide",
+        markdown: "# Deploy\n",
+        targetPath: ".github/workflows/deploy.md"
+      },
+      repository: REPOSITORY
+    };
+    let published = false;
+    const runner = new PublicationRunner(fakeApi({ proposalExecutionContext: async () => evilContext }), {
+      prepareRepository: async (repository) => repository,
+      publishProposal: async () => {
+        published = true;
+        return { branchName: "b", commitSha: "c" };
+      },
+      publishChangeset: async () => ({ branchName: "b", commitSha: "c" }),
+      raisePullRequest: async () => undefined,
+      commentOnPullRequest: async () => undefined
+    });
+    await assert.rejects(
+      () => runner.run(job("publish_proposal", { proposalId: "prop-12345678" }), new AbortController().signal),
+      /dot-segment/
+    );
+    assert.equal(published, false);
+  });
+
   it("renders the proposal's claim provenance into the PR body", async () => {
     const provenanceContext: ProposalExecutionContext = {
       proposal: {

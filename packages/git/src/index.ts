@@ -12,15 +12,17 @@ import {
 } from "@magpie/core";
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, rm, unlink, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, realpath, rm, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { withCheckoutLock } from "./checkout-lock.js";
+import { checkDocumentPath, findUnsafeChangesetPath } from "./document-path.js";
 import { withGitRetry } from "./git-retry.js";
 import { resolvePrimaryBranch } from "./primary-branch.js";
 
 export { resolvePrimaryBranch };
+export { checkDocumentPath, findUnsafeChangesetPath, type DocumentPathCheck } from "./document-path.js";
 export { hydrateGithubTokenFromGhCli, type GithubTokenSource } from "./gh-cli-token.js";
 
 const execFileAsync = promisify(execFile);
@@ -958,7 +960,9 @@ export class LocalGitProposalPublisher {
 
       const absoluteTargetPath = path.resolve(worktreePath, targetPath);
       assertWithinRoot(worktreePath, absoluteTargetPath);
+      await assertNoSymlinkOnPath(worktreePath, targetPath);
       await mkdir(path.dirname(absoluteTargetPath), { recursive: true });
+      await assertRealParentWithin(worktreePath, request.repository, absoluteTargetPath);
       await writeFile(absoluteTargetPath, request.markdown, "utf8");
       await git(worktreePath, ["add", "--", targetPath]);
 
@@ -1031,6 +1035,13 @@ export class LocalGitProposalPublisher {
     request: PublishChangesetRequest,
     root: string
   ): Promise<PublishProposalBranchResponse> {
+    // Validate the WHOLE file-set before touching git, so a single bad entry never
+    // leaves a half-applied worktree behind (the API rejects these too; this is the
+    // last line of defence before the working tree).
+    const unsafe = findUnsafeChangesetPath(request.changes, request.repository.git?.relativePathFromRoot);
+    if (unsafe) {
+      throw new Error(`Refusing to publish changeset: ${JSON.stringify(unsafe.path)} — ${unsafe.reason}`);
+    }
     const remoteUrl = await ensureRemote(root);
     const authEnv = buildGitAuthEnv(remoteUrl, request.repository.tokenEnv);
     const remoteBranch = await tryGit(root, ["ls-remote", "--heads", "origin", request.branchName], authEnv);
@@ -1052,6 +1063,9 @@ export class LocalGitProposalPublisher {
         const repoRelativePath = resolveTargetPath(request.repository, change.path);
         const absolutePath = path.resolve(worktreePath, repoRelativePath);
         assertWithinRoot(worktreePath, absolutePath);
+        // Deletes get the same confinement as writes: a committed symlink on the
+        // path must not redirect either one outside the destination subtree.
+        await assertNoSymlinkOnPath(worktreePath, repoRelativePath);
 
         if (change.delete) {
           await tryGit(worktreePath, ["rm", "--ignore-unmatch", "--", repoRelativePath]);
@@ -1061,6 +1075,7 @@ export class LocalGitProposalPublisher {
         }
 
         await mkdir(path.dirname(absolutePath), { recursive: true });
+        await assertRealParentWithin(worktreePath, request.repository, absolutePath);
         await writeFile(absolutePath, change.content ?? "", "utf8");
         await git(worktreePath, ["add", "--", repoRelativePath]);
       }
@@ -1182,22 +1197,15 @@ export async function deleteLocalProposalBranch(request: DeleteLocalProposalBran
   });
 }
 
+// Maps a proposal's document path to its repository-root-relative path inside the
+// destination subtree, refusing anything the shared document-path policy rejects
+// (traversal, absolute, dot-directories, non-Markdown, ...). See document-path.ts.
 function resolveTargetPath(repository: RepositoryRef, targetPath: string): string {
-  const normalizedTargetPath = toPosixPath(targetPath).replace(/^\/+/, "");
-  const relativePathFromRoot = repository.git?.relativePathFromRoot;
-  if (!relativePathFromRoot || relativePathFromRoot === ".") {
-    return normalizedTargetPath;
+  const check = checkDocumentPath(targetPath, repository.git?.relativePathFromRoot);
+  if (!check.ok) {
+    throw new Error(`Refusing to publish ${JSON.stringify(targetPath)}: ${check.reason}`);
   }
-
-  const normalizedRelativePath = toPosixPath(relativePathFromRoot).replace(/^\/+|\/+$/g, "");
-  if (
-    normalizedTargetPath === normalizedRelativePath ||
-    normalizedTargetPath.startsWith(`${normalizedRelativePath}/`)
-  ) {
-    return normalizedTargetPath;
-  }
-
-  return `${normalizedRelativePath}/${normalizedTargetPath}`;
+  return check.path;
 }
 
 function resolveCommitterIdentity(): { name: string; email: string } {
@@ -1417,8 +1425,44 @@ function assertWithinRoot(root: string, candidate: string): void {
   }
 }
 
-function toPosixPath(value: string): string {
-  return value.replace(/\\/g, "/");
+// Refuses a target when any EXISTING component of its path (a directory on the
+// way, or the file itself) is a symlink. The path string is already confined, but
+// a symlink committed to the destination repo (`docs/x.md -> ../.github/...`)
+// would otherwise redirect a write or delete outside the destination subtree.
+async function assertNoSymlinkOnPath(worktreePath: string, repoRelativePath: string): Promise<void> {
+  let current = worktreePath;
+  for (const segment of repoRelativePath.split("/")) {
+    current = path.join(current, segment);
+    let isSymlink: boolean;
+    try {
+      isSymlink = (await lstat(current)).isSymbolicLink();
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        return; // Nothing further exists yet; mkdir creates real directories.
+      }
+      throw error;
+    }
+    if (isSymlink) {
+      throw new Error(`Refusing to publish ${JSON.stringify(repoRelativePath)}: the path passes through a symlink`);
+    }
+  }
+}
+
+// Belt-and-braces after mkdir: the target's parent directory, fully resolved,
+// must sit inside the resolved destination subtree of the worktree.
+async function assertRealParentWithin(
+  worktreePath: string,
+  repository: RepositoryRef,
+  absoluteTargetPath: string
+): Promise<void> {
+  const realRoot = await realpath(worktreePath);
+  const subtree = repository.git?.relativePathFromRoot;
+  const confinedRoot = subtree && subtree !== "." ? path.join(realRoot, subtree) : realRoot;
+  const realParent = await realpath(path.dirname(absoluteTargetPath));
+  const relative = path.relative(confinedRoot, realParent);
+  if (relative.startsWith("..") || path.isAbsolute(relative)) {
+    throw new Error("Proposal target path must stay inside the destination subtree");
+  }
 }
 
 async function remoteBranchExists(

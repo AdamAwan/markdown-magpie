@@ -866,6 +866,36 @@ describe("applyChangesetFoldFromCompletedJob", () => {
     assert.equal((await ctx.stores.proposals.get(survivor.id))?.changeset, undefined);
     assert.deepEqual(await ctx.stores.gapClusters.listPendingPublicationActions(), []);
   });
+
+  for (const [label, strayChange] of [
+    ["a path neither side touched", { path: "kb/invented.md", content: "x" }],
+    ["a CI workflow", { path: ".github/workflows/ci.yml", content: "on: push" }],
+    ["a traversal delete", { path: "../package.json", delete: true }]
+  ] as const) {
+    it(`rejects a merged changeset that adds ${label}: survivor untouched, rival falls back to its own PR`, async () => {
+      const ctx = makeTestContext();
+      const { survivor, rival, job } = await setup(ctx);
+      const warn = mock.method(logger, "warn");
+      try {
+        await applyChangesetFoldFromCompletedJob(ctx, await ctx.jobs.get(job.id), {
+          changeset: [{ path: "kb/b.md", content: "# B\nnow covers A" }, strayChange],
+          rationale: "prompt-injected"
+        });
+        assert.ok(warn.mock.calls.some((call) => String(call.arguments[1]).startsWith("changeset rejected")));
+      } finally {
+        warn.mock.restore();
+      }
+      assert.equal((await ctx.stores.proposals.get(survivor.id))?.changeset, undefined, "survivor untouched");
+      assert.equal((await ctx.stores.proposals.get(rival.id))?.status, "draft", "rival not superseded");
+      const pending = await ctx.stores.gapClusters.listPendingPublicationActions();
+      assert.deepEqual(
+        pending.map((action) => action.proposalId),
+        [rival.id],
+        "only the rival's fallback publish is enqueued"
+      );
+      assert.equal((await ctx.jobs.list({ type: "comment_pull_request" })).jobs.length, 0);
+    });
+  }
 });
 
 describe("enqueueFoldFallback", () => {
