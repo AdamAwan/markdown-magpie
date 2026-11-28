@@ -10,17 +10,25 @@ import type {
 import { logger } from "../logger.js";
 import type { AppContext } from "../context.js";
 import type { ChangeIntent } from "./intent.js";
-import { decideReconciliation, openPullRequestSummaries } from "./reconcile-gate.js";
+import { decideReconciliation, openPullRequestSummaries, type OpenPullRequestSummary } from "./reconcile-gate.js";
 import { sameFlowOpenProposals } from "./flow.js";
 
-// Runs the verify check for one document. The default implementation (in the
-// patrol service) enqueues a verify_document AI job and bounded-waits for it;
-// tests inject a deterministic fake. Returns undefined when the verdict could not
-// be obtained (job failed/timed out/malformed) so the lens simply skips that doc.
+// A verify that was ENQUEUED rather than answered: the verify_document job now
+// queued or running. Its verdict arrives later, at the job's completion, and is
+// applied there (the patrol's continuation) — the lens never waits for it.
+interface VerifyPending {
+  pendingJobId: string;
+}
+
+// Starts the verify check for one document. The default implementation (in the
+// patrol service) enqueues a verify_document AI job and returns `VerifyPending`
+// at once; a deterministic fake (tests) may return the verdict directly, which
+// the lens then folds in immediately. Returns undefined when no verify could be
+// started (fan-out shed, enqueue failure) so the lens simply skips that doc.
 export type VerifyDocumentFn = (
   ctx: AppContext,
   input: VerifyDocumentJobInput & { flowId: string | undefined }
-) => Promise<VerifyDocumentJobOutput | undefined>;
+) => Promise<VerifyDocumentJobOutput | VerifyPending | undefined>;
 
 // Builds the verify lens's change intent for the reconcile gate. decideReconciliation
 // consumes only `targets`; evidence/rationale are populated for logging and the
@@ -44,8 +52,8 @@ export function verifyIntent(flowId: string | undefined, path: string, claims: U
 // the tick.
 //
 // Returns the findings plus `checkedPaths`: the documents that yielded a real
-// verdict (healthy or not) this tick. A doc whose verify threw, timed out, or
-// returned nothing is NOT in checkedPaths — so the caller's change gate never
+// verdict (healthy or not) this tick. A doc whose verify threw, returned nothing,
+// or is still `pending` is NOT in checkedPaths — so the caller's change gate never
 // records a "verified" hash for a doc it did not actually verify, which would
 // otherwise suppress it forever after a transient provider outage (#163).
 export interface VerifyLensResult {
@@ -58,6 +66,60 @@ export interface VerifyLensResult {
   conflicts: Array<DetectedSourceConflict & { path: string }>;
   // Known conflicts the agent reported the sources now agree on.
   resolved: Array<ResolvedSourceConflict & { path: string }>;
+  // Documents whose verify was enqueued and has not answered. Each one's verdict
+  // is folded in by the job's completion (foldVerdict below), not by this lens.
+  pending: Array<{ path: string; jobId: string }>;
+}
+
+export function emptyVerifyLensResult(): VerifyLensResult {
+  return { findings: [], checkedPaths: [], conflicts: [], resolved: [], pending: [] };
+}
+
+// The same-flow open pull requests the reconcile gate weighs a verify finding
+// against. Read once per lens run (or once per completion).
+export async function verifyLensOpenPullRequests(
+  ctx: AppContext,
+  flowId: string | undefined
+): Promise<OpenPullRequestSummary[]> {
+  return openPullRequestSummaries(await sameFlowOpenProposals(ctx, flowId));
+}
+
+// Folds one document's verdict into a lens result: the single place a verdict
+// becomes findings/conflicts, shared by the lens (a verdict returned directly)
+// and the patrol's continuation (a verdict that arrived with a completed job).
+export function foldVerdict(
+  result: VerifyLensResult,
+  flowId: string | undefined,
+  path: string,
+  verdict: VerifyDocumentJobOutput,
+  openPrs: OpenPullRequestSummary[]
+): void {
+  // A real verdict came back (healthy or unprovable), so this doc was genuinely checked.
+  result.checkedPaths.push(path);
+
+  // Source conflicts and resolutions are collected BEFORE the healthy
+  // early-return: a document whose only finding is a conflict is "healthy"
+  // (there is nothing about the document to correct — the disagreement is in
+  // the sources), so gathering them after it would silently drop every conflict
+  // that did not happen to arrive alongside a stale claim.
+  for (const conflict of verdict.conflicts ?? []) {
+    result.conflicts.push({ ...conflict, path });
+  }
+  for (const entry of verdict.resolvedConflicts ?? []) {
+    result.resolved.push({ ...entry, path });
+  }
+
+  if (verdict.verdict === "healthy" || verdict.claims.length === 0) {
+    return;
+  }
+
+  const decision = decideReconciliation(verifyIntent(flowId, path, verdict.claims), openPrs);
+  result.findings.push({
+    path,
+    claims: verdict.claims,
+    decision: decision.kind === "fold" ? "fold" : decision.kind === "defer" ? "defer" : "open-new",
+    ...(decision.kind === "fold" ? { intoProposalId: decision.intoProposalId } : {})
+  });
 }
 
 export async function runVerifyLens(
@@ -69,11 +131,8 @@ export async function runVerifyLens(
     verifyDocument: VerifyDocumentFn;
   }
 ): Promise<VerifyLensResult> {
-  const openPrs = openPullRequestSummaries(await sameFlowOpenProposals(ctx, input.flowId));
-  const findings: VerifyFinding[] = [];
-  const checkedPaths: string[] = [];
-  const conflicts: VerifyLensResult["conflicts"] = [];
-  const resolved: VerifyLensResult["resolved"] = [];
+  const openPrs = await verifyLensOpenPullRequests(ctx, input.flowId);
+  const result = emptyVerifyLensResult();
 
   for (const document of input.documents) {
     // The document's open conflicts, handed to the agent so it re-checks each one
@@ -87,9 +146,9 @@ export async function runVerifyLens(
       summary: conflict.summary
     }));
 
-    let verdict: VerifyDocumentJobOutput | undefined;
+    let outcome: Awaited<ReturnType<VerifyDocumentFn>>;
     try {
-      verdict = await input.verifyDocument(ctx, {
+      outcome = await input.verifyDocument(ctx, {
         path: document.path,
         content: document.content,
         sources: input.sources,
@@ -102,36 +161,16 @@ export async function runVerifyLens(
       continue;
     }
 
-    if (!verdict) {
+    if (!outcome) {
       continue;
     }
-    // A real verdict came back (healthy or unprovable), so this doc was genuinely checked.
-    checkedPaths.push(document.path);
-
-    // Source conflicts and resolutions are collected BEFORE the healthy
-    // early-continue: a document whose only finding is a conflict is "healthy"
-    // (there is nothing about the document to correct — the disagreement is in
-    // the sources), so gathering them after the continue would silently drop
-    // every conflict that did not happen to arrive alongside a stale claim.
-    for (const conflict of verdict.conflicts ?? []) {
-      conflicts.push({ ...conflict, path: document.path });
-    }
-    for (const entry of verdict.resolvedConflicts ?? []) {
-      resolved.push({ ...entry, path: document.path });
-    }
-
-    if (verdict.verdict === "healthy" || verdict.claims.length === 0) {
+    if ("pendingJobId" in outcome) {
+      // Enqueued, not answered: the job's completion folds the verdict in.
+      result.pending.push({ path: document.path, jobId: outcome.pendingJobId });
       continue;
     }
-
-    const decision = decideReconciliation(verifyIntent(input.flowId, document.path, verdict.claims), openPrs);
-    findings.push({
-      path: document.path,
-      claims: verdict.claims,
-      decision: decision.kind === "fold" ? "fold" : decision.kind === "defer" ? "defer" : "open-new",
-      ...(decision.kind === "fold" ? { intoProposalId: decision.intoProposalId } : {})
-    });
+    foldVerdict(result, input.flowId, document.path, outcome, openPrs);
   }
 
-  return { findings, checkedPaths, conflicts, resolved };
+  return result;
 }

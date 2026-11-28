@@ -127,7 +127,7 @@ test("createIfAdmitted enforces a single shared ceiling when no reserve is given
 
 // Mirrors pg-boss's cancelJobs SQL (`WHERE state < 'completed'`): cancelling a job
 // that already reached a terminal state must be a no-op, not an overwrite. This
-// is what makes runJobToCompletion's timeout-cancel (#162) race-safe against a
+// is what makes a cancel (#162) race-safe against a
 // job that completes in the gap between the bounded wait giving up and the
 // cancel call actually reaching the broker.
 test("cancel is a no-op once a job has already completed", async () => {

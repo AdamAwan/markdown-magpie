@@ -23,12 +23,9 @@ import {
   parseCompletedJobOutput,
   projectJob,
   retryJob,
-  runJobToCompletion,
   strippedOutputKeyPaths,
-  waitForJob,
-  MaintenanceShedError
+  waitForJob
 } from "./service.js";
-import { createFanoutBudget } from "../../platform/maintenance-fanout.js";
 
 const answerInput = (provider: "codex" | "openai-compatible" = "codex") => ({
   provider,
@@ -227,6 +224,7 @@ test("accepted failures stop surfacing as unacknowledged and retry clears accept
   await retryJob(ctx, created.id);
   assert.equal((await getJob(ctx, created.id))?.acceptedAt, undefined);
 });
+
 test("wait returns current jobs on timeout and terminal jobs immediately", async () => {
   const ctx = makeTestContext();
   const created = await ctx.jobs.create("answer_question", answerInput());
@@ -237,158 +235,6 @@ test("wait returns current jobs on timeout and terminal jobs immediately", async
   const terminal = await waitForJob(ctx, created.id, { timeoutMs: 10, pollMs: 1 });
   assert.equal(terminal.terminal, true);
   assert.equal(terminal.job.state, "cancelled");
-});
-
-test("waitForJob ends the wait as non-terminal when the caller's signal is aborted (#195)", async () => {
-  const ctx = makeTestContext();
-  const created = await ctx.jobs.create("answer_question", answerInput());
-  // A long timeout that would otherwise keep polling; the aborted signal is what
-  // ends the wait, standing in for a verify-closure POST the watcher gave up on.
-  const result = await waitForJob(ctx, created.id, { timeoutMs: 10_000, pollMs: 1, signal: AbortSignal.abort() });
-  assert.equal(result.terminal, false, "an aborted wait returns non-terminal, like a deadline timeout");
-  assert.equal(result.job.state, "created");
-});
-
-test("runJobToCompletion cancels the orphaned job when the caller's signal is aborted (#195)", async () => {
-  const ctx = makeTestContext();
-  // Nothing claims the job; the aborted signal (not the deadline) ends the wait,
-  // and the orphaned job is cancelled so no late watcher runs it unread.
-  const result = await runJobToCompletion(ctx, "answer_question", answerInput(), { signal: AbortSignal.abort() });
-  assert.equal(result.state, "cancelled");
-  assert.equal((await getJob(ctx, result.id))?.state, "cancelled");
-});
-
-test("runJobToCompletion cancels a still-queued job once the bounded wait times out (#162)", async () => {
-  const ctx = makeTestContext();
-  // makeTestContext sets JOB_RUN_TO_COMPLETION_TIMEOUT_MS=100 / JOB_WAIT_POLL_MS=5,
-  // and nothing ever claims this job, so the wait must give up and the orphaned
-  // job must be cancelled rather than left queued for a late watcher to run.
-  const result = await runJobToCompletion(ctx, "answer_question", answerInput());
-  assert.equal(result.state, "cancelled");
-  assert.equal((await getJob(ctx, result.id))?.state, "cancelled");
-});
-
-test("runJobToCompletion cancels a job a watcher already claimed once the bounded wait times out (#162)", async () => {
-  const ctx = makeTestContext();
-  const preexisting = await ctx.jobs.create("answer_question", answerInput());
-  await claimJob(ctx, "worker", ["codex"]);
-  assert.equal((await getJob(ctx, preexisting.id))?.state, "active");
-
-  // reuseKey pins runJobToCompletion onto the pre-claimed job so the test can
-  // observe a watcher mid-flight past the deadline, exactly the "late watcher"
-  // scenario #162 describes: cancelling an active job cannot stop the watcher,
-  // but it does mean the eventual completeJob() call is rejected (job_cancelled)
-  // instead of quietly applying an unread result.
-  const result = await runJobToCompletion(ctx, "answer_question", answerInput(), { reuseKey: () => "shared" });
-  assert.equal(result.id, preexisting.id);
-  assert.equal(result.state, "cancelled");
-  assert.equal((await getJob(ctx, preexisting.id))?.state, "cancelled");
-
-  const output: AnswerQuestionJobOutput = { answer: "too late", confidence: "high", citations: [] };
-  assert.deepEqual(await completeJob(ctx, preexisting.id, output, "worker"), { ok: false, code: "job_cancelled" });
-});
-
-test("runJobToCompletion's timeout-cancel is race-safe against a job completing first (#162)", async () => {
-  const ctx = makeTestContext();
-  const job = await ctx.jobs.create("answer_question", answerInput());
-  await claimJob(ctx, "worker", ["codex"]);
-  const output: AnswerQuestionJobOutput = { answer: "just in time", confidence: "high", citations: [] };
-
-  // Simulate the exact race the timeout-cancel path has to survive: the watcher's
-  // completeJob call lands in the instant between the bounded wait giving up and
-  // the cancel actually reaching the broker.
-  const realCancel = ctx.jobs.cancel.bind(ctx.jobs);
-  ctx.jobs.cancel = async (id: string) => {
-    await completeJob(ctx, id, output, "worker");
-    return realCancel(id);
-  };
-
-  const result = await runJobToCompletion(ctx, "answer_question", answerInput(), { reuseKey: () => "shared" });
-  assert.equal(result.id, job.id);
-  assert.equal(result.state, "completed");
-});
-
-// reuseKey only matches jobs still in flight (created/retry/active/blocked), not
-// completed ones — an already-completed job isn't "in flight" work to wait on,
-// it is a finished result, which is a different (and out of scope) kind of
-// caching. This test reuses a job that is still active when runJobToCompletion
-// starts waiting on it, and only completes concurrently with that wait.
-test("runJobToCompletion reuses a matching in-flight job instead of enqueueing a duplicate (#162)", async () => {
-  const ctx = makeTestContext();
-  const preexisting = await ctx.jobs.create("answer_question", answerInput());
-  await claimJob(ctx, "worker", ["codex"]);
-
-  const resultPromise = runJobToCompletion(ctx, "answer_question", answerInput(), { reuseKey: () => "shared" });
-  const output: AnswerQuestionJobOutput = { answer: "already done", confidence: "high", citations: [] };
-  await completeJob(ctx, preexisting.id, output, "worker");
-
-  const result = await resultPromise;
-  assert.equal(result.id, preexisting.id);
-  assert.equal(result.state, "completed");
-
-  // No second job was enqueued for this reuseKey.
-  assert.equal((await listJobs(ctx, { type: "answer_question" })).total, 1);
-});
-
-test("runJobToCompletion creates a new job when no in-flight job matches reuseKey", async () => {
-  const ctx = makeTestContext();
-  await ctx.jobs.create("answer_question", answerInput("codex"));
-
-  await runJobToCompletion(ctx, "answer_question", answerInput("openai-compatible"), {
-    reuseKey: (input) => JSON.stringify(input)
-  });
-
-  // The two requests hash to different reuseKeys (different provider), so the
-  // second call must not reuse the first job — it enqueues its own.
-  assert.equal((await listJobs(ctx, { type: "answer_question" })).total, 2);
-});
-
-test("runJobToCompletion with an admission budget sheds a new create → throws, enqueues nothing (#288b)", async () => {
-  const ctx = makeTestContext();
-  // A per-tick budget of 0 sheds the very first create with budget_exhausted.
-  ctx.settings.rateLimit.maintenanceMaxAiJobsPerTick = 0;
-  const budget = createFanoutBudget(ctx, "process_gaps_to_pull_requests", undefined);
-
-  await assert.rejects(
-    () =>
-      runJobToCompletion(ctx, "reconcile_gap_clusters", { clusters: [], provider: "codex" }, { admission: { budget } }),
-    (error: unknown) => {
-      assert.ok(error instanceof MaintenanceShedError);
-      assert.equal(error.reason, "budget_exhausted");
-      assert.equal(error.jobType, "reconcile_gap_clusters");
-      return true;
-    }
-  );
-  // Nothing was enqueued — a shed is a pure no-op on the queue.
-  assert.equal((await listJobs(ctx, { type: "reconcile_gap_clusters" })).total, 0);
-  assert.equal(budget.snapshot().enqueued, 0);
-  assert.equal(budget.snapshot().deferredByBudget, 1);
-});
-
-test("runJobToCompletion admission runs only on create — a reuseKey hit spends no budget (#288b)", async () => {
-  const ctx = makeTestContext();
-  // Budget 0 would shed any create; the reuse path must never consult it.
-  ctx.settings.rateLimit.maintenanceMaxAiJobsPerTick = 0;
-  const budget = createFanoutBudget(ctx, "process_gaps_to_pull_requests", undefined);
-
-  const preexisting = await ctx.jobs.create("reconcile_gap_clusters", { clusters: [], provider: "codex" });
-  await claimJob(ctx, "worker", ["codex"]); // in-flight (active), so it is reusable
-
-  // reuseKey matches the in-flight job, so runJobToCompletion waits on it instead
-  // of creating — admission is bypassed entirely. The job never completes, so the
-  // bounded wait times out and the orphan is cancelled (existing #162 behaviour).
-  const result = await runJobToCompletion(
-    ctx,
-    "reconcile_gap_clusters",
-    { clusters: [], provider: "codex" },
-    { reuseKey: () => "shared", admission: { budget } }
-  );
-
-  assert.equal(result.id, preexisting.id);
-  // No budget/capacity was spent, and no second job was enqueued.
-  assert.equal(budget.snapshot().attempted, 0);
-  assert.equal(budget.snapshot().enqueued, 0);
-  assert.equal((await listJobs(ctx, { type: "reconcile_gap_clusters" })).total, 1);
 });
 
 test("display projection recursively redacts secrets without mutating stored input", () => {
@@ -1031,7 +877,7 @@ test("completeJob on a draft_seed_document job creates a seed proposal and enque
   assert.ok(actions.some((a) => a.proposalId === proposal?.id && a.kind === "publish"));
 });
 
-// parseCompletedJobOutput (#184): API-side consumers of runJobToCompletion read
+// parseCompletedJobOutput (#184): API-side consumers of a follow-up job read
 // JobView.output, which in production is the { result, executor } envelope
 // completeJob persists — the raw shape only ever comes from test fakes.
 test("parseCompletedJobOutput unwraps the production { result, executor } envelope", () => {

@@ -1342,6 +1342,12 @@ describe("reconcileGaps non-blocking reshape", () => {
     await reconcileGaps(ctx, undefined, deps);
 
     assert.equal((await reshapeJobs(ctx)).length, 1, "the in-flight reshape is reused, not duplicated");
+    const [latest] = await ctx.stores.maintenanceRuns.list({ taskType: "process_gaps_to_pull_requests", limit: 5 });
+    assert.equal(
+      (latest?.details.fanout as { attempted: number }).attempted,
+      0,
+      "reusing the in-flight reshape spends no fan-out budget (#288b)"
+    );
     assert.equal((await ctx.stores.gapClusters.listActiveClusters()).length, 2, "clustering waits for the reshape");
     assert.equal(await draftCount(ctx), 0);
   });

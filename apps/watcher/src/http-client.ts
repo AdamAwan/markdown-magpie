@@ -95,13 +95,15 @@ export interface WatcherApi extends WatcherApiClient {
   // generative plan job the API bounded-waits on + publication enqueue), returning
   // the run ids created. An absent flowId watches every configured git source.
   runSourceSync(flowId: string | undefined, signal?: AbortSignal): Promise<{ runIds: string[] }>;
-  // Drives a fix-patrol tick in the API (select the next batch of documents to
-  // check + advance the cursor), returning the run id and how many were checked.
+  // Drives a fix-patrol tick in the API (select the next batch of documents,
+  // enqueue a verify_document check for each, advance the cursor), returning the
+  // run id, how many were selected, and how many verifies are still to answer.
+  // The API returns at once — each verify's completion applies its own verdict.
   // An absent flowId patrols the default flow.
   runFixPatrol(
     flowId: string | undefined,
     signal?: AbortSignal
-  ): Promise<{ runId: string; selectedCount: number; findingCount: number }>;
+  ): Promise<{ runId: string; selectedCount: number; findingCount: number; pendingVerifyCount?: number }>;
   // Drives an improve-patrol tick in the API (select the next batch on the improve
   // cursor + enqueue one improve_document scan per selected document + advance the
   // cursor), returning the run id, how many were selected, and how many scans were
@@ -325,8 +327,8 @@ export class HttpWatcherApi implements WatcherApi {
   async runFixPatrol(
     flowId: string | undefined,
     signal?: AbortSignal
-  ): Promise<{ runId: string; selectedCount: number; findingCount: number }> {
-    return this.post<{ runId: string; selectedCount: number; findingCount: number }>(
+  ): Promise<{ runId: string; selectedCount: number; findingCount: number; pendingVerifyCount?: number }> {
+    return this.post<{ runId: string; selectedCount: number; findingCount: number; pendingVerifyCount?: number }>(
       "/api/fix-patrol/run",
       { ...(flowId ? { flowId } : {}) },
       signal,

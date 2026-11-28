@@ -1230,7 +1230,7 @@ export async function enqueuePublishProposal(
   // so nothing upstream can guard this: a double click, a re-selected bulk
   // publish, or a replayed completion side effect would each stack another git
   // push of the same branch. Reuse the queued job instead — the same idempotent
-  // shape as runJobToCompletion's reuseKey.
+  // shape as the orchestrators' in-flight reuse keys.
   const existing = await findInflightPublishJob(ctx, proposal.id);
   if (existing) {
     logger.info({ jobId: existing.id, proposalId: proposal.id }, "reusing in-flight publish_proposal job");

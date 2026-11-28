@@ -132,12 +132,19 @@ export class MaintenanceRunner {
       { jobId: job.id, flowId: flowId ?? null },
       `correctness_patrol[${job.id}]: patrolling flow ${flowId ?? "(default)"}`
     );
-    const { runId, selectedCount, findingCount } = await this.api.runFixPatrol(flowId, signal);
+    const { runId, selectedCount, findingCount, pendingVerifyCount } = await this.api.runFixPatrol(flowId, signal);
+    // The API enqueued the verifies and returned; their findings land on the run
+    // as each completes, so `findingCount` here is normally 0.
     logger.info(
-      { jobId: job.id, runId, selectedCount, findingCount },
-      `correctness_patrol[${job.id}]: checked ${selectedCount} document(s), ${findingCount} finding(s) (run ${runId})`
+      { jobId: job.id, runId, selectedCount, findingCount, pendingVerifyCount: pendingVerifyCount ?? 0 },
+      `correctness_patrol[${job.id}]: selected ${selectedCount} document(s), ${pendingVerifyCount ?? 0} verify check(s) enqueued (run ${runId})`
     );
-    return correctnessPatrolOutputSchema.parse({ runId, selectedCount, findingCount });
+    return correctnessPatrolOutputSchema.parse({
+      runId,
+      selectedCount,
+      findingCount,
+      ...(pendingVerifyCount !== undefined ? { pendingVerifyCount } : {})
+    });
   }
 
   private async runImprovePatrol(job: JobView, signal: AbortSignal): Promise<unknown> {

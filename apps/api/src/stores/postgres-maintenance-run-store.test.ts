@@ -12,6 +12,38 @@ const databaseUrl = process.env.DATABASE_URL;
 describe("PostgresMaintenanceRunStore", { skip: databaseUrl ? false : "DATABASE_URL not set" }, () => {
   const store = new PostgresMaintenanceRunStore(makeTestPool(databaseUrl as string));
 
+  it("update rewrites a running run's outcome and stamps completed_at when it leaves running", async () => {
+    const flowId = `flow-${randomUUID()}`;
+    const run = await store.record({
+      taskType: "correctness_patrol",
+      flowId,
+      trigger: "scheduled",
+      status: "running",
+      summary: "2 verifies in progress",
+      details: { pendingVerifies: 2 }
+    });
+    assert.equal(run.completedAt, undefined);
+
+    const stillRunning = await store.update(run.id, {
+      status: "running",
+      summary: "1 verify in progress",
+      details: { pendingVerifies: 1 }
+    });
+    assert.equal(stillRunning?.completedAt, undefined);
+
+    const done = await store.update(run.id, {
+      status: "completed",
+      summary: "checked 2",
+      details: { pendingVerifies: 0 }
+    });
+    assert.equal(done?.status, "completed");
+    assert.ok(done?.completedAt);
+    assert.equal(done?.flowId, flowId, "identity fields are untouched");
+    assert.deepEqual((await store.get(run.id))?.details, { pendingVerifies: 0 });
+
+    assert.equal(await store.update(randomUUID(), { status: "completed", summary: "x", details: {} }), undefined);
+  });
+
   it("records, lists newest-first, filters by task type, and reads one", async () => {
     const flowId = `flow-${randomUUID()}`;
     const older = await store.record({

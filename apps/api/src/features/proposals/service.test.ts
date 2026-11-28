@@ -45,9 +45,9 @@ async function seedGitRepository(ctx: ReturnType<typeof makeTestContext>): Promi
 }
 
 // A fake broker that synchronously completes every answer_question job by
-// writing a caller-controlled answer onto the re-asked question log — so
-// runJobToCompletion returns at once and verifyGapClosure reads a real answer,
-// no watcher required. Mirrors the ReshapingJobBroker pattern used by the
+// writing a caller-controlled answer onto the re-asked question log — so the
+// re-ask is already complete when verifyGapClosure looks at it and the verdict is
+// committed in the same call, no watcher required. Mirrors the ReshapingJobBroker pattern used by the
 // reconciler tests.
 class AnsweringJobBroker extends FakeJobBroker {
   constructor(
