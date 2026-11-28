@@ -41,7 +41,7 @@ export type QueueStatsSource = () => Promise<QueueStatsSnapshot | undefined>;
 export interface QueueMetricsOptions {
   // A collection inside this window of the last successful read reuses that
   // snapshot instead of querying again, so an aggressive
-  // OTEL_METRIC_EXPORT_INTERVAL (or several metric readers) can never turn into
+  // collection schedule (several metric readers, forced flushes) can never turn into
   // a query storm. Default 15 s.
   minRefreshIntervalMs?: number;
   // Called when the source throws; the collection then observes nothing.

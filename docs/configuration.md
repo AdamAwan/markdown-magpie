@@ -242,7 +242,7 @@ See [questionnaires.md](./questionnaires.md). All read by the API; bad values fa
 | `WATCHER_HEALTH_PORT` | watcher | `4002` | common | Health server port. An invalid port fails startup. |
 | `WATCHER_HEALTH_HOST` | watcher | `0.0.0.0` | tuning | Health server bind address. |
 | `WATCHER_HEALTH_STALE_AFTER_MS` | watcher | `120000` | tuning | `/health` returns 503 if the poll loop has not ticked within this window. |
-| `WATCHER_ACTIVE_WINDOW_MS` | api | `900000` | tuning | How long a silent watcher is still listed as connected. |
+| `WATCHER_ACTIVE_WINDOW_MS` | api | `900000` | tuning | How long a silent watcher is still listed as connected — on the Jobs screen and in the `magpie.watchers.*` gauges ([observability.md](observability.md) O19). |
 
 ## Git and publishing
 
@@ -315,9 +315,10 @@ None of these affect a running deployment. Class **dev/test**.
 
 | Variable | Read by | Default | Notes |
 | --- | --- | --- | --- |
-| `RUN_PG_INTEGRATION` | Postgres-backed `*.integration.test.ts` | unset (skipped) | `1` enables them; `npm run test:db` provides the database. |
-| `TEST_POSTGRES_IMAGE` | `scripts/test-db.mjs` | `pgvector/pgvector:pg16` | Image for the throwaway test database. |
-| `E2E_API_BASE_URL` | `scripts/e2e-jobs.ts` | `http://localhost:4000` | API under test. |
+| `RUN_PG_INTEGRATION` | Postgres-backed `*.integration.test.ts` | unset (skipped) | `1` enables them. `npm run test:db` sets it for you and provides the database. |
+| `TEST_DATABASE_ADMIN_URL` | `scripts/test-db.mjs` | unset (use Docker) | Admin connection to an existing pgvector-enabled Postgres. When set, each run creates, migrates and drops its own `magpie_test_<pid>_<random>` database there instead of booting a container (CI, Docker-less machines). |
+| `TEST_POSTGRES_IMAGE` | `scripts/test-db.mjs` | `pgvector/pgvector:pg16` | Image for the throwaway test container (Docker mode only). |
+| `E2E_API_BASE_URL` | `scripts/e2e-jobs.ts` | `http://localhost:4000` | API under test (`npm run e2e:jobs:local` sets it to the stack it boots). |
 | `E2E_API_TOKEN` | `scripts/e2e-jobs.ts` | — | Bearer token when the API under test has auth on. |
 | `EVAL_TIMEOUT_MS` | `scripts/eval-api.ts` | `30000` | Request timeout. |
 | `EVAL_CASES_JSON` | `scripts/eval-api.ts` | built-in cases | JSON array overriding the eval cases. |
@@ -327,7 +328,8 @@ None of these affect a running deployment. Class **dev/test**.
 
 `scripts/eval-golden.ts` builds the environment of the API and watcher it spawns itself
 (`AI_PROVIDER`, `STORAGE_BACKEND`, `RATE_LIMIT_ENABLED`, the knowledge variables, …); those
-are the same variables documented above, set by the script rather than read from you.
+are the same variables documented above, set by the script rather than read from you. The
+same holds for `scripts/e2e-jobs-local.ts` (`npm run e2e:jobs:local`).
 
 ## Docker Compose and CI
 

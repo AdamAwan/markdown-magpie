@@ -1,6 +1,6 @@
 ---
 name: writing-magpie-tests
-description: Write and run tests in Markdown Magpie — node:test conventions, colocated unit tests, Postgres-backed integration tests gated by RUN_PG_INTEGRATION and run via the throwaway-container harness, the queue e2e/eval scripts, and deterministic provider fixtures. Use when adding tests, deciding unit vs integration, or figuring out how to run DB-backed tests.
+description: Write and run tests in Markdown Magpie — node:test conventions, colocated unit tests, Postgres-backed integration tests gated by RUN_PG_INTEGRATION and run via the single-use-database harness (Docker or an existing Postgres), the queue e2e/eval scripts, and deterministic provider fixtures. Use when adding tests, deciding unit vs integration, or figuring out how to run DB-backed tests.
 ---
 
 # Writing tests in Markdown Magpie
@@ -95,7 +95,7 @@ binary. See `docs/web-testing.md`.
 ## Postgres-backed integration tests
 
 Anything needing a real database is **gated by an env flag** so `npm test` stays fast and
-DB-free, and **run through a throwaway container** so it never touches your dev DB.
+DB-free, and **run against a single-use database** so it never touches your dev DB.
 
 - **Gate the test** so it's skipped unless explicitly requested:
   ```ts
@@ -106,16 +106,29 @@ DB-free, and **run through a throwaway container** so it never touches your dev 
 - **Isolate schema per process** so concurrent runs don't collide — the broker integration
   test uses `const schema = \`pgboss_test_${process.pid}\``. Follow that pattern for anything
   creating tables. Use `t.before`/`t.beforeEach`/`t.after` to start/reset/tear down.
-- **Run against a single-use database** with the DB harness — it boots a throwaway pgvector
-  container, migrates it from scratch, runs the command, and tears it down:
+- **Run against a single-use database** with the DB harness (`scripts/test-db.mjs`) — it
+  provides a freshly migrated database, runs the command with `DATABASE_URL` pointed at it
+  **and `RUN_PG_INTEGRATION=1` set**, then throws the database away:
   ```bash
   npm run test:db                 # scripts/test-db.mjs npm run test  (whole suite, migrated DB)
-  npm run test:integration        # just the pg-boss broker lifecycle test
+  npm run test:integration        # just the pg-boss broker lifecycle test, same harness
   ```
-  `test:db` requires a **Docker daemon** (not a running Postgres) and a **pgvector image** —
-  migration `0001` creates the `vector` extension, so a plain `postgres` image fails. Override
-  with `TEST_POSTGRES_IMAGE` if needed. Model new DB tests on
+  By default it boots a throwaway **pgvector container** (needs a Docker daemon; override the
+  image with `TEST_POSTGRES_IMAGE`). **Without Docker**, point it at any Postgres that has
+  pgvector installed and it creates/migrates/drops a `magpie_test_<pid>_<random>` database
+  there per run (this is what CI does, on a `pgvector/pgvector:pg16` service container):
+  ```bash
+  TEST_DATABASE_ADMIN_URL=postgres://postgres@127.0.0.1:5432/postgres npm run test:db
+  ```
+  pgvector is required either way — migration `0001` creates the `vector` extension (on
+  Ubuntu: `apt-get install postgresql-16-pgvector`). Model new DB tests on
   `apps/api/src/jobs/pg-boss-broker.integration.test.ts`.
+- **Isolate from concurrent files.** `node --test` runs a workspace's test files in parallel
+  processes on the SAME database, so an integration test must not assert on unscoped global
+  counts: scope rows to a per-pid flow/id, or give pg-boss-shaped fixtures their own schema
+  (the insights and queue-stats integration tests show both). Compare timestamps against a
+  window end strictly after your inserts — a JS `new Date()` is millisecond-truncated and
+  can land before a Postgres `now()` stamp from the same millisecond.
 
 ## Queue end-to-end and answer-quality
 
@@ -126,8 +139,12 @@ These are Node scripts (run with `tsx`), not `node:test` files:
   versioned golden set, scores routing/confidence/citations/groundedness/behaviour, and
   fails on any regression vs the committed baseline (`-- --update-baseline` to re-pin).
   Runs in CI on every PR. See `docs/golden-eval.md` before touching the answer pipeline.
-- `npm run e2e:jobs` (`scripts/e2e-jobs.ts`) — drives the API + watcher through the full job
-  lifecycle (enqueue → claim → execute → complete). Use to smoke-test queue wiring.
+- `npm run e2e:jobs` (`scripts/e2e-jobs.ts`) — drives a running API + watcher through the
+  full job lifecycle (answer, cancel in flight, retry → permanent fail, job/schedule
+  listing). `npm run e2e:jobs:local` (`scripts/e2e-jobs-local.ts`) boots that stack itself —
+  `openai-fixture.mjs` + API + watcher as Node processes on a `test-db.mjs` database — and is
+  what CI's **Queue E2E** job runs (~3.5 min, mostly the retry scenario's real backoff; logs
+  in `.magpie/e2e-jobs/`).
 - `npm run eval:api` (`scripts/eval-api.ts`) — fixed answer-quality checks against a live API.
 - **Deterministic provider fixtures:** `scripts/fixtures/openai-fixture.mjs` is an
   OpenAI-compatible stub giving repeatable responses — point the watcher's
@@ -141,7 +158,7 @@ These are Node scripts (run with `tsx`), not `node:test` files:
 - Pure logic, schema validation, routing, formatting → **unit** (colocated `.test.ts`, no gate).
 - Real SQL / broker semantics / store queries / migrations applying → **integration**
   (`RUN_PG_INTEGRATION=1`, per-pid schema, run via `test:db`).
-- Full queue path across API + watcher → **`e2e:jobs`**.
+- Full queue path across API + watcher → **`e2e:jobs`** (`e2e:jobs:local` self-contained).
 
 ## Validate your changes (project rhythm)
 
@@ -166,7 +183,7 @@ npm run test:db           # when you touched SQL, stores, or the broker
   feature (`t.mock`, subtests, `{ skip }`, `{ only }`) — use those.
 - **Integration tests silently skip without the flag.** A green `npm test` does **not** mean
   DB tests ran; they only run under `RUN_PG_INTEGRATION=1` (which `test:db`/`test:integration`
-  set for you). Don't assume coverage you didn't trigger.
+  set for you, and CI's Test job runs). Don't assume coverage you didn't trigger.
 - **Never point DB tests at your dev database.** Always go through `scripts/test-db.mjs`; it
   exists precisely so integration tests use an ephemeral container, not `.env`'s `DATABASE_URL`.
 - **`.js` import specifiers in tests too** — a bare `./foo` import fails under NodeNext.

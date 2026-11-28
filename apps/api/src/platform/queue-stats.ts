@@ -7,7 +7,7 @@ import { logger } from "../logger.js";
 // Queue-health metrics (docs/observability.md O16–O22): dead-letter depth,
 // oldest claimable job age, connected watchers, and time since each schedule's
 // last successful run. Everything is read in ONE SQL statement per metric
-// collection (OTEL_METRIC_EXPORT_INTERVAL, 60 s by default; at most once per
+// collection (the periodic metric reader's 60 s interval; at most once per
 // 15 s however it is configured), and only when telemetry is on — with it off the
 // OTel meter is a no-op and never asks for a snapshot. The values are queue-wide,
 // so N API replicas report N identical copies; aggregate with max().

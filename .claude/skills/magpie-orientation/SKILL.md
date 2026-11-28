@@ -296,7 +296,9 @@ design in `maintenance-redesign.md`). When in doubt, trust the code.
 20. **Observability** — `@magpie/telemetry` (OpenTelemetry traces + metrics, **off by
     default**; enabled only when `OTEL_EXPORTER_OTLP_ENDPOINT` is set) threads W3C trace
     context API → pg-boss job → watcher → callback; metrics `magpie.jobs.finished` /
-    `magpie.jobs.duration`. Structured pino logging via `@magpie/logger` (pretty mode
+    `magpie.jobs.duration`, plus API-side queue-health gauges (ready depth, oldest ready
+    age, dead letter, connected watchers, schedule last-success age — one grouped SQL read
+    per collection; alert examples in `docs/observability.md` O16–O22). Structured pino logging via `@magpie/logger` (pretty mode
     renders in-process, not via a worker thread — #236). `deploy/` has a
     Loki/Grafana/Alloy log stack.
 
@@ -413,7 +415,7 @@ packages/
   retrieval/  Embeddings, RRF fusion, chat/embedding HTTP providers, LLM flow router +
               embedding flow router. (Answer orchestration itself lives in api/watcher.)
   telemetry/  OpenTelemetry wiring (traces/metrics/log-trace mixin), off by default.
-scripts/      migrate.mjs (custom migrator), test-db.mjs (throwaway-PG harness),
+scripts/      migrate.mjs (custom migrator), test-db.mjs (single-use-DB harness),
               e2e-jobs.ts / eval-api.ts / eval-gap-threshold.ts, deck/screenshot tooling.
 deploy/       Loki + Grafana + Alloy logging stack config.
 knowledge-bases/  Intentionally-empty drop dir for local dev KBs.
@@ -491,9 +493,11 @@ npm run lint        # eslint .   (lint:fix to autofix)
 npm run format:check
 npm run deadcode    # knip — unused exports/files (kept strict)
 npm test            # unit tests across workspaces
-npm run test:db     # Postgres-backed tests (spins up a DB via scripts/test-db.mjs)
+npm run test:db     # unit + RUN_PG_INTEGRATION tests on a single-use DB (scripts/test-db.mjs;
+                    #   Docker, or TEST_DATABASE_ADMIN_URL for an existing Postgres)
 npm run db:migrate  # apply migrations
-npm run e2e:jobs    # queue e2e harness; eval:api / eval:gap-threshold for eval scripts
+npm run e2e:jobs    # queue e2e harness (e2e:jobs:local boots its own stack, as CI does);
+                    #   eval:api / eval:gap-threshold for eval scripts
 npm run eval:golden # golden-question answer-quality regression gate (docs/golden-eval.md)
 ```
 
@@ -512,7 +516,7 @@ steps — each is grounded in the real files and lists the gotchas:
 - **write-a-migration** — the custom SQL migrator's `NNNN_` naming rule, prefix-uniqueness
   guard, append-only/no-rollback model, and how to apply + test a migration.
 - **writing-magpie-tests** — `node:test` conventions, unit vs. Postgres-backed integration
-  (`RUN_PG_INTEGRATION` + the throwaway-container harness), and the queue e2e/eval scripts.
+  (`RUN_PG_INTEGRATION` + the single-use-database harness), and the queue e2e/eval scripts.
 - **magpie-local-troubleshooting** — diagnosing a broken local run (Docker, auth, config
   parsing, watcher `ECONNREFUSED`, CLI spawn errors).
 - **propose-a-skill** — end-of-work retrospective: decide whether what you just did is worth

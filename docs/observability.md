@@ -72,6 +72,103 @@ to break the app.
   `/metrics` endpoint** (run an OTel Collector with a Prometheus exporter if a scrape
   endpoint is wanted).
 
+## Queue-health metrics (stuck-queue alerting)
+
+Counters on the watcher only say what *finished*. A queue that has stopped draining —
+no watcher for a capability, a wedged watcher, a schedule that silently stopped firing —
+produces no events at all, so it needs gauges read from the queue's own state.
+
+- **O16** — With telemetry on (O6), the **API** registers six observable gauges on the
+  `@magpie/telemetry` meter. The watcher registers none (it has no database access).
+
+  | Gauge | Unit | Attributes | Value |
+  | --- | --- | --- | --- |
+  | `magpie.queue.ready` | `{job}` | `job.type` | Jobs a watcher could claim now (O18) |
+  | `magpie.queue.oldest_ready_age` | `s` | `job.type` | How long the longest-waiting claimable job has waited; `0` when none |
+  | `magpie.queue.dead_letter` | `{job}` | `job.type` | Jobs parked in the type's `__dead_letter` queues |
+  | `magpie.watchers.connected` | `{watcher}` | — | Watchers seen within the active window (O19) |
+  | `magpie.watchers.capability` | `{watcher}` | `watcher.capability` | Of those, how many advertise each capability |
+  | `magpie.schedule.last_success_age` | `s` | `schedule.key`, `job.type` | Seconds since an enabled schedule's last completed run (O20) |
+
+- **O17** — All six are fed by **one batch callback** that runs **one grouped SQL
+  statement** per metric collection — every 60 s (`initTelemetry`'s periodic metric reader
+  uses the SDK default interval; it does not read `OTEL_METRIC_EXPORT_INTERVAL`) — over
+  existing tables only: pg-boss's `job` and `schedule` tables and `watcher_registrations`.
+  A collection within **15 s** of the last successful read reuses that snapshot, and
+  overlapping collections share one in-flight read, so no extra reader or forced flush can
+  turn the gauges into a query storm. With telemetry off the API's meter is the OTel no-op,
+  which never invokes the callback — **no query runs at all**. Per replica that is one
+  query a minute: N replicas cost N queries a minute.
+- **O18** — Queue gauges are reported for **every job type in the catalog, zero-filled**,
+  summing a type's provider/destination fan-out queues. *Ready* means state `created` or
+  `retry` with `start_after` reached — a job waiting out its retry backoff is not ready
+  yet, so backoff alone never reads as a stuck queue. `oldest_ready_age` is
+  `now − start_after` of the longest-waiting ready job (the max across the type's queues).
+  `dead_letter` counts `created`/`retry` jobs in the `__dead_letter` twins: nothing
+  consumes those queues, so a job stays counted until pg-boss retention deletes it (or an
+  operator deals with it) — a non-zero value means retries were exhausted.
+- **O19** — A watcher is *connected* when its `watcher_registrations.last_seen_at` falls
+  within `WATCHER_ACTIVE_WINDOW_MS` (default 15 min — the same window as the Jobs screen's
+  worker list; lower it for faster "no watchers" alerts). `magpie.watchers.capability` is
+  zero-filled for every capability a catalog queue routes to. The gauges only read; they
+  never prune the registry.
+- **O20** — `magpie.schedule.last_success_age` has one series per enabled Magpie schedule
+  in pg-boss, labelled with the public schedule key (`task:<taskKey>`, the key
+  `GET /api/jobs/schedules` shows) and its job type. The value is the time since the most
+  recent `completed` job on the schedule's queue **with the same input** (so a manual
+  run-now of the same task counts as a success), or — when there is none, including when
+  pg-boss retention has already purged every completed run — the time since the schedule
+  was created. A schedule that has never succeeded therefore ages like one that stopped.
+- **O21** — The values are **queue-wide**, not per process: every API replica reports the
+  same numbers. Dashboards and alerts MUST combine replicas with `max` (never `sum`), and
+  SHOULD alert on the series being absent, which is what a telemetry or database outage
+  looks like.
+- **O22** — A failed read is logged at `warn` (`queue metrics read failed`) and that
+  collection observes **nothing** (a gap, never a misleading zero); it never throws into
+  the SDK. During shutdown the pool is closed before telemetry's final flush, so that last
+  collection is skipped silently instead of querying a closed pool.
+
+### Example alert rules (Prometheus)
+
+Through an OTel Collector's Prometheus exporter the gauges appear as
+`magpie_queue_ready`, `magpie_queue_oldest_ready_age_seconds`, `magpie_queue_dead_letter`,
+`magpie_watchers_connected`, `magpie_watchers_capability`, and
+`magpie_schedule_last_success_age_seconds`, with dots in attribute names turned into
+underscores (`job_type`, `watcher_capability`, `schedule_key`). Exact names depend on the
+exporter's suffix settings; check your scrape before copying. Thresholds are starting
+points — tune them to your cron cadences and traffic.
+
+```yaml
+groups:
+  - name: magpie-queue
+    rules:
+      # An interactive ask has waited 2 minutes for any watcher to claim it.
+      - alert: MagpieAnswerQueueStuck
+        expr: max by (job_type) (magpie_queue_oldest_ready_age_seconds{job_type="answer_question"}) > 120
+        for: 5m
+      # Any other job type has had claimable work waiting 30 minutes.
+      - alert: MagpieQueueStuck
+        expr: max by (job_type) (magpie_queue_oldest_ready_age_seconds{job_type!="answer_question"}) > 1800
+        for: 10m
+      # New dead letters in the last hour: retries were exhausted.
+      - alert: MagpieDeadLetters
+        expr: max by (job_type) (delta(magpie_queue_dead_letter[1h])) > 0
+      - alert: MagpieNoWatchers
+        expr: max(magpie_watchers_connected) == 0
+        for: 5m
+      - alert: MagpieNoMaintenanceWatcher
+        expr: max(magpie_watchers_capability{watcher_capability="maintenance"}) == 0
+        for: 5m
+      # No completed run for 3 hours (patrols are hourly, gaps→PR ~10 min).
+      - alert: MagpieScheduleStale
+        expr: max by (schedule_key, job_type) (magpie_schedule_last_success_age_seconds) > 10800
+        for: 15m
+      # The gauges themselves vanished: telemetry or the API's database read is down.
+      - alert: MagpieQueueMetricsAbsent
+        expr: absent(magpie_watchers_connected)
+        for: 15m
+```
+
 ## Error tracking
 
 - **O12** — `recordException` attaches an error to the active span (sets status `ERROR`);
@@ -102,6 +199,7 @@ to break the app.
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | unset | Master on-switch for telemetry |
 | `MAGPIE_TELEMETRY_ENABLED` | unset | `false` force-disables; cannot enable alone |
 | `OTEL_SERVICE_NAME` | `api` / `watcher` | Service name override |
+| `WATCHER_ACTIVE_WINDOW_MS` | `900000` | Window for "connected" in the watcher gauges (O19) |
 | `LOG_LEVEL` | `info` (prod) / `debug` | Log level |
 | `WATCHER_HEALTH_PORT` / `_HOST` / `_STALE_AFTER_MS` | 4002 / `0.0.0.0` / 120000 | Watcher health server |
 
@@ -114,6 +212,7 @@ to break the app.
 | Request logging | `apps/api/src/http/logging.ts` |
 | Per-job logging | `apps/watcher/src/worker-loop.ts` |
 | Telemetry (config/init/instruments/tracing) | `packages/telemetry/src/{config,init,instruments,tracing,logging}.ts` |
+| Queue-health gauges (O16–O22) | `packages/telemetry/src/queue-metrics.ts` (gauges + cache), `apps/api/src/platform/queue-stats.ts` (the SQL read + wiring), `apps/api/src/main.ts` (`startQueueMetrics`) |
 | Queue trace bridging | `apps/api/src/jobs/pg-boss-broker.ts` (inject), `apps/watcher/src/worker-loop.ts` (extract) |
 | Error handler | `apps/api/src/http/errors.ts` |
 | Health servers | `apps/watcher/src/health-server.ts`, `apps/api/src/app.ts` |
@@ -121,9 +220,11 @@ to break the app.
 ## Tests (behavioural contract)
 
 `packages/logger/src/index.test.ts`,
-`packages/telemetry/src/{config,init,instruments,tracing}.test.ts`,
+`packages/telemetry/src/{config,init,instruments,tracing,queue-metrics}.test.ts`,
 `apps/watcher/src/health-server.test.ts`, `apps/watcher/src/worker-loop.test.ts`,
-`apps/api/src/http/{logging,errors}.test.ts`.
+`apps/api/src/http/{logging,errors}.test.ts`, `apps/api/src/platform/queue-stats.test.ts`,
+and `apps/api/src/platform/queue-stats.integration.test.ts` (the stats SQL against a real
+pg-boss schema; `RUN_PG_INTEGRATION`, run by `npm run test:db`).
 
 ## Provenance (design history)
 
@@ -131,7 +232,9 @@ Consolidates: `docs/superpowers/specs/2026-06-30-structured-logging-design.md`,
 `2026-06-30-unified-logging-design.md`,
 `2026-07-02-opentelemetry-observability-design.md` (the end state — its OTel trace id
 supersedes the earlier bespoke correlation-id), and the two startup-config-validation
-designs (`2026-06-30-api-…`, `2026-07-01-watcher-…`).
+designs (`2026-06-30-api-…`, `2026-07-01-watcher-…`). The queue-health gauges (O16–O22)
+were added in the pre-launch audit with no separate design doc; this section is their
+spec.
 
 > **Drift found while writing:** the pre-OTel bespoke correlation-id from the earlier
 > logging designs is **gone** — cross-service correlation is now the OTel trace id, and
