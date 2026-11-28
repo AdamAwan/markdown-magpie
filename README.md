@@ -306,8 +306,13 @@ npm run format        # auto-format with Prettier
 npm run format:check
 npm run typecheck
 npm test
-npm run test:db
+npm run test:db        # + Postgres-backed integration tests on a single-use DB
+npm run e2e:jobs:local # queue lifecycle e2e on a self-booted stack
 ```
+
+`test:db` boots a throwaway pgvector container (Docker), or — with
+`TEST_DATABASE_ADMIN_URL=postgres://…/postgres` pointing at a Postgres that has pgvector —
+creates and drops its own database there. CI runs both on every PR.
 
 Formatting is enforced automatically. A Prettier `format:check` runs in CI
 (the Verify workflow), and a husky pre-commit hook runs `lint-staged` to

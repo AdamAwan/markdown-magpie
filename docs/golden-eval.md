@@ -38,7 +38,8 @@ measured, including the eval's own ceiling: keyword mode already scores 1.0 on e
 dimension, so this instrument can show an embedding model's costs but not its gains.
 
 `eval:golden` wraps `scripts/eval-golden.ts` in `scripts/test-db.mjs`, so it
-needs a Docker daemon (for the throwaway pgvector container) and nothing else —
+needs a Docker daemon (for the throwaway pgvector container) — or
+`TEST_DATABASE_ADMIN_URL` pointing at an existing pgvector Postgres — and nothing else —
 no provider credentials, no embedding endpoint (retrieval runs keyword-only).
 The orchestrator boots the API with `RATE_LIMIT_ENABLED=false`: with auth off,
 every ask-tier request shares one anonymous-IP bucket (30 per 60s window), and

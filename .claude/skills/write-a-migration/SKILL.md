@@ -58,11 +58,12 @@ no-op (`Skipping …`) — that's how you confirm it recorded.
 
 ```bash
 node --test scripts/lib/migration-order.test.mjs   # the naming/ordering guard
-npm run test:db                                    # boots a throwaway pgvector container,
+npm run test:db                                    # single-use DB (Docker container, or a
+                                                   # fresh DB via TEST_DATABASE_ADMIN_URL),
                                                    # runs ALL migrations, then the suite
 ```
 
-`npm run test:db` (`scripts/test-db.mjs`) migrates a single-use container from scratch, so it
+`npm run test:db` (`scripts/test-db.mjs`) migrates a single-use database from scratch, so it
 proves your migration applies on a clean database and doesn't break the suite — run it before
 pushing. If a store's queries change, update its tests too (see **`writing-magpie-tests`**).
 
