@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { JobError, JobType } from "@magpie/jobs";
 import { Pool } from "pg";
+import { PgBoss } from "pg-boss";
 import { PgBossJobBroker } from "./pg-boss-broker.js";
 
 const runIntegration = process.env.RUN_PG_INTEGRATION === "1";
@@ -172,7 +173,8 @@ test("pg-boss broker implements the durable job lifecycle", { skip: !runIntegrat
     const retrying = await broker.create("answer_question", codexAnswer("retry"));
     const active = await broker.claim("worker", ["codex"]);
     assert.equal(active?.id, retrying.id);
-    const heartbeat = await broker.heartbeat(retrying.id);
+    const { job: heartbeat, active: stillHeld } = await broker.heartbeat(retrying.id);
+    assert.equal(stillHeld, true);
     assert.equal(heartbeat.state, "active");
     assert.ok(heartbeat.heartbeatAt);
 
@@ -533,5 +535,181 @@ test("createIfAdmitted enforces the in-flight ceiling atomically", { skip: !runI
     const admitted = results.filter((result) => result.admitted).length;
     assert.equal(admitted, 10, "exactly the ceiling admitted");
     assert.equal(await broker.countInFlight(globalTypes), 10, "no overshoot in the durable count");
+  });
+});
+
+// docs/ai-jobs.md J60–J66 and docs/rate-limiting.md RL29, against real pg-boss:
+// the attempt fence, the lapsed-retry salvage, the mapping of pg-boss's own
+// failures, the settlement ledger (migration 0075 must be applied to
+// DATABASE_URL), the live-watcher capacity count, and scheduled-tick retention.
+test("pg-boss broker fences, salvages and settles lost work", { skip: !runIntegration }, async (t) => {
+  const lifecycleSchema = `${schema}_life`;
+  const pool = new Pool({ connectionString: databaseUrl });
+  const broker = new PgBossJobBroker({
+    connectionString: databaseUrl,
+    pool,
+    schema: lifecycleSchema,
+    queuePolicyOverrides: { retryLimit: 2, retryDelay: 1, retryBackoff: false }
+  });
+  // A second pg-boss handle on the same schema, only to run pg-boss's own
+  // supervision on demand (the broker's runs on its own timer).
+  const supervisor = new PgBoss({
+    connectionString: databaseUrl,
+    schema: lifecycleSchema,
+    supervise: false,
+    schedule: false
+  });
+  t.before(async () => {
+    await broker.start();
+    await supervisor.start();
+  });
+  t.beforeEach(() => broker.reset());
+  t.after(async () => {
+    await broker.reset();
+    await supervisor.stop();
+    await broker.stop();
+    try {
+      await pool.query(`DROP SCHEMA IF EXISTS "${lifecycleSchema}" CASCADE`);
+    } finally {
+      await pool.end();
+    }
+  });
+
+  async function claimEventually(capability: "codex" | "github") {
+    const deadline = Date.now() + 10_000;
+    for (;;) {
+      const claimed = await broker.claim("w", [capability]);
+      if (claimed || Date.now() > deadline) return claimed;
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+  }
+
+  const answer = { answer: "a", confidence: "high" as const, citations: [] };
+
+  await t.test("J60: a lapsed attempt cannot heartbeat, complete or fail the attempt that replaced it", async () => {
+    const job = await broker.create("answer_question", codexAnswer("fence"));
+    const first = await claimEventually("codex");
+    assert.equal(first?.retryCount, 0);
+    await broker.fail(job.id, providerError); // the claim lapses back to retry
+    const second = await claimEventually("codex");
+    assert.equal(second?.retryCount, 1);
+
+    assert.equal((await broker.heartbeat(job.id, { attempt: 0 })).active, false);
+    assert.equal((await broker.heartbeat(job.id, { attempt: 1 })).active, true);
+    assert.equal((await broker.complete(job.id, { result: answer }, { attempt: 0 })).state, "active");
+    assert.equal((await broker.fail(job.id, providerError, { attempt: 0 })).state, "active");
+    const afterStaleTerminal = await broker.failTerminal(job.id, providerError, { attempt: 0 });
+    assert.equal(afterStaleTerminal.state, "active");
+    assert.equal(afterStaleTerminal.retryLimit, 2, "a stale terminal fail must not zero the live attempt's budget");
+
+    assert.equal((await broker.complete(job.id, { result: answer }, { attempt: 1 })).state, "completed");
+    assert.equal((await broker.heartbeat(job.id, { attempt: 1 })).active, false, "a completed job is no longer held");
+  });
+
+  await t.test("J61: a lapsed attempt's completion is salvaged from its own un-reclaimed retry", async () => {
+    const job = await broker.create("answer_question", codexAnswer("salvage"));
+    await claimEventually("codex");
+    await broker.fail(job.id, providerError);
+    const salvaged = await broker.complete(job.id, { result: answer }, { attempt: 0 });
+    assert.equal(salvaged.state, "completed");
+    assert.deepEqual(salvaged.output, { result: answer });
+  });
+
+  await t.test("J63: a job pg-boss fails by itself carries a structured error and is listed unsettled", async () => {
+    const job = await broker.create("answer_question", codexAnswer("heartbeat-lost"));
+    await claimEventually("codex");
+    // Simulate a watcher that stopped heartbeating on its last attempt.
+    await pool.query(
+      `UPDATE "${lifecycleSchema}".job SET heartbeat_on = now() - interval '1 hour', retry_limit = 0 WHERE id = $1`,
+      [job.id]
+    );
+    // pg-boss throttles its monitor pass per queue; clear the last claim so the
+    // on-demand pass below runs now rather than after monitorIntervalSeconds.
+    await pool.query(
+      `UPDATE "${lifecycleSchema}".queue SET monitor_claim_on = NULL, monitor_on = NULL WHERE name = $1`,
+      ["answer_question__codex"]
+    );
+    await supervisor.supervise("answer_question__codex");
+    const failed = await broker.get(job.id);
+    assert.equal(failed?.state, "failed");
+    assert.deepEqual(failed?.error, {
+      code: "job_heartbeat_lost",
+      message: "job heartbeat timeout",
+      category: "timeout"
+    });
+    const unsettled = await broker.listUnsettledFailures(50);
+    assert.ok(unsettled.some((candidate) => candidate.id === job.id));
+  });
+
+  await t.test("J64: concurrent settlements of one failure run its side effects exactly once", async () => {
+    const job = await broker.create("refresh_flow_snapshot", {});
+    await claimEventually("github");
+    const failed = await broker.failTerminal(job.id, providerError);
+    let runs = 0;
+    const settle = () =>
+      broker.settleFailure(failed, async () => {
+        runs += 1;
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      });
+    const results = await Promise.all([settle(), settle(), settle()]);
+    assert.equal(runs, 1);
+    assert.equal(results.filter(Boolean).length, 1);
+    assert.equal(await settle(), false, "a settled failure never runs again");
+    assert.ok(!(await broker.listUnsettledFailures(50)).some((candidate) => candidate.id === job.id));
+
+    // A run that throws releases the claim: the failure stays unsettled.
+    const other = await broker.create("refresh_flow_snapshot", {});
+    await claimEventually("github");
+    const otherFailed = await broker.failTerminal(other.id, providerError);
+    await assert.rejects(
+      broker.settleFailure(otherFailed, async () => {
+        throw new Error("store down");
+      }),
+      /store down/
+    );
+    assert.ok((await broker.listUnsettledFailures(50)).some((candidate) => candidate.id === other.id));
+    assert.equal(await broker.settleFailure(otherFailed, async () => undefined), true);
+
+    // J65: a manual retry forgets the settlement, so the next failure settles again.
+    await broker.retry(job.id);
+    await claimEventually("github");
+    const refailed = await broker.failTerminal(job.id, providerError);
+    assert.equal(await broker.settleFailure(refailed, async () => undefined), true);
+  });
+
+  await t.test("RL29: queued jobs count only on queues a live watcher serves; active jobs always", async () => {
+    await broker.create("answer_question", codexAnswer("orphan-1"));
+    await broker.create("answer_question", codexAnswer("orphan-2"));
+    assert.equal(await broker.countInFlight(["answer_question"]), 2, "no live set: every queued job counts");
+    assert.equal(await broker.countInFlight(["answer_question"], ["claude"]), 0);
+    assert.equal(await broker.countInFlight(["answer_question"], ["codex"]), 2);
+
+    const capacity = { types: ["answer_question" as const], limit: 1, servedCapabilities: ["claude" as const] };
+    const admitted = await broker.createIfAdmitted("answer_question", codexAnswer("admitted"), capacity);
+    assert.equal(admitted.admitted, true, "an orphaned backlog does not hold the ceiling shut");
+
+    await claimEventually("codex");
+    assert.equal(await broker.countInFlight(["answer_question"], []), 1, "an active job always counts");
+  });
+
+  await t.test("J66: a scheduled tick's queued lifetime is one cron interval", async () => {
+    await broker.reconcileSchedules([
+      {
+        type: "correctness_patrol",
+        key: "task:correctness-patrol::docs",
+        cron: "*/10 * * * *",
+        input: { flowId: "docs" },
+        enabled: true
+      }
+    ]);
+    const rows = await pool.query<{ retention: number }>(
+      `SELECT (options->>'retentionSeconds')::int AS retention FROM "${lifecycleSchema}".schedule WHERE name = $1`,
+      ["correctness_patrol"]
+    );
+    assert.deepEqual(
+      rows.rows.map((row) => row.retention),
+      [600]
+    );
+    await broker.reconcileSchedules([]);
   });
 });

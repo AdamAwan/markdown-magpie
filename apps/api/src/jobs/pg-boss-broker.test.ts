@@ -1,7 +1,17 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { allQueueDefinitions } from "@magpie/jobs";
-import { pgBossQueueOptions, queueDefinitionsForType } from "./pg-boss-broker.js";
+import { pgBossQueueOptions, queueDefinitionsForType, scheduledTickRetentionSeconds } from "./pg-boss-broker.js";
+
+// J66: a scheduled tick lives (queued) for one cron interval, so a watcher outage
+// leaves at most one waiting tick per schedule instead of a replayable backlog.
+test("scheduledTickRetentionSeconds is one cron interval, bounded", () => {
+  assert.equal(scheduledTickRetentionSeconds("*/10 * * * *", "UTC"), 600);
+  assert.equal(scheduledTickRetentionSeconds("0 * * * *", "UTC"), 3600);
+  assert.equal(scheduledTickRetentionSeconds("0 3 * * *", "UTC"), 86_400);
+  assert.equal(scheduledTickRetentionSeconds("* * * * *", "UTC"), 60, "floored at a minute");
+  assert.equal(scheduledTickRetentionSeconds("not a cron", "UTC"), 14 * 24 * 60 * 60, "unparseable: pg-boss default");
+});
 
 test("pgBossQueueOptions applies explicit test overrides without changing untouched policy fields", () => {
   const options = pgBossQueueOptions(

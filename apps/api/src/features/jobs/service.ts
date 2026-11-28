@@ -5,6 +5,7 @@ import { applyColumnMapping, handleColumnMappingFailure } from "../questionnaire
 import { logger } from "../../logger.js";
 import type { JobCapability, JobError, JobType, JobView } from "@magpie/jobs";
 import {
+  isAiJobType,
   isRepairableJobType,
   jobDefinition,
   jobInputSourcesSchema,
@@ -13,7 +14,12 @@ import {
 } from "@magpie/jobs";
 import type { AppContext } from "../../context.js";
 import { HttpError } from "../../http/errors.js";
-import type { JobListFilters } from "../../jobs/broker.js";
+import {
+  JobNotFoundError,
+  type HeartbeatResult,
+  type JobAttemptFence,
+  type JobListFilters
+} from "../../jobs/broker.js";
 import type { WatcherTouch } from "../../stores/watcher-registry-store.js";
 import {
   mapQuestionnaireColumnsOutputSchema,
@@ -31,6 +37,7 @@ import { applyPullRequestTransition, continueReconcileFromCompletedReshape } fro
 import * as foldService from "../../scheduling/fold.js";
 import { snapshotRoot } from "../../platform/repositories.js";
 import { retrievalMode } from "../../platform/providers.js";
+import { aiCapacityError, nonInteractiveAiCapacity } from "../../platform/ai-capacity.js";
 import { unconfiguredSourceDescriptorIds } from "../../platform/source-descriptors.js";
 
 // answer_question (live /api/ask) and answer_question_batch (the questionnaire
@@ -57,7 +64,33 @@ export async function createJob(ctx: AppContext, type: JobType, input: unknown):
 // checkout (`subpath`), or widen the fetch allowlist (`internet` allowedHosts —
 // SSRF). Internal enqueues build their descriptors from config
 // (projectSourceDescriptors) and go through createJob directly.
+//
+// Only an explicit allowlist of job types may be submitted by hand (J67). Every
+// other type is internal: its input carries ids/URLs/credential NAMES the API
+// derives itself (a PR url and tokenEnv on crosslink/comment, a proposal id on
+// publish/fold, a question log on answers, a run on source-sync planning), and
+// its completion writes into rows only the API's own enqueue path set up. Hand-
+// creating one would let a caller point a github watcher's token at an arbitrary
+// PR, or bypass the ask/questionnaire admission and logging. The allowed types
+// are the self-contained ones an operator legitimately runs on demand: the
+// scheduled orchestrators (what "run now" enqueues) and two standalone AI
+// checks. Metered (AI) submissions are admission-controlled like maintenance
+// fan-out, so this route cannot exceed AI_MAX_INFLIGHT_JOBS either.
+const SUBMITTABLE_JOB_TYPES: ReadonlySet<JobType> = new Set<JobType>([
+  "process_gaps_to_pull_requests",
+  "source_change_sync",
+  "correctness_patrol",
+  "editorial_patrol",
+  "seed_bootstrap",
+  "refresh_flow_snapshot",
+  "verify_document",
+  "summarize_gap"
+]);
+
 export async function submitJob(ctx: AppContext, type: JobType, input: unknown): Promise<JobView> {
+  if (!SUBMITTABLE_JOB_TYPES.has(type)) {
+    throw new HttpError(400, "job_type_not_submittable", `Job type ${type} is created by the API only`);
+  }
   const parsed = parseJobInput(type, input);
   const carried = jobInputSourcesSchema.safeParse(parsed);
   if (carried.success) {
@@ -70,7 +103,15 @@ export async function submitJob(ctx: AppContext, type: JobType, input: unknown):
       );
     }
   }
-  return ctx.jobs.create(type, parsed);
+  const capacity = isAiJobType(type) ? await nonInteractiveAiCapacity(ctx) : undefined;
+  if (!capacity) {
+    return ctx.jobs.create(type, parsed);
+  }
+  const admission = await ctx.jobs.createIfAdmitted(type, parsed, capacity);
+  if (!admission.admitted || !admission.job) {
+    throw aiCapacityError(ctx, { inFlight: admission.inFlight, reserveInFlight: admission.reserveInFlight ?? 0 });
+  }
+  return admission.job;
 }
 
 // Validate the input against the job's own contract at creation (#285). Without
@@ -127,15 +168,25 @@ export async function listJobs(
   return { ...result, jobs: await decorateJobs(ctx, result.jobs) };
 }
 
-export async function heartbeatJob(ctx: AppContext, id: string, workerName?: string): Promise<JobView> {
-  const job = await ctx.jobs.heartbeat(id);
+// A heartbeat refreshes the caller's claim and tells it whether it still holds
+// the job (J60): `active: false` — cancelled, failed, completed, or re-queued /
+// re-claimed after the caller's claim lapsed — means the watcher must abort the
+// run and report nothing further. `attempt` (the retryCount the watcher claimed
+// at) fences the refresh to that claim; older watchers omit it.
+export async function heartbeatJob(
+  ctx: AppContext,
+  id: string,
+  workerName?: string,
+  fence: JobAttemptFence = {}
+): Promise<HeartbeatResult> {
+  const result = await ctx.jobs.heartbeat(id, fence);
   // A heartbeat only arrives while a watcher is running a job, so it keeps that
   // watcher marked busy on the job it is processing. workerName is absent on
   // legacy/internal callers, which simply don't update the registry.
-  if (workerName) {
+  if (workerName && result.active) {
     await touchWatcher(ctx, { name: workerName, status: "busy", currentJobId: id });
   }
-  return job;
+  return result;
 }
 
 export async function cancelJob(ctx: AppContext, id: string): Promise<JobView> {
@@ -157,7 +208,7 @@ export async function retryJob(ctx: AppContext, id: string): Promise<JobView> {
 
 export async function acceptFailedJob(ctx: AppContext, id: string): Promise<JobView> {
   const job = await ctx.jobs.get(id);
-  if (!job) throw new Error(`Job not found: ${id}`);
+  if (!job) throw new JobNotFoundError(id);
   if (job.state !== "failed") throw new Error("Only failed jobs can be accepted");
   const acceptedAt = await ctx.stores.jobAcceptances.accept(id);
   return { ...projectJob(job), acceptedAt };
@@ -267,9 +318,17 @@ export async function completeJob(
   // flat on the envelope beside usage so token spend can be priced per model.
   // Optional: non-AI jobs and older watchers report nothing, and a CLI run
   // without an explicit model config reports only the provider.
-  identity?: { provider?: string; model?: string }
+  identity?: { provider?: string; model?: string },
+  // The attempt the completing watcher claimed (J60). Fences the completion, and
+  // every failure this dispatcher records for it, to that claim. Absent for
+  // older watchers and internal callers (unfenced, as before).
+  fence: JobAttemptFence = {}
 ): Promise<
   | { ok: false; code: "job_not_found" }
+  // The completion did not land: the job is no longer held by this attempt
+  // (re-claimed by another watcher, failed, expired past salvage) — J62. The
+  // route maps it to 409, which the watcher treats as final. No side effect runs.
+  | { ok: false; code: "job_not_active" }
   | { ok: false; code: "invalid_output" }
   // A schema-invalid output that was routed to one informed repair instead of
   // terminal-failing (#288d): the SAME job was moved active->retry and will be
@@ -307,13 +366,13 @@ export async function completeJob(
       if (validation.reason === "undeclared_fields") {
         // Strict policy only (tests, CI, the e2e/eval harnesses): the output is
         // valid but carries fields the job contract does not declare.
-        return handleUndeclaredOutputFields(ctx, existingJob, validation.undeclaredPaths, executor);
+        return handleUndeclaredOutputFields(ctx, existingJob, validation.undeclaredPaths, executor, fence);
       }
       // Schema-invalid output. Either route it to ONE informed repair (a
       // repairable type, repair enabled, no prior repair context) or take the
       // terminal-fail backstop (#288d) — no more blind paid retries. See
       // decideRepairOrTerminal for the full decision table.
-      return handleInvalidOutput(ctx, existingJob, output, validation.error, executor);
+      return handleInvalidOutput(ctx, existingJob, output, validation.error, executor, fence);
     }
     resultData = validation.data;
     // Output schemas are z.object, so a valid parse STRIPPED any undeclared keys.
@@ -340,7 +399,7 @@ export async function completeJob(
           category: "validation",
           ...(executor ? { executor } : {})
         },
-        { terminal: true }
+        { terminal: true, ...fence }
       );
       await ctx.stores.jobRepairContexts.delete(jobId);
       logger.info(
@@ -362,13 +421,29 @@ export async function completeJob(
     // job contract's schema-stripping — the Insights AI-usage chart reads it
     // from here (#241). `provider`/`model` ride the envelope the same way, so
     // usage rollups can price token spend per model.
-    await ctx.jobs.complete(jobId, {
-      result: resultData,
-      executor,
-      ...(usage ? { usage } : {}),
-      ...(identity?.provider ? { provider: identity.provider } : {}),
-      ...(identity?.model ? { model: identity.model } : {})
-    });
+    const persisted = await ctx.jobs.complete(
+      jobId,
+      {
+        result: resultData,
+        executor,
+        ...(usage ? { usage } : {}),
+        ...(identity?.provider ? { provider: identity.provider } : {}),
+        ...(identity?.model ? { model: identity.model } : {})
+      },
+      fence
+    );
+    // The broker's complete() is a no-op unless this attempt still held the job
+    // (or could salvage its own lapsed retry — J61). A completion that did not
+    // persist must NOT fan out side effects: they would act on an output the job
+    // row does not carry, and the job will run again (or already ran) elsewhere
+    // (J62). The repair context is left for the attempt that does complete.
+    if (persisted.state !== "completed") {
+      logger.warn(
+        { jobId, jobType: existingJob.type, state: persisted.state, attempt: fence.attempt, executor },
+        "job completion did not persist: the job is no longer held by this attempt"
+      );
+      return { ok: false, code: "job_not_active" };
+    }
     // The repaired output is valid and safe: delete the context (the "one repair"
     // counter) and emit the success event. Deletion is idempotent, so a later
     // side-effect-failure replay (which re-enters via the completed-state branch)
@@ -554,7 +629,8 @@ async function handleUndeclaredOutputFields(
   ctx: AppContext,
   job: JobView,
   undeclaredPaths: string[],
-  executor: string
+  executor: string,
+  fence: JobAttemptFence
 ): Promise<{ ok: false; code: "invalid_output" }> {
   const message = undeclaredFieldsMessage(job.type, undeclaredPaths);
   logger.error({ jobId: job.id, jobType: job.type, undeclaredFields: undeclaredPaths }, message);
@@ -568,7 +644,7 @@ async function handleUndeclaredOutputFields(
       details: { undeclaredFields: undeclaredPaths.join(", ") },
       ...(executor ? { executor } : {})
     },
-    { terminal: true }
+    { terminal: true, ...fence }
   );
   return { ok: false, code: "invalid_output" };
 }
@@ -589,7 +665,8 @@ async function handleInvalidOutput(
   job: JobView,
   rawOutput: unknown,
   error: z.ZodError,
-  executor: string
+  executor: string,
+  fence: JobAttemptFence
 ): Promise<{ ok: false; code: "invalid_output" | "repair_enqueued" }> {
   const jobId = job.id;
   const provider = providerOf(job);
@@ -605,12 +682,23 @@ async function handleInvalidOutput(
     // bumped at re-claim, not here). Not routed through createIfAdmitted: the job
     // is already in flight and holds the slot the original admission reserved, so
     // re-admitting would double-charge and could 429 mid-repair.
-    await ctx.jobs.fail(jobId, {
-      code: "invalid_output_repairable",
-      message: "Watcher output did not match the job contract; enqueued for one informed repair",
-      category: "validation",
-      ...(executor ? { executor } : {})
-    });
+    const requeued = await ctx.jobs.fail(
+      jobId,
+      {
+        code: "invalid_output_repairable",
+        message: "Watcher output did not match the job contract; enqueued for one informed repair",
+        category: "validation",
+        ...(executor ? { executor } : {})
+      },
+      fence
+    );
+    if (requeued.state !== "retry") {
+      // The fenced fail did not land (J60): this attempt no longer holds the job,
+      // so no repair was enqueued — drop the context rather than hand it to the
+      // attempt that does.
+      await ctx.stores.jobRepairContexts.delete(jobId);
+      return { ok: false, code: "invalid_output" };
+    }
     logger.info(
       {
         event: "job_repair",
@@ -638,7 +726,7 @@ async function handleInvalidOutput(
       category: "validation",
       ...(executor ? { executor } : {})
     },
-    { terminal: true }
+    { terminal: true, ...fence }
   );
   if (priorContext) {
     await ctx.stores.jobRepairContexts.delete(jobId);
@@ -831,52 +919,70 @@ export async function failJob(
   ctx: AppContext,
   jobId: string,
   jobError: JobError,
-  { terminal = false }: { terminal?: boolean } = {}
-): Promise<JobView | undefined> {
-  const failingJob = await ctx.jobs.get(jobId);
-  const failedJob = terminal ? await ctx.jobs.failTerminal(jobId, jobError) : await ctx.jobs.fail(jobId, jobError);
+  { terminal = false, attempt }: { terminal?: boolean } & JobAttemptFence = {}
+): Promise<JobView> {
+  // Fenced to the failing watcher's attempt (J60): a lapsed attempt's failure
+  // must not fail (or burn a retry of) the attempt another watcher now holds.
+  const fence: JobAttemptFence = attempt === undefined ? {} : { attempt };
+  const failedJob = terminal
+    ? await ctx.jobs.failTerminal(jobId, jobError, fence)
+    : await ctx.jobs.fail(jobId, jobError, fence);
   // A failure (retryable or terminal) also frees the watcher to poll again.
   if (jobError.executor) {
     await touchWatcher(ctx, { name: jobError.executor, status: "idle" });
   }
+  // Retryable failures run nothing — the job will run again. A terminal one
+  // settles through the ledger, so its side effects run exactly once whether this
+  // call, a duplicate fail, or the sweep (for a job pg-boss failed by itself)
+  // gets there first (J63/J64).
+  if (failedJob.state === "failed") {
+    await settleTerminalFailure(ctx, failedJob);
+  }
+  return failedJob;
+}
+
+// Runs a terminally failed job's side effects through the settlement ledger —
+// at most once per job across API replicas and replays (J64). Returns whether
+// they ran in this call. Exported for the sweep (failure-sweep.ts).
+export async function settleTerminalFailure(ctx: AppContext, job: JobView): Promise<boolean> {
+  return ctx.jobs.settleFailure(job, () => runTerminalFailureSideEffects(ctx, job));
+}
+
+// The side effects of a job reaching terminal `failed`, whoever failed it. Each
+// is idempotent on the job (a settlement interrupted mid-way re-runs from the
+// top): each guards on its target still being in the waiting state.
+async function runTerminalFailureSideEffects(ctx: AppContext, job: JobView): Promise<void> {
+  const message = job.error?.message ?? "Job failed";
   // Source-sync planning is enqueue-only, so a terminally failed plan job fails its
   // linked run too. Only a still-"running" run is failed, so this never regresses a
   // run that already completed.
-  if (failingJob?.type === "sync_source_changes_generate_plan" && failedJob.state === "failed") {
-    const run = await ctx.stores.sourceSync.getRunByJobId(jobId);
+  if (job.type === "sync_source_changes_generate_plan") {
+    const run = await ctx.stores.sourceSync.getRunByJobId(job.id);
     if (run?.status === "running") {
-      await ctx.stores.sourceSync.failRun(run.id, jobError.message);
+      await ctx.stores.sourceSync.failRun(run.id, message);
     }
   }
-  if (
-    (failingJob?.type === "fold_markdown_proposal" || failingJob?.type === "fold_changeset_proposal") &&
-    failedJob.state === "failed"
-  ) {
-    await foldService.enqueueFoldFallback(ctx, failingJob);
+  if (job.type === "fold_markdown_proposal" || job.type === "fold_changeset_proposal") {
+    await foldService.enqueueFoldFallback(ctx, job);
   }
   // A terminally failed answer job that belongs to a questionnaire item marks
   // that item unanswerable (error on the worksheet) and frees its drip slot.
-  // Retryable failures are skipped — the job will run again.
-  if (failingJob && isAnswerJobType(failingJob.type) && failedJob.state === "failed") {
-    await questionnairesService.handleQuestionnaireAnswerFailure(ctx, failingJob, jobError.message);
+  if (isAnswerJobType(job.type)) {
+    await questionnairesService.handleQuestionnaireAnswerFailure(ctx, job, message);
   }
   // A gap-closure re-ask that failed terminally records NO verdict (an
   // infrastructure failure is never a still_open) — the proposal stays unverified,
   // and this makes that loud.
-  if (failingJob && failedJob.state === "failed") {
-    await proposalsService.noteGapClosureReaskFailed(ctx, failingJob, jobError.message);
-    // A verify_document that failed terminally will never deliver the verdict its
-    // patrol run is waiting on: leave the document unchecked and stop waiting.
-    await abandonFixPatrolVerify(ctx, failingJob);
-  }
+  await proposalsService.noteGapClosureReaskFailed(ctx, job, message);
+  // A verify_document that failed terminally will never deliver the verdict its
+  // patrol run is waiting on: leave the document unchecked and stop waiting.
+  await abandonFixPatrolVerify(ctx, job);
   // A terminally failed (dead-lettered) mapping job marks its questionnaire import
   // `failed` with the reason (#366), so the console shows the error instead of a
-  // "mapping" badge that never resolves. Retryable failures are skipped — the job
-  // will run again, and the import is legitimately still mapping.
-  if (failingJob?.type === "map_questionnaire_columns" && failedJob.state === "failed") {
-    await handleColumnMappingFailure(ctx, jobId, jobError.message);
+  // "mapping" badge that never resolves.
+  if (job.type === "map_questionnaire_columns") {
+    await handleColumnMappingFailure(ctx, job.id, message);
   }
-  return failedJob;
 }
 
 function isAnswerQuestionJobOutput(value: unknown): value is AnswerQuestionJobOutput {

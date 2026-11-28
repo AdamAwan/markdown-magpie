@@ -37,7 +37,7 @@ test("fake broker supports create, claim, heartbeat, complete, cancel, and retry
   const created = await broker.create("answer_question", validAnswerInput);
   const claimed = await broker.claim("worker-1", ["codex"]);
   assert.equal(claimed?.id, created.id);
-  assert.equal((await broker.heartbeat(created.id)).state, "active");
+  assert.equal((await broker.heartbeat(created.id)).job.state, "active");
   await broker.fail(created.id, testError);
   assert.equal((await broker.get(created.id))?.state, "retry");
   await broker.cancel(created.id);

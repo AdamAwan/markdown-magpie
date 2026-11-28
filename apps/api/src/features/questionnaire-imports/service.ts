@@ -102,7 +102,7 @@ export async function uploadQuestionnaireImport(
     // Metered but not interactive, admitted through the same stricter gate the
     // questionnaire drip uses so a mapping can never eat the reserve protecting
     // live /api/ask.
-    const capacity = nonInteractiveAiCapacity(ctx);
+    const capacity = await nonInteractiveAiCapacity(ctx);
     const admission = capacity
       ? await ctx.jobs.createIfAdmitted("map_questionnaire_columns", jobInput, capacity)
       : { admitted: true, job: await ctx.jobs.create("map_questionnaire_columns", jobInput) };

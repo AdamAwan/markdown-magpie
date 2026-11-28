@@ -236,7 +236,7 @@ async function topUpDrip(ctx: AppContext, questionnaireId: string): Promise<void
     // secondary bound on a single batch. Adopt the atomic admission primitive
     // (#288a): count + enqueue under the broker lock so the drip can never
     // overshoot even when concurrent asks race it. Rate limiting off → plain.
-    const capacity = nonInteractiveAiCapacity(ctx);
+    const capacity = await nonInteractiveAiCapacity(ctx);
     if (!capacity) {
       await ctx.jobs.create("answer_question_batch", input);
       continue;

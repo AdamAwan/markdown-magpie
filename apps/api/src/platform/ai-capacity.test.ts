@@ -39,6 +39,14 @@ function enqueueBatchJob(ctx: AppContext): Promise<unknown> {
   });
 }
 
+// The queued jobs these tests enqueue sit on codex queues; a live codex watcher
+// makes them count (RL29 — queued work only counts where a live watcher can
+// claim it).
+async function withLiveCodexWatcher(ctx: AppContext): Promise<AppContext> {
+  await ctx.stores.watchers.touch({ name: "codex-watcher", status: "idle", capabilities: ["codex"] });
+  return ctx;
+}
+
 function assertBlocked(ctx: AppContext): Promise<void> {
   return assert.rejects(
     () => assertAiCapacity(ctx),
@@ -54,7 +62,7 @@ function assertBlocked(ctx: AppContext): Promise<void> {
 
 describe("assertAiCapacity", () => {
   it("resolves while in-flight AI jobs are below the ceiling", async () => {
-    const ctx = makeTestContext();
+    const ctx = await withLiveCodexWatcher(makeTestContext());
     ctx.settings.rateLimit.aiMaxInflightJobs = 2;
     ctx.settings.rateLimit.aiInteractiveReservedJobs = 0;
 
@@ -64,7 +72,7 @@ describe("assertAiCapacity", () => {
   });
 
   it("rejects with a 429 ai_capacity error once the ceiling is reached", async () => {
-    const ctx = makeTestContext();
+    const ctx = await withLiveCodexWatcher(makeTestContext());
     ctx.settings.rateLimit.aiMaxInflightJobs = 2;
     ctx.settings.rateLimit.aiInteractiveReservedJobs = 0;
 
@@ -75,7 +83,7 @@ describe("assertAiCapacity", () => {
   });
 
   it("keeps admitting interactive work when maintenance fan-out saturates the ceiling", async () => {
-    const ctx = makeTestContext();
+    const ctx = await withLiveCodexWatcher(makeTestContext());
     ctx.settings.rateLimit.aiMaxInflightJobs = 2;
     ctx.settings.rateLimit.aiInteractiveReservedJobs = 1;
 
@@ -92,7 +100,7 @@ describe("assertAiCapacity", () => {
   });
 
   it("lets interactive work exceed the reserve while the global ceiling has room", async () => {
-    const ctx = makeTestContext();
+    const ctx = await withLiveCodexWatcher(makeTestContext());
     ctx.settings.rateLimit.aiMaxInflightJobs = 3;
     ctx.settings.rateLimit.aiInteractiveReservedJobs = 1;
 
@@ -106,7 +114,7 @@ describe("assertAiCapacity", () => {
   });
 
   it("clamps a reserve configured above the ceiling so admission stays bounded", async () => {
-    const ctx = makeTestContext();
+    const ctx = await withLiveCodexWatcher(makeTestContext());
     ctx.settings.rateLimit.aiMaxInflightJobs = 2;
     ctx.settings.rateLimit.aiInteractiveReservedJobs = 10;
 
@@ -117,7 +125,7 @@ describe("assertAiCapacity", () => {
   });
 
   it("a questionnaire batch cannot 429 a live ask via the interactive reserve (#288c acceptance)", async () => {
-    const ctx = makeTestContext();
+    const ctx = await withLiveCodexWatcher(makeTestContext());
     ctx.settings.rateLimit.aiMaxInflightJobs = 6;
     ctx.settings.rateLimit.aiInteractiveReservedJobs = 5;
 
@@ -133,7 +141,7 @@ describe("assertAiCapacity", () => {
   });
 
   it("five live asks with the global ceiling full still 429 (control for #288c)", async () => {
-    const ctx = makeTestContext();
+    const ctx = await withLiveCodexWatcher(makeTestContext());
     ctx.settings.rateLimit.aiMaxInflightJobs = 6;
     ctx.settings.rateLimit.aiInteractiveReservedJobs = 5;
 
@@ -148,7 +156,7 @@ describe("assertAiCapacity", () => {
   });
 
   it("is a pass-through when rate limiting is disabled", async () => {
-    const ctx = makeTestContext();
+    const ctx = await withLiveCodexWatcher(makeTestContext());
     ctx.settings.rateLimit.enabled = false;
     ctx.settings.rateLimit.aiMaxInflightJobs = 1;
     ctx.settings.rateLimit.aiInteractiveReservedJobs = 0;
@@ -159,7 +167,7 @@ describe("assertAiCapacity", () => {
   });
 
   it("does not count non-AI jobs toward the ceiling", async () => {
-    const ctx = makeTestContext();
+    const ctx = await withLiveCodexWatcher(makeTestContext());
     ctx.settings.rateLimit.aiMaxInflightJobs = 1;
     ctx.settings.rateLimit.aiInteractiveReservedJobs = 0;
 
@@ -168,5 +176,32 @@ describe("assertAiCapacity", () => {
     const job = await enqueueInteractiveJob(ctx);
     await ctx.jobs.complete((job as { id: string }).id, { answer: "", confidence: "low", citations: [], gaps: [] });
     await assertAiCapacity(ctx); // completed job is not in flight
+  });
+});
+
+describe("assertAiCapacity counts queued work only where a live watcher can claim it (RL29)", () => {
+  it("ignores queued jobs on a queue no live watcher serves, so an orphaned queue cannot hold the ceiling shut", async () => {
+    const ctx = makeTestContext();
+    ctx.settings.rateLimit.aiMaxInflightJobs = 2;
+    ctx.settings.rateLimit.aiInteractiveReservedJobs = 0;
+    // Two codex jobs queued, but the only live watcher runs claude.
+    await enqueueInteractiveJob(ctx);
+    await enqueueInteractiveJob(ctx);
+    await ctx.stores.watchers.touch({ name: "claude-watcher", status: "idle", capabilities: ["claude"] });
+    await assertAiCapacity(ctx);
+
+    // A codex watcher comes back: the backlog it can claim counts again at once.
+    await ctx.stores.watchers.touch({ name: "codex-watcher", status: "idle", capabilities: ["codex"] });
+    await assertBlocked(ctx);
+  });
+
+  it("always counts an ACTIVE job, whoever is (or is not) serving its queue now", async () => {
+    const ctx = makeTestContext();
+    ctx.settings.rateLimit.aiMaxInflightJobs = 1;
+    ctx.settings.rateLimit.aiInteractiveReservedJobs = 0;
+    await enqueueInteractiveJob(ctx);
+    await ctx.jobs.claim("codex-watcher", ["codex"]);
+    // No watcher in the registry at all: the running job still occupies a slot.
+    await assertBlocked(ctx);
   });
 });

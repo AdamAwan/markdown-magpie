@@ -5,6 +5,7 @@ import { requireScopes, requireServicePrincipal } from "../../auth/middleware.js
 import { requirePrivilege } from "../../auth/capabilities.js";
 import { HttpError } from "../../http/errors.js";
 import { readJsonBody } from "../../http/body.js";
+import { JobNotFoundError } from "../../jobs/broker.js";
 import * as jobsService from "./service.js";
 import {
   claimJobBodySchema,
@@ -75,16 +76,18 @@ export function jobRoutes(ctx: AppContext): Hono {
     }
   });
 
+  // `active: false` tells the watcher it no longer holds the job (J60) — it
+  // aborts the run and reports nothing further. `cancelled` is kept for older
+  // watchers, which only abort on it. Only an unknown id is a 404 (API31): any
+  // other error is a 500 the watcher's next beat retries.
   app.post("/:id/heartbeat", requireScopes("manage:jobs"), requireServicePrincipal(), async (c) => {
-    try {
-      const parsed = heartbeatJobBodySchema.safeParse(await readJsonBody(c));
-      const workerName = parsed.success ? parsed.data.workerName : undefined;
-      const job = await jobsService.heartbeatJob(ctx, c.req.param("id"), workerName);
-      return c.json({ job, cancelled: job.state === "cancelled" });
-    } catch (error) {
-      if (error instanceof HttpError) throw error;
-      throw new HttpError(404, "job_not_found");
-    }
+    const parsed = heartbeatJobBodySchema.safeParse(await readJsonBody(c));
+    const workerName = parsed.success ? parsed.data.workerName : undefined;
+    const attempt = parsed.success ? parsed.data.attempt : undefined;
+    const { job, active } = await notFoundAs404(() =>
+      jobsService.heartbeatJob(ctx, c.req.param("id"), workerName, attempt === undefined ? {} : { attempt })
+    );
+    return c.json({ job, cancelled: job.state === "cancelled", active });
   });
 
   app.post(
@@ -95,12 +98,20 @@ export function jobRoutes(ctx: AppContext): Hono {
       if (!result.success) return c.json({ error: "invalid_output" }, 400);
     }),
     async (c) => {
-      const { output, executor, usage, provider, model } = c.req.valid("json");
+      const { output, executor, usage, provider, model, attempt } = c.req.valid("json");
       try {
-        const outcome = await jobsService.completeJob(ctx, c.req.param("id"), output, executor, usage, {
-          ...(provider ? { provider } : {}),
-          ...(model ? { model } : {})
-        });
+        const outcome = await jobsService.completeJob(
+          ctx,
+          c.req.param("id"),
+          output,
+          executor,
+          usage,
+          {
+            ...(provider ? { provider } : {}),
+            ...(model ? { model } : {})
+          },
+          attempt === undefined ? {} : { attempt }
+        );
         if (!outcome.ok) {
           // side_effects_failed is a 500 ON PURPOSE: the job's output is already
           // durably persisted (completeJob persists before the side-effect
@@ -113,10 +124,13 @@ export function jobRoutes(ctx: AppContext): Hono {
           // repair_enqueued and invalid_output both map to 400: a deterministic
           // 4xx is final on the watcher side (it won't locally re-POST), so for a
           // repair the API's own active->retry is the sole re-dispatch (#288d).
+          // job_not_active (J62) is a 409 like job_cancelled: the completion did
+          // not persist because this attempt no longer holds the job, and no
+          // retry of it can change that.
           const status =
             outcome.code === "job_not_found"
               ? 404
-              : outcome.code === "job_cancelled"
+              : outcome.code === "job_cancelled" || outcome.code === "job_not_active"
                 ? 409
                 : outcome.code === "side_effects_failed"
                   ? 500
@@ -139,38 +153,37 @@ export function jobRoutes(ctx: AppContext): Hono {
       if (!result.success) return c.json({ error: "invalid_job_error" }, 400);
     }),
     async (c) => {
-      const { error } = c.req.valid("json");
-      try {
-        return c.json({ job: await jobsService.failJob(ctx, c.req.param("id"), error) });
-      } catch {
-        throw new HttpError(404, "job_not_found");
-      }
+      // A terminal failure's side effects run inside failJob (via the settlement
+      // ledger, J64), so a 500 here — a store write failed — is retried by the
+      // watcher and the retry settles it. Only an unknown id is a 404 (API31).
+      const { error, attempt } = c.req.valid("json");
+      return c.json({
+        job: await notFoundAs404(() =>
+          jobsService.failJob(ctx, c.req.param("id"), error, attempt === undefined ? {} : { attempt })
+        )
+      });
     }
   );
 
-  app.post("/:id/cancel", requireScopes("manage:jobs"), requirePrivilege(ctx, "ops"), async (c) => {
-    try {
-      return c.json({ job: await jobsService.cancelJob(ctx, c.req.param("id")) });
-    } catch {
-      throw new HttpError(404, "job_not_found");
-    }
-  });
+  app.post("/:id/cancel", requireScopes("manage:jobs"), requirePrivilege(ctx, "ops"), async (c) =>
+    c.json({ job: await notFoundAs404(() => jobsService.cancelJob(ctx, c.req.param("id"))) })
+  );
 
   app.post("/:id/retry", requireScopes("manage:jobs"), requirePrivilege(ctx, "ops"), async (c) => {
     try {
-      return c.json({ job: await jobsService.retryJob(ctx, c.req.param("id")) });
+      return c.json({ job: await notFoundAs404(() => jobsService.retryJob(ctx, c.req.param("id"))) });
     } catch (error) {
       if (error instanceof Error && /only failed/i.test(error.message)) throw new HttpError(409, "job_not_failed");
-      throw new HttpError(404, "job_not_found");
+      throw error;
     }
   });
 
   app.post("/:id/accept-failure", requireScopes("manage:jobs"), requirePrivilege(ctx, "ops"), async (c) => {
     try {
-      return c.json({ job: await jobsService.acceptFailedJob(ctx, c.req.param("id")) });
+      return c.json({ job: await notFoundAs404(() => jobsService.acceptFailedJob(ctx, c.req.param("id"))) });
     } catch (error) {
       if (error instanceof Error && /only failed/i.test(error.message)) throw new HttpError(409, "job_not_failed");
-      throw new HttpError(404, "job_not_found");
+      throw error;
     }
   });
 
@@ -181,4 +194,16 @@ export function jobRoutes(ctx: AppContext): Hono {
   });
 
   return app;
+}
+
+// Maps exactly a missing job to 404 (API31). Every other error propagates to
+// the app's error handler as a 500, so a watcher can tell "this job is gone"
+// (stop) from "the API failed" (retry) — they used to be one 404.
+async function notFoundAs404<T>(operation: () => Promise<T>): Promise<T> {
+  try {
+    return await operation();
+  } catch (error) {
+    if (error instanceof JobNotFoundError) throw new HttpError(404, "job_not_found");
+    throw error;
+  }
 }

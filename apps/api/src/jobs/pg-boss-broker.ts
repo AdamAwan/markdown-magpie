@@ -1,6 +1,7 @@
 import {
   allQueueDefinitions,
   isInteractiveJobType,
+  type JobCapability,
   jobDefinition,
   queueNameForJob,
   queueNamesForCapabilities,
@@ -14,14 +15,17 @@ import { CronExpressionParser } from "cron-parser";
 import { injectTraceContext, type TraceCarrier } from "@magpie/telemetry";
 import type pg from "pg";
 import { PgBoss, type ConstructorOptions, type JobWithMetadata, type Queue } from "pg-boss";
-import type {
-  AdmissionResult,
-  DesiredSchedule,
-  InFlightCapacity,
-  JobBroker,
-  JobListFilters,
-  JobMatch,
-  ScheduleView
+import {
+  JobNotFoundError,
+  type AdmissionResult,
+  type DesiredSchedule,
+  type HeartbeatResult,
+  type InFlightCapacity,
+  type JobAttemptFence,
+  type JobBroker,
+  type JobListFilters,
+  type JobMatch,
+  type ScheduleView
 } from "./broker.js";
 import { logger } from "../logger.js";
 
@@ -82,6 +86,7 @@ function isInteractiveQueue(queueName: string): boolean {
 // Every queue this catalog defines, work and dead-letter alike — the scope of an
 // untyped list() and of locate()'s by-id lookup.
 const ALL_QUEUE_NAMES = queueDefinitions.map((queue) => queue.name);
+const WORK_QUEUE_NAMES = workQueues.map((queue) => queue.name);
 
 // pg-boss job ids are Postgres uuids (gen_random_uuid()).
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -139,6 +144,29 @@ export function queueDefinitionsForType(type: JobType): QueueDefinition[] {
 // pg-boss's own job states that mean "not yet finished" — a job counted here is
 // occupying capacity right now (queued, awaiting retry, or executing).
 const IN_FLIGHT_STATES = ["created", "retry", "active"] as const;
+
+// The in-flight predicate the capacity counts share (countInFlight and
+// createIfAdmitted): an ACTIVE job always counts; a QUEUED one (created/retry)
+// only on a queue in the `queued` parameter — every queue when no live-watcher
+// set narrows it, else only the queues a live watcher serves (RL29). `queued`
+// names a text[] parameter.
+function inFlightCondition(queued: string): string {
+  return `(state = 'active' OR (state IN ('created', 'retry') AND name = ANY(${queued})))`;
+}
+
+// pg-boss's own failure outputs ({ value: { message } }) for a job it failed by
+// itself, mapped to a structured JobError so the console, the terminal-failure
+// side effects and the settlement sweep all see why (J63).
+const PG_BOSS_FAILURES: ReadonlyMap<string, Pick<JobError, "code" | "category">> = new Map([
+  ["job timed out", { code: "job_expired", category: "timeout" }],
+  ["job heartbeat timeout", { code: "job_heartbeat_lost", category: "timeout" }]
+]);
+
+// How long a settlement claim (a row with no settled_at) blocks other settlers
+// (J64). A settler that crashed mid-way leaves such a row; once it is older than
+// this the failure is offered again. Generous next to the side effects' runtime
+// (a few store writes and at most one enqueue).
+const SETTLEMENT_LEASE_SECONDS = 10 * 60;
 
 // The single advisory-lock key ALL AI admission control shares (#288 a and b).
 // createIfAdmitted takes this lock for its count+enqueue critical section, so
@@ -247,6 +275,7 @@ export class PgBossJobBroker implements JobBroker {
   async createIfAdmitted(type: JobType, input: unknown, capacity: InFlightCapacity): Promise<AdmissionResult> {
     const globalNames = this.workQueueNames(capacity.types);
     const reserveNames = capacity.reserve ? this.workQueueNames(capacity.reserve.types) : [];
+    const queuedNames = this.queuedCountedQueueNames(capacity.types, capacity.servedCapabilities);
 
     const client = await this.pool.connect();
     try {
@@ -267,8 +296,8 @@ export class PgBossJobBroker implements JobBroker {
         `SELECT count(*) FILTER (WHERE name = ANY($1))::int AS global,
                 count(*) FILTER (WHERE name = ANY($2))::int AS reserve
            FROM "${this.schema}".job
-          WHERE state = ANY($3) AND name = ANY($1)`,
-        [globalNames, reserveNames, [...IN_FLIGHT_STATES]]
+          WHERE name = ANY($1) AND ${inFlightCondition("$3")}`,
+        [globalNames, reserveNames, queuedNames]
       );
       const inFlight = Number(counts.rows[0]?.global ?? 0);
       const reserveInFlight = Number(counts.rows[0]?.reserve ?? 0);
@@ -350,16 +379,41 @@ export class PgBossJobBroker implements JobBroker {
     return job;
   }
 
-  async heartbeat(id: string): Promise<JobView> {
-    return this.mutate(id, (queueName) => this.boss.touch(queueName, id));
+  // pg-boss's touch() only refreshes an `active` row and, given { id, retryCount },
+  // only the attempt that was claimed (its attempt fence). `affected` therefore
+  // says exactly whether the caller still holds the job (J60).
+  async heartbeat(id: string, fence: JobAttemptFence = {}): Promise<HeartbeatResult> {
+    const located = await this.locate(id);
+    if (!located) throw new JobNotFoundError(id);
+    const response = await this.boss.touch(located.queueName, settleTarget(id, fence));
+    const job = await this.requireJob(located.queueName, id);
+    return { job, active: response.affected > 0 };
   }
 
-  async complete(id: string, output: unknown): Promise<JobView> {
-    return this.mutate(id, (queueName) => this.boss.complete(queueName, id, asRecord(output)));
+  async complete(id: string, output: unknown, fence: JobAttemptFence = {}): Promise<JobView> {
+    const data = asRecord(output);
+    const located = await this.locate(id);
+    if (!located) throw new JobNotFoundError(id);
+    const response = await this.boss.complete(located.queueName, settleTarget(id, fence), data);
+    if (response.affected === 0 && fence.attempt !== undefined) {
+      // The salvage case (J61): this attempt's claim lapsed and pg-boss moved the
+      // job back to `retry`, but nobody has re-claimed it (a re-claim bumps
+      // retryCount past the attempt). The output is valid and already paid for,
+      // so accept it rather than make the queue regenerate it. includeQueued lets
+      // pg-boss complete a not-yet-active row; the read just before keeps it to
+      // this attempt's own retry. (A re-claim landing in the instant between the
+      // two statements is completed with this output too — the re-claiming
+      // watcher's next heartbeat then reports the job inactive and it stops.)
+      const current = await this.locate(id);
+      if (current?.state === "retry" && current.retryCount === fence.attempt) {
+        await this.boss.complete(located.queueName, id, data, { includeQueued: true });
+      }
+    }
+    return this.requireJob(located.queueName, id);
   }
 
-  async fail(id: string, error: JobError): Promise<JobView> {
-    return this.mutate(id, (queueName) => this.boss.fail(queueName, id, error));
+  async fail(id: string, error: JobError, fence: JobAttemptFence = {}): Promise<JobView> {
+    return this.mutate(id, (queueName) => this.boss.fail(queueName, settleTarget(id, fence), error));
   }
 
   // Fail straight to terminal `failed` + dead-letter, skipping remaining retries
@@ -379,12 +433,19 @@ export class PgBossJobBroker implements JobBroker {
   // so it legally updates the active row. boss.fail no-ops on an already-terminal
   // row (its `state < 'completed'` guard), so failTerminal is a safe no-op there
   // too — protecting the completion-replay contract.
-  async failTerminal(id: string, error: JobError): Promise<JobView> {
+  //
+  // Fenced (J60), step 1 is limited to the same attempt step 2 is: otherwise a
+  // lapsed attempt's terminal fail would zero the retry budget of the attempt a
+  // different watcher now holds.
+  async failTerminal(id: string, error: JobError, fence: JobAttemptFence = {}): Promise<JobView> {
     return this.mutate(id, async (queueName) => {
-      await this.boss
-        .getDb()
-        .executeSql(`UPDATE "${this.schema}".job SET retry_limit = 0 WHERE name = $1 AND id = $2`, [queueName, id]);
-      await this.boss.fail(queueName, id, error);
+      const fenced = fence.attempt !== undefined;
+      await this.boss.getDb().executeSql(
+        `UPDATE "${this.schema}".job SET retry_limit = 0
+            WHERE name = $1 AND id = $2${fenced ? " AND state = 'active' AND retry_count = $3" : ""}`,
+        fenced ? [queueName, id, fence.attempt] : [queueName, id]
+      );
+      await this.boss.fail(queueName, settleTarget(id, fence), error);
     });
   }
 
@@ -394,12 +455,64 @@ export class PgBossJobBroker implements JobBroker {
 
   async retry(id: string): Promise<JobView> {
     const located = await this.locate(id);
-    if (!located) throw new Error(`Job not found: ${id}`);
+    if (!located) throw new JobNotFoundError(id);
     if (located.state !== "failed") {
       throw new Error(`Cannot retry job ${id}; only failed jobs can be retried`);
     }
     await this.boss.retry(located.queueName, id);
+    // A manual retry gives the job another life under the same id, so its next
+    // terminal failure must settle again (J65): forget the previous settlement.
+    await this.pool.query("DELETE FROM job_failure_settlements WHERE job_id = $1", [id]);
     return this.requireJob(located.queueName, id);
+  }
+
+  // Claim → run → mark (J64). The claim is an upsert that succeeds only when no
+  // row exists or the existing row is an expired, unsettled claim (a settler
+  // that crashed); a settled row, or a live claim by another replica, makes it
+  // return nothing and this call a no-op. No connection is held across `run`, so
+  // the side effects can use the pool freely.
+  async settleFailure(job: JobView, run: () => Promise<void>): Promise<boolean> {
+    const claim = await this.pool.query(
+      `INSERT INTO job_failure_settlements (job_id, job_type) VALUES ($1, $2)
+       ON CONFLICT (job_id) DO UPDATE SET claimed_at = now()
+         WHERE job_failure_settlements.settled_at IS NULL
+           AND job_failure_settlements.claimed_at < now() - ($3::int * interval '1 second')
+       RETURNING job_id`,
+      [job.id, job.type, SETTLEMENT_LEASE_SECONDS]
+    );
+    if (claim.rowCount === 0) return false;
+    try {
+      await run();
+    } catch (error) {
+      // Release the claim so the next sweep retries; each side effect is
+      // idempotent on the job, so repeating a partial run is safe.
+      await this.pool.query("DELETE FROM job_failure_settlements WHERE job_id = $1 AND settled_at IS NULL", [job.id]);
+      throw error;
+    }
+    await this.pool.query("UPDATE job_failure_settlements SET settled_at = now() WHERE job_id = $1", [job.id]);
+    return true;
+  }
+
+  // pg-boss's failed rows on this catalog's WORK queues (a dead-letter copy is the
+  // same failure, not a second one) since the ledger's epoch, minus those settled
+  // or under a live claim. completed_on is the failure time of a failed row.
+  async listUnsettledFailures(limit: number): Promise<JobView[]> {
+    const result = await this.pool.query<JobRow>(
+      `SELECT ${JOB_ROW_COLUMNS}
+         FROM "${this.schema}".job j
+        WHERE j.name = ANY($1)
+          AND j.state = 'failed'
+          AND j.completed_on >= (SELECT since FROM job_failure_settlement_epoch)
+          AND NOT EXISTS (
+            SELECT 1 FROM job_failure_settlements s
+             WHERE s.job_id = j.id
+               AND (s.settled_at IS NOT NULL OR s.claimed_at >= now() - ($2::int * interval '1 second'))
+          )
+        ORDER BY j.completed_on, j.id
+        LIMIT $3`,
+      [WORK_QUEUE_NAMES, SETTLEMENT_LEASE_SECONDS, limit]
+    );
+    return result.rows.map((row) => toJobView(row.name, row));
   }
 
   async get(id: string): Promise<JobView | undefined> {
@@ -490,7 +603,7 @@ export class PgBossJobBroker implements JobBroker {
   // query its table directly via getDb() — the name predicate prunes to the
   // relevant partitions. Dead-letter queues are excluded (a dead-lettered job is
   // finished work, not in flight).
-  async countInFlight(types: JobType[]): Promise<number> {
+  async countInFlight(types: JobType[], servedCapabilities?: readonly JobCapability[]): Promise<number> {
     const queueNames = this.workQueueNames(types);
     if (queueNames.length === 0) {
       return 0;
@@ -498,10 +611,23 @@ export class PgBossJobBroker implements JobBroker {
     const result = await this.boss.getDb().executeSql(
       `SELECT count(*)::int AS count
          FROM "${this.schema}".job
-        WHERE name = ANY($1) AND state = ANY($2)`,
-      [queueNames, [...IN_FLIGHT_STATES]]
+        WHERE name = ANY($1) AND ${inFlightCondition("$2")}`,
+      [queueNames, this.queuedCountedQueueNames(types, servedCapabilities)]
     );
     return Number(result.rows[0]?.count ?? 0);
+  }
+
+  // The work queues whose QUEUED jobs count toward capacity (RL29): all of the
+  // types' work queues, or — given the live watchers' capabilities — only the
+  // queues one of them can claim from.
+  private queuedCountedQueueNames(types: JobType[], servedCapabilities?: readonly JobCapability[]): string[] {
+    const served = servedCapabilities ? new Set<string>(servedCapabilities) : undefined;
+    return types
+      .flatMap((type) => queueDefinitionsForType(type))
+      .filter(
+        (queue) => !queue.deadLetter && (!served || (queue.capability !== undefined && served.has(queue.capability)))
+      )
+      .map((queue) => queue.name);
   }
 
   // The work queues the given job types fan out to (provider/destination fan-out
@@ -548,11 +674,22 @@ export class PgBossJobBroker implements JobBroker {
         await this.boss.unschedule(schedule.queueName, schedule.storageKey);
         continue;
       }
+      // A tick is only worth running until the next one fires (J66): with no
+      // watcher claiming, an hourly patrol used to pile up one queued tick per
+      // hour (kept 14 days) and replay them all back to back once a watcher
+      // returned — N patrol passes, each fanning out paid AI work. Giving each
+      // tick a queued lifetime of one cron interval lets pg-boss's retention
+      // sweep drop it once its successor exists, so at most one tick per
+      // schedule is ever waiting.
       await this.boss.schedule(
         schedule.queueName,
         schedule.cron,
         { type: schedule.type, input: schedule.input } satisfies JobEnvelope,
-        { key: schedule.storageKey, tz: this.scheduleTimezone }
+        {
+          key: schedule.storageKey,
+          tz: this.scheduleTimezone,
+          retentionSeconds: scheduledTickRetentionSeconds(schedule.cron, this.scheduleTimezone)
+        }
       );
     }
   }
@@ -593,7 +730,7 @@ export class PgBossJobBroker implements JobBroker {
   // pre-operation state would be wrong.
   private async mutate(id: string, operation: (queueName: string) => Promise<unknown>): Promise<JobView> {
     const located = await this.locate(id);
-    if (!located) throw new Error(`Job not found: ${id}`);
+    if (!located) throw new JobNotFoundError(id);
     await operation(located.queueName);
     return this.requireJob(located.queueName, id);
   }
@@ -660,7 +797,7 @@ function toJobView(queueName: string, job: JobRow): JobView {
 
   const state: JobState = job.blocked && (job.state === "created" || job.state === "retry") ? "blocked" : job.state;
   const output = isRecord(job.output) ? job.output : undefined;
-  const error = (state === "retry" || state === "failed") && isJobError(output) ? output : undefined;
+  const error = state === "retry" || state === "failed" ? jobErrorFromOutput(output) : undefined;
   const updatedAt = latestDate(job.createdOn, job.startedOn, job.heartbeatOn, job.completedOn).toISOString();
 
   return {
@@ -695,6 +832,24 @@ function isJobEnvelope(value: unknown): value is JobEnvelope {
     "input" in value &&
     queueDefinitions.some((queue) => queue.type === value.type)
   );
+}
+
+// A failed/retrying row's output is either the JobError our fail path wrote, or
+// pg-boss's own `{ value: { message } }` when pg-boss failed the job itself
+// (expiry, heartbeat loss) — mapped to a structured error so it is never blank.
+function jobErrorFromOutput(output: Record<string, unknown> | undefined): JobError | undefined {
+  if (isJobError(output)) return output;
+  const value = output?.value;
+  const message = isRecord(value) && typeof value.message === "string" ? value.message : undefined;
+  if (!message) return undefined;
+  const known = PG_BOSS_FAILURES.get(message);
+  return { code: known?.code ?? "queue_failure", message, category: known?.category ?? "internal" };
+}
+
+// The id argument for a pg-boss settle/touch: the bare id (unfenced), or the
+// { id, retryCount } attempt pg-boss fences the statement to.
+function settleTarget(id: string, fence: JobAttemptFence): string | { id: string; retryCount: number } {
+  return fence.attempt === undefined ? id : { id, retryCount: fence.attempt };
 }
 
 function isJobError(value: unknown): value is JobError {
@@ -732,6 +887,29 @@ function nextRunFor(cron: string, timezone: string): string | undefined {
     return CronExpressionParser.parse(cron, { tz: timezone }).next().toISOString() ?? undefined;
   } catch {
     return undefined;
+  }
+}
+
+// Bounds for a scheduled tick's queued lifetime. pg-boss requires >= 1s; a floor
+// of a minute keeps an every-minute cron's tick claimable across a claim poll and
+// pg-boss's own maintenance cadence. The ceiling is pg-boss's default retention.
+const MIN_TICK_RETENTION_SECONDS = 60;
+const MAX_TICK_RETENTION_SECONDS = 14 * 24 * 60 * 60;
+
+// One cron interval, in seconds: the gap between the cron's next two fire times
+// (J66). For an irregular cron (e.g. "0 9,17 * * *") this is the upcoming gap,
+// which is the one that matters for the tick about to be sent. An unparseable
+// cron (pg-boss would reject the schedule anyway) falls back to the ceiling,
+// i.e. pg-boss's previous behaviour.
+export function scheduledTickRetentionSeconds(cron: string, timezone: string): number {
+  try {
+    const parsed = CronExpressionParser.parse(cron, { tz: timezone });
+    const first = parsed.next().getTime();
+    const second = parsed.next().getTime();
+    const seconds = Math.round((second - first) / 1000);
+    return Math.min(MAX_TICK_RETENTION_SECONDS, Math.max(MIN_TICK_RETENTION_SECONDS, seconds));
+  } catch {
+    return MAX_TICK_RETENTION_SECONDS;
   }
 }
 
