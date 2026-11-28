@@ -23,6 +23,11 @@ export const claimJobBodySchema = z.object({
 export const heartbeatJobBodySchema = z.object({
   workerName: z.string().trim().min(1).optional()
 });
+// A shutting-down watcher's hand-back of its claimed job (J53). The name lets
+// the registry mark that watcher idle; optional like the heartbeat's.
+export const releaseJobBodySchema = z.object({
+  workerName: z.string().trim().min(1).optional()
+});
 // The watcher's summed provider-reported token usage for the run (#241).
 // Optional end to end: CLI providers report nothing, and older watchers don't
 // send the field at all. Bounded to non-negative integers so a confused

@@ -138,6 +138,19 @@ export async function heartbeatJob(ctx: AppContext, id: string, workerName?: str
   return job;
 }
 
+// A watcher shutting down mid-job hands the job back (J53): the broker returns
+// it to its queue without spending a retry, and the watcher stops showing as
+// busy on it. No side-effect fan-out — nothing finished, so there is no outcome
+// to dispatch; the next claim simply runs the job again (re-attaching any
+// pending repair context, which is keyed by the unchanged job id).
+export async function releaseJob(ctx: AppContext, id: string, workerName?: string): Promise<JobView> {
+  const job = await ctx.jobs.release(id);
+  if (workerName) {
+    await touchWatcher(ctx, { name: workerName, status: "idle" });
+  }
+  return projectJob(job);
+}
+
 export async function cancelJob(ctx: AppContext, id: string): Promise<JobView> {
   const job = await ctx.jobs.cancel(id);
   // A cancelled verify_document will never deliver the verdict its patrol run is

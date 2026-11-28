@@ -100,6 +100,14 @@ export interface JobBroker {
   // already in a terminal state, mirroring `fail` (protects the completion-replay
   // contract).
   failTerminal(id: string, error: JobError): Promise<JobView>;
+  // Hand an ACTIVE job back to its queue, claimable again at once, WITHOUT
+  // spending a retry: the released attempt is not counted, so the job's
+  // retryCount and remaining budget are exactly what they were before the claim
+  // that is being given back. Used by a watcher shutting down mid-job (J53) — the
+  // work was interrupted, not failed. A no-op on a job that is not active (already
+  // completed/failed/cancelled, or already released), so a release that races a
+  // cancellation or a heartbeat-expiry sweep never resurrects the job.
+  release(id: string): Promise<JobView>;
   cancel(id: string): Promise<JobView>;
   retry(id: string): Promise<JobView>;
   get(id: string): Promise<JobView | undefined>;

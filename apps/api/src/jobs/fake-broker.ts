@@ -215,6 +215,26 @@ export class FakeJobBroker implements JobBroker {
     return failed;
   }
 
+  // Mirrors the real broker's release (J53): only an active job moves, back to
+  // the claimable state a fetch would have found it in, with retryCount
+  // untouched (this fake's claim never counts attempts, so leaving it alone is
+  // the faithful mirror of "the released attempt is not counted").
+  async release(id: string): Promise<JobView> {
+    const job = this.getExisting(id);
+    if (job.state !== "active") {
+      return job;
+    }
+    const released: JobView = {
+      ...job,
+      state: job.retryCount > 0 ? "retry" : "created",
+      startedAt: undefined,
+      heartbeatAt: undefined,
+      updatedAt: new Date().toISOString()
+    };
+    this.jobs.set(id, released);
+    return released;
+  }
+
   async cancel(id: string): Promise<JobView> {
     const job = this.getExisting(id);
     // Mirrors pg-boss's cancelJobs SQL (`WHERE state < 'completed'`): cancelling a
