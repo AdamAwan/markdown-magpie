@@ -15,7 +15,7 @@ import type {
   SourceDescriptor,
   SplitDocumentJobInput
 } from "@magpie/core";
-import type { JobState, JobView, verifyGapClosureOutputSchema } from "@magpie/jobs";
+import type { JobView, verifyGapClosureOutputSchema } from "@magpie/jobs";
 import { IN_FLIGHT_JOB_STATES, createJob, parseCompletedJobOutput } from "../jobs/service.js";
 import { withFlowRunLockWaiting } from "../../scheduling/run-lock.js";
 import type { OrchestrationFollowup } from "../../stores/orchestration-followup-store.js";
@@ -142,41 +142,20 @@ const reaskAnswerSchema = answerQuestionOutputSchema.pick({ confidence: true, ci
 const reaskResultSchema = z.object({ answer: reaskAnswerSchema.nullable() });
 type ReaskAnswer = z.infer<typeof reaskAnswerSchema>;
 
-// Non-terminal job states that mean a verify_gap_closure job hasn't finished
-// executing yet — mirrors IN_FLIGHT_JOB_STATES in features/scheduled-tasks/
-// service.ts.
-const VERIFY_GAP_CLOSURE_IN_FLIGHT_STATES: ReadonlySet<JobState> = new Set<JobState>([
-  "created",
-  "active",
-  "retry",
-  "blocked"
-]);
-
-// The proposalId a verify_gap_closure job's input carries (its whole input
-// shape is `{ proposalId }` — see verifyGapClosureInputSchema).
-function jobProposalId(input: unknown): string | undefined {
-  if (!input || typeof input !== "object") {
-    return undefined;
-  }
-  const candidate = (input as { proposalId?: unknown }).proposalId;
-  return typeof candidate === "string" ? candidate : undefined;
-}
-
 // True when a verify_gap_closure job for this proposal is already queued or
 // running. The JobBroker interface's create() takes no dedup option (pg-boss's
 // own singletonKey only dedups under its non-"standard" queue policies, which
-// this catalog does not opt this queue into), so overlap protection is a scan
-// by type + matching proposalId, the same broker-agnostic pattern
-// isTaskRunning uses in features/scheduled-tasks/service.ts. This is
-// belt-and-braces against a race between two concurrent merge cascades; the
-// primary defence is the transition guard in routes.ts (only a genuine
-// draft/branch-pushed/pr-opened → merged transition schedules a cascade at
-// all).
+// this catalog does not opt this queue into), so overlap protection is a
+// broker query by type + in-flight state + matching proposalId (its whole input
+// shape is `{ proposalId }` — see verifyGapClosureInputSchema), the same
+// broker-agnostic pattern isTaskRunning uses in
+// features/scheduled-tasks/service.ts. This is belt-and-braces against a race
+// between two concurrent merge cascades; the primary defence is the transition
+// guard in routes.ts (only a genuine draft/branch-pushed/pr-opened → merged
+// transition schedules a cascade at all).
 async function isVerifyGapClosureInFlight(ctx: AppContext, proposalId: string): Promise<boolean> {
-  const { jobs } = await ctx.jobs.list({ type: "verify_gap_closure", limit: 200 });
-  return jobs.some(
-    (job) => VERIFY_GAP_CLOSURE_IN_FLIGHT_STATES.has(job.state) && jobProposalId(job.input) === proposalId
-  );
+  const jobs = await ctx.jobs.findMatchingJobs({ type: "verify_gap_closure", inFlight: true, input: { proposalId } });
+  return jobs.length > 0;
 }
 
 // True when a verify_gap_closure job for this proposal exists in ANY state —
@@ -187,8 +166,8 @@ async function isVerifyGapClosureInFlight(ctx: AppContext, proposalId: string): 
 // running right now. A verify job that terminally failed exhausted its OWN retry
 // budget — that is the verify job's concern, not an orphaned cascade to re-drive.
 async function hasAnyVerifyGapClosureJob(ctx: AppContext, proposalId: string): Promise<boolean> {
-  const { jobs } = await ctx.jobs.list({ type: "verify_gap_closure", limit: 200 });
-  return jobs.some((job) => jobProposalId(job.input) === proposalId);
+  const jobs = await ctx.jobs.findMatchingJobs({ type: "verify_gap_closure", input: { proposalId } });
+  return jobs.length > 0;
 }
 
 // True when a merged proposal's post-merge cascade has NOT durably completed:
@@ -1252,21 +1231,23 @@ export async function maybeRegenerateStaleProposal(ctx: AppContext, proposalId: 
 // True when a draft_markdown_proposal keyed to this proposal is still queued or
 // running, so we never enqueue a duplicate regeneration for the same PR.
 async function hasInflightRegeneration(ctx: AppContext, proposalId: string): Promise<boolean> {
-  const { jobs } = await ctx.jobs.list({ type: "draft_markdown_proposal", limit: 200 });
-  return jobs.some((job) => {
-    const input = job.input as Partial<DraftMarkdownProposalJobInput>;
-    return input?.regenerateProposalId === proposalId && IN_FLIGHT_JOB_STATES.has(job.state);
+  const jobs = await ctx.jobs.findMatchingJobs({
+    type: "draft_markdown_proposal",
+    inFlight: true,
+    input: { regenerateProposalId: proposalId } satisfies Partial<DraftMarkdownProposalJobInput>
   });
+  return jobs.length > 0;
 }
 
 // The publish_proposal job still queued or running for this proposal, if any —
 // the "publish already requested" signal enqueuePublishProposal dedupes on.
 async function findInflightPublishJob(ctx: AppContext, proposalId: string): Promise<JobView | undefined> {
-  const { jobs } = await ctx.jobs.list({ type: "publish_proposal", limit: 200 });
-  return jobs.find((job) => {
-    const input = job.input as Partial<z.infer<typeof publishProposalInputSchema>>;
-    return input?.proposalId === proposalId && IN_FLIGHT_JOB_STATES.has(job.state);
+  const [job] = await ctx.jobs.findMatchingJobs({
+    type: "publish_proposal",
+    inFlight: true,
+    input: { proposalId } satisfies Partial<z.infer<typeof publishProposalInputSchema>>
   });
+  return job;
 }
 
 // Rebuilds the drafter input for a regeneration straight from the stored proposal —

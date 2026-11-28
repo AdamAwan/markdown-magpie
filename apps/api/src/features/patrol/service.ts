@@ -164,10 +164,11 @@ function makeDefaultVerifyDocument(budget: FanoutBudget): VerifyDocumentFn {
     } satisfies VerifyDocumentJobInput & { provider: AiProviderName };
     try {
       const reuseKey = verifyDocumentReuseKey(input);
-      const { jobs } = await ctx.jobs.list({ type: "verify_document", limit: 200 });
-      const inFlight = jobs.find(
-        (job) => IN_FLIGHT_JOB_STATES.has(job.state) && verifyDocumentReuseKey(job.input) === reuseKey
-      );
+      // Every in-flight verify for this path (not a page of list(), which a busy
+      // queue's retained history could push the in-flight job out of); the full
+      // reuse key is then matched here.
+      const jobs = await ctx.jobs.findMatchingJobs({ type: "verify_document", inFlight: true, input: { path } });
+      const inFlight = jobs.find((job) => verifyDocumentReuseKey(job.input) === reuseKey);
       if (inFlight) {
         // Reuse spends NO budget/capacity: an in-flight job already holds its slot.
         return { pendingJobId: inFlight.id };
@@ -214,7 +215,9 @@ function makeDefaultCorrectDocument(budget: FanoutBudget, deferredPaths: Set<str
     // re-bought (and spends no budget). A failed or cancelled one does not count —
     // that correction never happened.
     const reuseKey = correctDocumentReuseKey(jobInput);
-    const { jobs } = await ctx.jobs.list({ type: "correct_document", limit: 200 });
+    // Every correct_document for this path, any state (completed ones count), from
+    // the broker's input-containment query — never a newest-N page.
+    const jobs = await ctx.jobs.findMatchingJobs({ type: "correct_document", input: { path: input.path } });
     const existing = jobs.find(
       (job) =>
         (IN_FLIGHT_JOB_STATES.has(job.state) || job.state === "completed") &&
