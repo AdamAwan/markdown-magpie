@@ -64,18 +64,53 @@ export async function indexSelection(
   return { ...summary, repository: withoutRemoteCredentials(summary.repository) };
 }
 
+/**
+ * The repositories a flow-scoped read may cover: the destinations of the given
+ * flows (the indexed answer corpus is the destination knowledge base). Used to
+ * narrow knowledge reads for a caller who can only read some flows
+ * (docs/authorization.md AZ32); `undefined` scope is handled by the callers as
+ * "unrestricted" and never reaches here.
+ */
+export function repositoriesForFlows(ctx: AppContext, flowIds: readonly string[]): string[] {
+  const wanted = new Set(flowIds);
+  return [
+    ...new Set(ctx.knowledgeConfig.flows.filter((flow) => wanted.has(flow.id)).map((flow) => flow.destinationId))
+  ];
+}
+
+/**
+ * Hybrid search over the indexed knowledge base. `repositoryIds` restricts the
+ * search to those repositories (a flow-scoped caller); `undefined` searches
+ * everything. An EMPTY restriction returns nothing — never an unscoped search,
+ * which is what the index does with an empty filter.
+ */
 export async function search(
   ctx: AppContext,
   query: string,
-  limit: number
+  limit: number,
+  repositoryIds?: readonly string[]
 ): Promise<Awaited<ReturnType<AppContext["stores"]["knowledgeIndex"]["search"]>>> {
-  return ctx.stores.knowledgeIndex.search(query, limit);
+  if (repositoryIds !== undefined && repositoryIds.length === 0) {
+    return [];
+  }
+  return ctx.stores.knowledgeIndex.search(query, limit, repositoryIds ? [...repositoryIds] : undefined);
 }
 
 // Resolves one indexed section in full — the lookup MCP's kb_citation uses to
-// expand a citation's excerpt into the complete evidence passage.
-export function getSection(ctx: AppContext, id: string): DocumentSection | undefined {
-  return ctx.stores.knowledgeIndex.getSection(id);
+// expand a citation's excerpt into the complete evidence passage. With a
+// `repositoryIds` restriction a section outside those repositories reads as
+// absent (the route's 404), so other flows' sections are not enumerable.
+export function getSection(
+  ctx: AppContext,
+  id: string,
+  repositoryIds?: readonly string[]
+): DocumentSection | undefined {
+  const section = ctx.stores.knowledgeIndex.getSection(id);
+  if (!section || repositoryIds === undefined) {
+    return section;
+  }
+  const repositoryId = ctx.stores.knowledgeIndex.getDocument(section.documentId)?.repositoryId;
+  return repositoryId !== undefined && repositoryIds.includes(repositoryId) ? section : undefined;
 }
 
 export interface PaginationOptions {
@@ -94,13 +129,26 @@ export function listRepositories(
   };
 }
 
+// The indexed documents, paginated. With a `repositoryIds` restriction (a
+// flow-scoped caller) only those repositories' documents are listed and counted,
+// so the page and the total describe the same visible set.
 export function listDocuments(
   ctx: AppContext,
-  pagination: PaginationOptions
+  pagination: PaginationOptions,
+  repositoryIds?: readonly string[]
 ): { documents: ReturnType<AppContext["stores"]["knowledgeIndex"]["listDocuments"]>; total: number } {
+  if (repositoryIds === undefined) {
+    return {
+      documents: ctx.stores.knowledgeIndex.listDocuments(pagination),
+      total: ctx.stores.knowledgeIndex.countDocuments()
+    };
+  }
+  const visible = ctx.stores.knowledgeIndex
+    .listDocuments()
+    .filter((document) => repositoryIds.includes(document.repositoryId));
   return {
-    documents: ctx.stores.knowledgeIndex.listDocuments(pagination),
-    total: ctx.stores.knowledgeIndex.countDocuments()
+    documents: visible.slice(pagination.offset, pagination.offset + pagination.limit),
+    total: visible.length
   };
 }
 
@@ -108,13 +156,27 @@ export function listDocuments(
 // against the live index, so never-cited sections show up as the zeroes they are
 // (spec 2026-07-25-citation-usage-tracking). Read-only — nothing acts on it; it
 // exists so a human trimming the knowledge base can see what a cut would cost.
-export async function citationUsage(ctx: AppContext, options: CitationUsageOptions): Promise<CitationUsageReport> {
-  const usage = await ctx.stores.questionLogs.listSectionCitationUsage();
+// With a `repositoryIds` restriction the report covers only those repositories'
+// documents; usage rows for documents no longer indexed cannot be attributed to a
+// repository, so a restricted report drops them rather than leak their paths.
+export async function citationUsage(
+  ctx: AppContext,
+  options: CitationUsageOptions,
+  repositoryIds?: readonly string[]
+): Promise<CitationUsageReport> {
+  const allUsage = await ctx.stores.questionLogs.listSectionCitationUsage();
+  const allDocuments = ctx.stores.knowledgeIndex.listDocuments();
+  const allSections = ctx.stores.knowledgeIndex.listSections();
+  if (repositoryIds === undefined) {
+    return buildCitationUsageReport({ documents: allDocuments, sections: allSections, usage: allUsage }, options);
+  }
+  const documents = allDocuments.filter((document) => repositoryIds.includes(document.repositoryId));
+  const documentIds = new Set(documents.map((document) => document.id));
   return buildCitationUsageReport(
     {
-      documents: ctx.stores.knowledgeIndex.listDocuments(),
-      sections: ctx.stores.knowledgeIndex.listSections(),
-      usage
+      documents,
+      sections: allSections.filter((section) => documentIds.has(section.documentId)),
+      usage: allUsage.filter((row) => documentIds.has(row.documentId))
     },
     options
   );

@@ -42,7 +42,15 @@ export function questionnaireImportRoutes(ctx: AppContext): Hono {
       bytes: new Uint8Array(await file.arrayBuffer())
     });
     if (!outcome.ok) {
-      throw new HttpError(outcome.code === "flow_not_found" ? 404 : 400, outcome.code);
+      // Oversized uploads — too many bytes, or an archive that inflates past the
+      // decompression bounds (Q37) — are 413; every other parse failure is 400.
+      const status =
+        outcome.code === "flow_not_found"
+          ? 404
+          : outcome.code === "file_too_large" || outcome.code === "workbook_too_large"
+            ? 413
+            : 400;
+      throw new HttpError(status, outcome.code);
     }
     return c.json({ import: outcome.import }, 202);
   });

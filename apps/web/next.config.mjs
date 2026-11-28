@@ -12,17 +12,25 @@ const devApiProxy = process.env.MAGPIE_DEV_API_PROXY?.replace(/\/+$/, "");
 
 // Standard security headers applied to every route as defense-in-depth. HSTS is
 // only honoured by browsers over HTTPS, so it is inert in plain-HTTP local dev;
-// production is expected to terminate TLS upstream.
+// production is expected to terminate TLS upstream. The Content-Security-Policy
+// is NOT here: it carries a per-request script nonce, so src/proxy.ts sets it
+// (policy in src/lib/csp.ts).
 const securityHeaders = [
   { key: "X-Content-Type-Options", value: "nosniff" },
   { key: "X-Frame-Options", value: "SAMEORIGIN" },
   { key: "Referrer-Policy", value: "no-referrer" },
-  { key: "Strict-Transport-Security", value: "max-age=15552000; includeSubDomains" }
+  { key: "Strict-Transport-Security", value: "max-age=15552000; includeSubDomains" },
+  // The console signs in by full-page redirect (no popups), so it can isolate
+  // its browsing context from cross-origin openers.
+  { key: "Cross-Origin-Opener-Policy", value: "same-origin" },
+  { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=(), payment=(), usb=()" }
 ];
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   distDir,
+  // Don't advertise the framework (X-Powered-By: Next.js).
+  poweredByHeader: false,
   outputFileTracingRoot: workspaceRoot,
   // Enable SWC's Emotion transform: readable class labels in dev + source maps, and
   // `css` prop support. Replaces the need for a Babel plugin.

@@ -337,9 +337,10 @@ way to fill `POST /api/questionnaires`, not a second questionnaire model.
   (when more than one contributes) and by the running section heading. A workbook whose
   domains are split across tabs is one questionnaire to the customer who sent it, and
   splitting it would fragment the worksheet, the register and the approval flow.
-- **Q36** — **Never a dead end.** An unreadable, oversized, empty or unsupported file 400s at
-  upload with its reason and stores nothing. A failed or dead-lettered mapping job leaves the
-  import `failed` **with its grid intact**, so the operator maps by hand or the job re-runs —
+- **Q36** — **Never a dead end.** An unreadable, empty or unsupported file 400s at upload
+  with its reason and stores nothing; an oversized one (`file_too_large`, or
+  `workbook_too_large` per Q37) is a 413 with its reason and likewise stores nothing. A
+  failed or dead-lettered mapping job leaves the import `failed` **with its grid intact**, so the operator maps by hand or the job re-runs —
   only a bad *parse* needs the file again. `failed` is terminal and carries the reason: the
   enqueue-time failures record theirs directly, and a job that exhausts its retries records
   its error through the same terminal-failure hook the source-sync run and the questionnaire
@@ -348,6 +349,16 @@ way to fill `POST /api/questionnaires`, not a second questionnaire model.
   the dead-letter queue and the console shows a `mapping` badge that never resolves. A model
   that classifies nothing yields a blank proposal the operator fills in. Paste remains
   available throughout.
+- **Q37** — **Bounded decompression (zip bombs).** The 5 MB upload cap bounds the
+  *compressed* bytes only, and deflate expands up to ~1000:1, so `parse-xlsx.ts` MUST
+  inflate through a streaming, bounded unzip rather than inflating the archive whole: the
+  compressed bytes are fed in 16 KiB steps and the parse is abandoned the moment the
+  archive has more than **1 000 entries**, one read part inflates past **32 MiB**, or the
+  read parts together pass **64 MiB** (`MAX_XLSX_ENTRIES`, `MAX_XLSX_ENTRY_BYTES`,
+  `MAX_XLSX_TOTAL_BYTES`) — reported as `413 workbook_too_large`. Only the `xl/` XML and
+  relationship parts the reader walks are inflated at all (images, embedded objects and
+  the like are skipped), and a read part whose data never finishes (a truncated upload) is
+  `unreadable_file`, never parsed with that part silently missing.
 
 ## API surface
 
@@ -451,7 +462,7 @@ console/API-only.
 | Job contract (`answer_question_batch`, reconcile result) | `packages/jobs/src/schemas.ts`, `packages/jobs/src/catalog.ts` |
 | Console (index + detail + badges) | `apps/web/src/components/QuestionnaireCreateList.tsx`, `QuestionnaireDetail.tsx`, `questionnaireItems.ts` |
 | Console: side-by-side imported review + paste parsing | `apps/web/src/components/ImportedAnswerPanel.tsx`, `questionnaireItems.ts` (`parseTwoColumnPaste`) |
-| Upload: XLSX/CSV extraction + bounds | `apps/api/src/features/questionnaire-imports/{parse,parse-xlsx,parse-csv}.ts` |
+| Upload: XLSX/CSV extraction + bounds (incl. Q37 decompression bounds) | `apps/api/src/features/questionnaire-imports/{parse,parse-xlsx,parse-csv}.ts` |
 | Upload: mapping → questions (preview AND confirm) | `apps/api/src/features/questionnaire-imports/apply-mapping.ts` |
 | Upload: staging service, routes, confirm body | `apps/api/src/features/questionnaire-imports/{service,routes,schema}.ts` |
 | Upload: staging store + migration | `apps/api/src/stores/{questionnaire-import-store,postgres-questionnaire-import-store}.ts`, `packages/db/migrations/0066_questionnaire_imports.sql` |
@@ -467,7 +478,7 @@ console/API-only.
 `apps/api/src/stores/asserted-claims-store.test.ts`,
 `apps/api/src/stores/{questionnaire-store,postgres-questionnaire-store}.test.ts`,
 `apps/web/src/components/{QuestionnaireCreateList,QuestionnaireDetail,questionnaireItems,ImportedAnswerPanel,ImportMappingPreview}.test.tsx`.
-Upload: `apps/api/src/features/questionnaire-imports/{parse,parse-csv,apply-mapping,service,routes}.test.ts`
+Upload: `apps/api/src/features/questionnaire-imports/{parse,parse-xlsx,parse-csv,apply-mapping,service,routes}.test.ts`
 (the XLSX fixture at `fixtures/sample.xlsx` deliberately mixes shared strings, an inline
 string, a numeric cell and a sparse row) and
 `apps/api/src/stores/questionnaire-import-store.test.ts`.

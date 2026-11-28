@@ -11,7 +11,12 @@ import * as configService from "./service.js";
 export function configRoutes(ctx: AppContext): Hono {
   const app = new Hono();
 
-  app.get("/", requireScopes("manage:admin"), (c) => c.json(configService.getRuntimeConfig(ctx)));
+  // The masked runtime config is admin material (provider endpoints, store
+  // wiring, flow config): on a provider without per-user scopes it needs the
+  // admin role, like the write below (docs/authorization.md AZ27).
+  app.get("/", requireScopes("manage:admin"), requirePrivilege(ctx, "admin"), (c) =>
+    c.json(configService.getRuntimeConfig(ctx))
+  );
 
   app.post("/", requireScopes("manage:admin"), requirePrivilege(ctx, "admin"), async (c) => {
     const payload = await readJsonBody<{

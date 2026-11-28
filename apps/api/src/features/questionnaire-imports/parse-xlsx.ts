@@ -1,4 +1,4 @@
-import { strFromU8, unzipSync } from "fflate";
+import { strFromU8, Unzip, UnzipInflate } from "fflate";
 import { XMLParser } from "fast-xml-parser";
 import type { SheetGrid } from "@magpie/core";
 
@@ -84,6 +84,91 @@ function columnIndex(reference: string): number | undefined {
     index = index * 26 + (char.charCodeAt(0) - 64);
   }
   return index - 1;
+}
+
+// Decompression bounds (docs/questionnaires.md Q37). An upload is capped at 5 MB
+// COMPRESSED, but deflate expands up to ~1000:1, so a crafted 5 MB archive could
+// otherwise inflate to gigabytes in the request (a zip bomb). Real questionnaire
+// workbooks are a few dozen parts and a few MB of XML; these caps sit far above
+// that and far below what would hurt the API process.
+export const MAX_XLSX_ENTRIES = 1000;
+export const MAX_XLSX_ENTRY_BYTES = 32 * 1024 * 1024;
+export const MAX_XLSX_TOTAL_BYTES = 64 * 1024 * 1024;
+// The compressed bytes are fed to the inflater this many at a time, so no single
+// inflate step can produce more than ~1000x this before the caps are checked.
+const FEED_CHUNK_BYTES = 16 * 1024;
+
+// Thrown when an archive exceeds a decompression bound; parse.ts reports it as
+// `workbook_too_large` (413) rather than `unreadable_file`.
+export class WorkbookTooLargeError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "WorkbookTooLargeError";
+  }
+}
+
+// Only the XML parts the reader walks are ever inflated; images, embedded
+// objects, printer settings and the like are skipped without decompressing.
+function isReadPart(name: string): boolean {
+  return name.startsWith("xl/") && (name.endsWith(".xml") || name.endsWith(".rels"));
+}
+
+// Streaming, bounded unzip: counts entries, and the decompressed bytes of each
+// read part and of the whole archive, as they are produced — aborting the moment
+// any bound is crossed instead of after a bomb has already been expanded.
+function unzipBounded(bytes: Uint8Array): Record<string, Uint8Array> {
+  const entries: Record<string, Uint8Array> = {};
+  // Read parts whose data began but never finished: a truncated upload. Reported
+  // as unreadable rather than parsed with a part silently missing.
+  const pending = new Set<string>();
+  let entryCount = 0;
+  let totalBytes = 0;
+  const unzip = new Unzip((file) => {
+    entryCount += 1;
+    if (entryCount > MAX_XLSX_ENTRIES) {
+      throw new WorkbookTooLargeError(`archive has more than ${MAX_XLSX_ENTRIES} entries`);
+    }
+    if (!isReadPart(file.name)) {
+      return;
+    }
+    const chunks: Uint8Array[] = [];
+    let entryBytes = 0;
+    pending.add(file.name);
+    file.ondata = (error, chunk, final) => {
+      if (error) {
+        throw error;
+      }
+      entryBytes += chunk.length;
+      totalBytes += chunk.length;
+      if (entryBytes > MAX_XLSX_ENTRY_BYTES) {
+        throw new WorkbookTooLargeError(`${file.name} inflates past ${MAX_XLSX_ENTRY_BYTES} bytes`);
+      }
+      if (totalBytes > MAX_XLSX_TOTAL_BYTES) {
+        throw new WorkbookTooLargeError(`archive inflates past ${MAX_XLSX_TOTAL_BYTES} bytes`);
+      }
+      chunks.push(chunk);
+      if (final) {
+        const joined = new Uint8Array(entryBytes);
+        let offset = 0;
+        for (const part of chunks) {
+          joined.set(part, offset);
+          offset += part.length;
+        }
+        entries[file.name] = joined;
+        pending.delete(file.name);
+      }
+    };
+    file.start();
+  });
+  unzip.register(UnzipInflate);
+  for (let offset = 0; offset < bytes.length; offset += FEED_CHUNK_BYTES) {
+    const end = Math.min(offset + FEED_CHUNK_BYTES, bytes.length);
+    unzip.push(bytes.subarray(offset, end), end === bytes.length);
+  }
+  if (pending.size > 0) {
+    throw new Error(`truncated archive: ${[...pending].join(", ")} is incomplete`);
+  }
+  return entries;
 }
 
 function parsePart(entries: Record<string, Uint8Array>, path: string): unknown {
@@ -177,9 +262,10 @@ function readSheetRows(entries: Record<string, Uint8Array>, path: string, shared
 }
 
 // Throws on anything it cannot read (a corrupt archive, a missing workbook
-// part); parse.ts turns that into an `unreadable_file` result.
+// part); parse.ts turns that into an `unreadable_file` result. Throws
+// WorkbookTooLargeError when the archive breaks a decompression bound.
 export function parseXlsx(bytes: Uint8Array): SheetGrid[] {
-  const entries = unzipSync(bytes);
+  const entries = unzipBounded(bytes);
   const sharedStrings = readSharedStrings(entries);
   const relationships = readRelationships(entries);
   const sheets: SheetGrid[] = [];

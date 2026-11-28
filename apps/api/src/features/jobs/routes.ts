@@ -7,6 +7,7 @@ import { HttpError } from "../../http/errors.js";
 import { readJsonBody } from "../../http/body.js";
 import { JobNotFoundError } from "../../jobs/broker.js";
 import * as jobsService from "./service.js";
+import { visibleJob } from "./visibility.js";
 import {
   claimJobBodySchema,
   completeJobBodySchema,
@@ -36,7 +37,9 @@ export function jobRoutes(ctx: AppContext): Hono {
   app.get("/", requireScopes("read:knowledge"), async (c) => {
     const parsed = listJobsQuerySchema.safeParse(c.req.query());
     if (!parsed.success) throw new HttpError(400, "invalid_job_filters");
-    return c.json(await jobsService.listJobs(ctx, parsed.data));
+    const result = await jobsService.listJobs(ctx, parsed.data);
+    // Content of jobs in flows the caller cannot see is redacted (AZ34).
+    return c.json({ ...result, jobs: result.jobs.map((job) => visibleJob(ctx, c, job)) });
   });
 
   app.get("/schedules", requireScopes("read:knowledge"), async (c) =>
@@ -67,7 +70,7 @@ export function jobRoutes(ctx: AppContext): Hono {
     const signal = c.req.raw.signal;
     try {
       const result = await jobsService.waitForJob(ctx, c.req.param("id"), { signal });
-      return c.json({ job: result.job }, result.terminal ? 200 : 202);
+      return c.json({ job: visibleJob(ctx, c, result.job) }, result.terminal ? 200 : 202);
     } catch {
       if (signal.aborted) {
         // Nobody is listening; answer without a body rather than a misleading 404.
@@ -207,7 +210,7 @@ export function jobRoutes(ctx: AppContext): Hono {
   app.get("/:id", requireScopes("read:knowledge"), async (c) => {
     const job = await jobsService.getJob(ctx, c.req.param("id"));
     if (!job) throw new HttpError(404, "job_not_found");
-    return c.json({ job });
+    return c.json({ job: visibleJob(ctx, c, job) });
   });
 
   return app;

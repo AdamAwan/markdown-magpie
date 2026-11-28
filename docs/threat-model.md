@@ -47,6 +47,7 @@ Every place the system reads text it did not author is a potential injection vec
 | Source-repo Markdown & git diffs | The synced source repositories | Maintenance/generative flows and the agent CLI (`apps/watcher/src/runners/cli.ts`) |
 | Gap/cluster summaries | Derived from logged questions & answers | `reconcile_gap_clusters`, `draft_markdown_proposal` |
 | Fetched web pages (allowlisted `internet` sources, #242) | Whoever controls the allowlisted site | `fetch_url` in the tool loop (`apps/watcher/src/fetch-url.ts`) / claude's domain-scoped WebFetch (`cli.ts`) |
+| Uploaded questionnaire files (`.xlsx` / `.csv`) | Any caller with `ask:knowledge` on the flow | Parsed in the API (TM22); a bounded cell sample reaches `map_questionnaire_columns`, imported answers reach answer adjudication ([questionnaires.md](./questionnaires.md) Q20/Q31) |
 
 ### Threats considered
 
@@ -56,7 +57,9 @@ Every place the system reads text it did not author is a potential injection vec
 | **T2** | **Path / write-scope escape** — generated output tries to write or delete outside the destination's configured subpath (path traversal, absolute paths, symlinks, touching CI, manifests or secrets). Multi-file changesets (dedupe, split, fold) are the exposed surface: the model chooses their paths. | Mitigated by TM5. |
 | **T3** | **Command injection** — injected text tries to execute commands on the watcher host via the agent CLI. | Mitigated by TM4. |
 | **T4** | **Unreviewed publication** — generated content reaches the source of truth without a human approving it. | Mitigated by the human-review gate (TM11–TM15). |
-| **T5** | **Git transport abuse** — a source/destination URL selects a dangerous git transport: `ext::sh -c …` (RCE on the watcher host), `file://` / internal `http://` (SSRF), or a `-`-prefixed URL misread as a git option (argument injection). | Mitigated by TM9. |
+| **T5** | **Git transport abuse** — a source/destination URL selects a dangerous git transport: `ext::sh -c …` (RCE on the watcher host), `file://` / internal `http://` (SSRF), or a `-`-prefixed URL misread as a git option (argument injection). | Mitigated by TM8. |
+| **T6** | **Hostile upload** — a crafted archive (a zip bomb) exhausts API memory/CPU while it is parsed, before any model sees it. | Mitigated by TM22. |
+| **T7** | **Script injection in the console** — model output, source text or an uploaded cell rendered by the review console runs script there, where the reviewer's tokens live. | Contained by TM23. |
 
 ## Controls in place
 
@@ -231,6 +234,25 @@ without realising it was load-bearing.
   Every git child also runs with `GIT_TERMINAL_PROMPT=0`, so a missing credential fails
   fast instead of hanging on a prompt.
 
+- **TM22** — **Untrusted uploads are parsed under hard bounds** (mitigates T6). An
+  uploaded questionnaire is capped at 5 MB compressed, and its `.xlsx` archive is inflated
+  through a streaming, bounded unzip that abandons the parse as soon as it exceeds 1 000
+  entries, 32 MiB for one part or 64 MiB in total, inflating only the XML parts the reader
+  walks (`apps/api/src/features/questionnaire-imports/parse-xlsx.ts`;
+  [questionnaires.md](./questionnaires.md) Q37). **Invariant to preserve:** never inflate
+  an uploaded archive whole (`unzipSync`) or without these bounds.
+- **TM23** — **The console runs only its own scripts** (contains T7). The web console's
+  per-request Content-Security-Policy allows scripts only with that request's nonce
+  (`'strict-dynamic'`, no `'unsafe-inline'`, no `'unsafe-eval'` in production), so markup
+  injected through rendered content — an inline event handler, a `<script>` in parsed HTML
+  — does not execute, and `connect-src` limits where a script could send data to the
+  console's own origin, the configured API and the identity provider
+  (`apps/web/src/proxy.ts`, `apps/web/src/lib/csp.ts`). This is defence in depth beneath
+  rendering AI Markdown without raw HTML (`react-markdown` without `rehype-raw`).
+  **Invariants to preserve:** keep scripts nonce-only (never add `'unsafe-inline'` or a
+  third-party script origin to `script-src`), and keep raw-HTML rendering of untrusted
+  Markdown off.
+
 ## The mandatory human-review gate (primary control)
 
 This is the control that makes T1 tolerable — the backstop for everything a steered model
@@ -329,6 +351,8 @@ The non-negotiable is TM9: the human-review gate stays mandatory and enforced.
 | Path-scoping at publish (TM5) | `apps/watcher/src/runners/publication.ts` (`assertPublishablePaths`), `packages/git/src/index.ts` (`resolveTargetPath`, `assertWithinRoot`, `assertNoSymlinkOnPath`, `assertRealParentWithin`) |
 | Watcher HTTP-only, no DB (TM6) | `apps/watcher/src/http-client.ts`, `apps/watcher/src/worker-loop.ts` |
 | Bounded, allowlisted web fetch (TM7) | `apps/watcher/src/fetch-url.ts`, `apps/watcher/src/source-tools.ts`, `apps/watcher/src/runners/source-agent.ts` |
+| Bounded upload parsing (TM22) | `apps/api/src/features/questionnaire-imports/{parse,parse-xlsx}.ts` |
+| Console CSP (TM23) | `apps/web/src/proxy.ts`, `apps/web/src/lib/csp.ts`, `apps/web/src/app/layout.tsx` (nonce on the runtime-config script) |
 | Git-transport allowlist (TM8) | `packages/core/src/index.ts` (`isAllowedGitCloneUrl`), `packages/git/src/index.ts` (`assertAllowedGitUrl`, `GIT_ALLOW_PROTOCOL`), `packages/jobs/src/schemas.ts`, `apps/api/src/features/jobs/service.ts` |
 | Credential hygiene for git remotes (TM36–TM38) | `packages/git/src/credentials.ts` (`stripUrlCredentials`, `redactCredentials`, `embeddedHttpsCredentials`), `packages/git/src/run-git.ts` (`GitCommandError`), `packages/git/src/index.ts` (`ensureGitCheckout`, `buildGitAuthEnv`, `assertAllowedGitUrl`), `apps/api/src/platform/repositories.ts` (`withoutRemoteCredentials`), `apps/api/src/features/knowledge/service.ts` |
 | Review gate: PR-only publish, no auto-merge (TM9–TM12) | `apps/api/src/features/proposals/{routes,service}.ts`, `packages/git/src/index.ts` (`LocalGitProposalPublisher`, `applyPullRequestTransition`) |
@@ -358,6 +382,10 @@ The non-negotiable is TM9: the human-review gate stays mandatory and enforced.
 - Credential hygiene (TM36–TM38): `packages/git/src/{credentials,run-git,auth-env,ensure-checkout}.test.ts`,
   `apps/api/src/features/knowledge/repositories-credentials.test.ts`,
   `apps/watcher/src/source-workspace.test.ts`, `apps/watcher/src/runners/publication.test.ts`.
+- Bounded upload parsing (TM22): `apps/api/src/features/questionnaire-imports/{parse-xlsx,routes}.test.ts`.
+- Console CSP (TM23): `apps/web/src/lib/csp.test.tsx` (the policy); verified in Chromium
+  against the production build (no violations; inline handlers and exfiltration fetches
+  blocked) when it landed — there is no automated browser test of it.
 - Review gate — merge guard & no self-asserted merge (TM12):
   `apps/api/src/features/proposals/routes.merge-guard.test.ts`,
   `apps/api/src/features/proposals/{routes.merge,routes.merge-idempotency}.test.ts`.

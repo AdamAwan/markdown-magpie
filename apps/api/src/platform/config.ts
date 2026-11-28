@@ -33,7 +33,7 @@ import {
 type StoreBackend = "memory" | "postgres";
 
 // The per-store backend overrides. Each defaults to STORAGE_BACKEND when unset.
-const STORE_ENV_NAMES = [
+export const STORE_ENV_NAMES = [
   "KNOWLEDGE_STORE",
   "KNOWLEDGE_CHANGE_STORE",
   "QUESTION_LOG_STORE",
@@ -80,6 +80,11 @@ export interface AppConfig {
     allowedOrigins: "*" | string[];
   };
   nodeEnv: string;
+  // The production safety overrides in effect (see productionSafetyIssues). Each
+  // is true only when NODE_ENV=production AND its MAGPIE_ALLOW_* var is exactly
+  // "true", i.e. an operator deliberately booted that insecure posture in
+  // production. Read by the startup security-posture log.
+  productionOverrides: ProductionOverrides;
   logStartupConfig: boolean;
   apiShutdownDrainMs: number;
   aiProvider: AiProviderName;
@@ -372,6 +377,9 @@ const schema = z
     PORT: optionalPositiveInt,
     CORS_ALLOWED_ORIGINS: optionalString,
     NODE_ENV: optionalString,
+    MAGPIE_ALLOW_UNAUTHENTICATED_PRODUCTION: optionalString,
+    MAGPIE_ALLOW_MEMORY_STORAGE_IN_PRODUCTION: optionalString,
+    MAGPIE_ALLOW_ANY_CORS_ORIGIN_IN_PRODUCTION: optionalString,
     LOG_STARTUP_CONFIG: optionalString,
     API_SHUTDOWN_DRAIN_MS: optionalPositiveInt,
 
@@ -506,6 +514,95 @@ function authorizationConfigIssues(env: NodeJS.ProcessEnv): KnowledgeConfigIssue
   ];
 }
 
+// The explicit opt-outs from the production safety checks below, one per insecure
+// posture, so an operator can never enable more than they named.
+interface ProductionOverrides {
+  unauthenticated: boolean;
+  memoryStorage: boolean;
+  anyCorsOrigin: boolean;
+}
+
+export const PRODUCTION_OVERRIDE_ENV = {
+  unauthenticated: "MAGPIE_ALLOW_UNAUTHENTICATED_PRODUCTION",
+  memoryStorage: "MAGPIE_ALLOW_MEMORY_STORAGE_IN_PRODUCTION",
+  anyCorsOrigin: "MAGPIE_ALLOW_ANY_CORS_ORIGIN_IN_PRODUCTION"
+} as const satisfies Record<keyof ProductionOverrides, string>;
+
+function isProduction(env: NodeJS.ProcessEnv): boolean {
+  return env.NODE_ENV?.trim().toLowerCase() === "production";
+}
+
+// An override counts only when spelled exactly "true" (any case): like
+// AUTH_REQUIRED's fail-closed parsing, a blank or typo'd value keeps the check on.
+function overrideSet(env: NodeJS.ProcessEnv, name: string): boolean {
+  return env[name]?.trim().toLowerCase() === "true";
+}
+
+function productionOverrides(env: NodeJS.ProcessEnv): ProductionOverrides {
+  const production = isProduction(env);
+  return {
+    unauthenticated: production && overrideSet(env, PRODUCTION_OVERRIDE_ENV.unauthenticated),
+    memoryStorage: production && overrideSet(env, PRODUCTION_OVERRIDE_ENV.memoryStorage),
+    anyCorsOrigin: production && overrideSet(env, PRODUCTION_OVERRIDE_ENV.anyCorsOrigin)
+  };
+}
+
+// The stores whose backend resolves to in-memory: STORAGE_BACKEND (default
+// memory) cascades to every store unless a per-store override names postgres.
+function memoryBackedStores(env: NodeJS.ProcessEnv): StoreEnvName[] {
+  const fallback = env.STORAGE_BACKEND?.trim() || "memory";
+  return STORE_ENV_NAMES.filter((name) => (env[name]?.trim() || fallback) === "memory");
+}
+
+// Postures that are fine for local dev and tests but must never reach a
+// production deployment by accident (docs/configuration.md, "Production safety").
+// Keyed on NODE_ENV=production — which the Docker image sets — so tests and local
+// runs, which leave NODE_ENV unset, are unaffected. Each check has its own
+// clearly-named MAGPIE_ALLOW_* override for an operator who really means it:
+//   - auth disabled (AUTH_REQUIRED=false): every route open to anyone;
+//   - an in-memory store: its data is lost on every restart;
+//   - CORS allowing any origin: any web page can call the API from a browser.
+function productionSafetyIssues(env: NodeJS.ProcessEnv): KnowledgeConfigIssue[] {
+  if (!isProduction(env)) {
+    return [];
+  }
+  const overrides = productionOverrides(env);
+  const issues: KnowledgeConfigIssue[] = [];
+  if (!isAuthRequired(env.AUTH_REQUIRED) && !overrides.unauthenticated) {
+    issues.push({
+      variable: "AUTH_REQUIRED",
+      message:
+        "is false while NODE_ENV=production: the API would accept every request without a token. Enable auth " +
+        `(unset AUTH_REQUIRED and configure AUTH_*), or set ${PRODUCTION_OVERRIDE_ENV.unauthenticated}=true if ` +
+        "this deployment is deliberately unauthenticated (e.g. a private e2e stack)."
+    });
+  }
+  const memoryStores = memoryBackedStores(env);
+  if (memoryStores.length > 0 && !overrides.memoryStorage) {
+    issues.push({
+      variable: "STORAGE_BACKEND",
+      message:
+        `resolves to in-memory storage for ${memoryStores.join(", ")} while NODE_ENV=production: that data is ` +
+        "lost on every restart. Set STORAGE_BACKEND=postgres (and leave the per-store overrides unset), or set " +
+        `${PRODUCTION_OVERRIDE_ENV.memoryStorage}=true to run in-memory deliberately.`
+    });
+  }
+  if (parseAllowedOrigins(emptyToUndefinedString(env.CORS_ALLOWED_ORIGINS)) === "*" && !overrides.anyCorsOrigin) {
+    issues.push({
+      variable: "CORS_ALLOWED_ORIGINS",
+      message:
+        'allows any origin ("*", the default when unset) while NODE_ENV=production. Set it to the console ' +
+        "origin(s), comma-separated (e.g. https://magpie.example.com), or set " +
+        `${PRODUCTION_OVERRIDE_ENV.anyCorsOrigin}=true to allow every origin deliberately.`
+    });
+  }
+  return issues;
+}
+
+function emptyToUndefinedString(value: string | undefined): string | undefined {
+  return value === undefined || value.trim() === "" ? undefined : value;
+}
+
 // Reads and validates the API's environment once at startup, returning a typed
 // config object. Throws a single aggregated Error naming every offending var on
 // invalid/missing-required config. `env` is injectable so tests need not mutate
@@ -518,7 +615,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
         const name = issue.path.join(".") || "(root)";
         return `  - ${name}: ${issue.message}`;
       });
-  for (const issue of [...knowledgeConfigIssues(env), ...authorizationConfigIssues(env)]) {
+  for (const issue of [
+    ...knowledgeConfigIssues(env),
+    ...authorizationConfigIssues(env),
+    ...productionSafetyIssues(env)
+  ]) {
     lines.push(`  - ${issue.variable}: ${issue.message}`);
   }
   if (!result.success || lines.length > 0) {
@@ -556,6 +657,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       allowedOrigins: parseAllowedOrigins(parsed.CORS_ALLOWED_ORIGINS)
     },
     nodeEnv: parsed.NODE_ENV ?? "development",
+    productionOverrides: productionOverrides(env),
     logStartupConfig: parsed.LOG_STARTUP_CONFIG !== "false",
     apiShutdownDrainMs: parsed.API_SHUTDOWN_DRAIN_MS ?? 10_000,
     aiProvider: parsed.AI_PROVIDER as AiProviderName,

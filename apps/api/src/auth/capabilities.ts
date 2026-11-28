@@ -165,6 +165,41 @@ export function can(ctx: AppContext, c: Context, capability: KnowledgeCapability
   return allowed;
 }
 
+// Whether the caller holds ANY of the capabilities on the flow. Read routes use
+// this where more than one capability legitimately exposes the same material —
+// e.g. the indexed knowledge base is the published answer corpus, which an `ask`
+// grant already reaches through /api/retrieve.
+export function canAny(
+  ctx: AppContext,
+  c: Context,
+  capabilities: readonly KnowledgeCapability[],
+  flowId: string | undefined
+): boolean {
+  return capabilities.some((capability) => can(ctx, c, capability, flowId));
+}
+
+// The configured flows whose resources a read route may return to this caller,
+// for filtering a list (docs/authorization.md AZ30). `undefined` means the read
+// is UNRESTRICTED — flow-scoping inactive, auth disabled, a service principal, or
+// a wildcard ("*") grant of one of the capabilities — so flow-less resources stay
+// visible too. Otherwise the caller sees exactly the listed flows' resources and
+// no flow-less ones (a "*" grant is the only way to match a flow-less resource,
+// AZ14); an empty array means nothing is visible.
+export function readableFlowIds(
+  ctx: AppContext,
+  c: Context,
+  capabilities: readonly KnowledgeCapability[]
+): string[] | undefined {
+  if (canAny(ctx, c, capabilities, undefined)) {
+    return undefined;
+  }
+  const grants = ctx.knowledgeConfig.roleGrants;
+  const principal = c.get("principal");
+  return ctx.knowledgeConfig.flows
+    .filter((flow) => capabilities.some((capability) => principalHasCapability(grants, principal, capability, flow.id)))
+    .map((flow) => flow.id);
+}
+
 // Guard form: throws 403 forbidden (matching requireScopes' shape) when the
 // principal lacks the capability on the flow.
 export function assertCan(

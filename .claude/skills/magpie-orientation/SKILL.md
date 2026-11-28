@@ -292,6 +292,10 @@ design in `maintenance-redesign.md`). When in doubt, trust the code.
     not 403 (`docs/authorization.md`). On Entra (delegated scopes reach every user)
     privileged routes also need the `admin`/`ops` capability on `*` from a human's
     roles (`requirePrivilege`, AZ27), and the API won't boot without role grants.
+    Read routes filter lists to readable flows (`readableFlowIds`), and job reads
+    redact other flows' input/output rather than hide rows (AZ30–AZ34). With
+    `NODE_ENV=production` the API refuses auth-off, in-memory stores and CORS `*`
+    unless a `MAGPIE_ALLOW_*` override is set (`docs/configuration.md`).
 19. **MCP** (`apps/mcp`) — thin client over the HTTP API, stdio + Streamable-HTTP
     transports, **ten tools**: `kb_ask`, `kb_search`, `kb_citation`, `kb_feedback`,
     `kb_flows`, `kb_outline`, `kb_seed`, `kb_questionnaire_create`,

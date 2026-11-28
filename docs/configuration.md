@@ -47,13 +47,13 @@ bad value instead (noted per variable).
 | Variable | Read by | Default | Class | Notes |
 | --- | --- | --- | --- | --- |
 | `DATABASE_URL` | api, `scripts/migrate.mjs`, `scripts/eval-golden.ts` | — | **essential** | Postgres URL. Backs every store and the pg-boss job queue. Required by the API even with `STORAGE_BACKEND=memory`. |
-| `STORAGE_BACKEND` | api | `memory` | **essential** in practice | `memory` \| `postgres`. Every real deployment sets `postgres`; the in-memory default loses all data on restart. |
+| `STORAGE_BACKEND` | api | `memory` | **essential** in practice | `memory` \| `postgres`. Every real deployment sets `postgres`; the in-memory default loses all data on restart. With `NODE_ENV=production` the API refuses to start while any store resolves to `memory` (see [Production safety](#production-safety)). |
 | `PORT` | api (web via Next.js) | `4000` (api) | common | API listen port. Compose sets `4000` for the API and `3000` for the web container. |
 | `API_BASE_URL` | watcher, mcp, `scripts/eval-api.ts` | `http://localhost:4000` | **essential** outside local dev | How the watcher and MCP server reach the API. The watcher refuses to start without it when auth is on. A trailing `/api` is stripped by mcp and the eval script. |
 | `NEXT_PUBLIC_API_BASE_URL` | web (inlined at **build** time; also read at runtime by the server layout) | empty (same origin) | common | Browser-facing API URL. Takes precedence over `PUBLIC_API_BASE_URL`. |
 | `PUBLIC_API_BASE_URL` | web (runtime) | empty (same origin) | common | Runtime fallback for a prebuilt image. Leave both blank when the API is served from the web app's origin. |
-| `CORS_ALLOWED_ORIGINS` | api | `*` | common | Comma-separated origin allow-list. Restrict it in production. |
-| `NODE_ENV` | api, watcher, mcp, web | `development` | common | `production` selects JSON logs at `info` and the `.next-build` output dir. The Docker image sets it. |
+| `CORS_ALLOWED_ORIGINS` | api | `*` | common; **essential** with `NODE_ENV=production` | Comma-separated origin allow-list. With `NODE_ENV=production` the API refuses to start while it allows any origin (unset, blank or `*`) — see [Production safety](#production-safety). |
+| `NODE_ENV` | api, watcher, mcp, web | `development` | common | `production` selects JSON logs at `info`, the `.next-build` output dir, and turns on the API/MCP [production safety](#production-safety) checks. The Docker image sets it. |
 | `LOG_LEVEL` | api, watcher, mcp | `info` in production, else `debug` | common | `trace` \| `debug` \| `info` \| `warn` \| `error` \| `fatal`. |
 | `LOG_STARTUP_CONFIG` | api | on | tuning | Set exactly `false` to skip the resolved-configuration log at startup. Secrets are always masked. |
 | `API_SHUTDOWN_DRAIN_MS` | api | `10000` | tuning | One drain window on SIGTERM/SIGINT, shared by in-flight HTTP requests (force-closed at the deadline) and background work, before the broker stops and the pool ends ([api.md](./api.md) API37/API38). Keep the container stop grace period above this + 10 s. |
@@ -61,6 +61,24 @@ bad value instead (noted per variable).
 | `DB_IDLE_TIMEOUT_MS` | api | `30000` | tuning | Idle connection lifetime. |
 | `DB_CONNECTION_TIMEOUT_MS` | api | `10000` | tuning | Fail if a connection cannot be acquired in time. |
 | `DB_STATEMENT_TIMEOUT_MS` | api | `30000` | tuning | Server-side cap on a single statement. |
+
+### Production safety
+
+With `NODE_ENV=production` (the Docker image sets it) the API refuses to start in a
+posture that is only acceptable for local development, naming the variable and the
+override in the startup error. Each posture has its own override, honoured only when set
+to exactly `true` (any case) and only in production; a typo keeps the check on.
+
+| Refused in production | Override (exactly `true`) | Also applies to |
+| --- | --- | --- |
+| `AUTH_REQUIRED=false` (every route open) | `MAGPIE_ALLOW_UNAUTHENTICATED_PRODUCTION` | the HTTP MCP server |
+| Any store resolving to `memory` (`STORAGE_BACKEND` unset or `memory`, or a per-store override) | `MAGPIE_ALLOW_MEMORY_STORAGE_IN_PRODUCTION` | — |
+| `CORS_ALLOWED_ORIGINS` allowing any origin (unset, blank or `*`) | `MAGPIE_ALLOW_ANY_CORS_ORIGIN_IN_PRODUCTION` | — |
+
+Independently of `NODE_ENV`, the API also refuses to start when `MAGPIE_CHECKOUT_ROOT` or
+`MAGPIE_SNAPSHOT_ROOT` is not writable, and always logs one `event=security_posture` line
+at startup (auth on/off, provider, issuer, audience, memory-backed stores, CORS policy,
+overrides in effect), plus a warning for each insecure posture.
 
 ### Per-store backend overrides
 
@@ -121,8 +139,8 @@ plain-string forms — a bare path, a git URL, `agent`, `internet` — are unaff
 | `KNOWLEDGE_SOURCES` | api | `[]` | **essential** | JSON array of read-from sources. |
 | `KNOWLEDGE_DESTINATIONS` | api | `[]` | **essential** | JSON array of written-to knowledge bases (the indexed answer corpus). |
 | `KNOWLEDGE_FLOWS` | api | `[]` | **essential** | JSON array linking sources to a destination. |
-| `MAGPIE_CHECKOUT_ROOT` | api, watcher | `.magpie/checkouts` | **essential** in containers | Managed clone root. Must be a writable volume; API and watcher each need one. Relative paths resolve from the working directory. |
-| `MAGPIE_SNAPSHOT_ROOT` | api | `.magpie/snapshots` | **essential** in containers | Where per-flow snapshots are written. Must be writable. |
+| `MAGPIE_CHECKOUT_ROOT` | api, watcher | `.magpie/checkouts` | **essential** in containers | Managed clone root. Must be a writable volume; API and watcher each need one. Relative paths resolve from the working directory. The API refuses to start when it is not writable. |
+| `MAGPIE_SNAPSHOT_ROOT` | api | `.magpie/snapshots` | **essential** in containers | Where per-flow snapshots are written. Must be writable: the API refuses to start otherwise. |
 | `MAGPIE_LOCAL_INDEX_ROOT` | api | working directory | tuning | Root a client-supplied local index path must stay inside (path-traversal guard). |
 | `SOURCE_SYNC_MAX_CHANGED_FILES` | api | `1000` | tuning | Changed files one source-sync run considers per source; the true total is still recorded on the run. Bad values fall back. |
 | `SEED_BOOTSTRAP_MAX_DOCS` | api | `3` | tuning | A flow with fewer indexed documents than this is offered an auto-proposed seed plan. |
@@ -371,6 +389,13 @@ the env files**:
   A value for one of these that exists only in `.env.compose` is replaced by the
   interpolated one (an empty string when the shell and `.env` do not define it), so keep
   them in the project `.env` or pass `--env-file`.
+
+The image sets `NODE_ENV=production`, so the compose stack runs the
+[production safety](#production-safety) checks: `.env.compose.example` sets
+`STORAGE_BACKEND=postgres` and `CORS_ALLOWED_ORIGINS` (the deployed console origin — change
+it in `.env.compose` for another host), and `docker-compose.e2e.yml` sets
+`MAGPIE_ALLOW_UNAUTHENTICATED_PRODUCTION=true` on the API so an e2e stack run with
+`AUTH_REQUIRED=false` still boots.
 
 `docker-compose.watcher.yml` (a standalone remote watcher) instead loads `.env` as its
 `env_file` and pins only `MAGPIE_CHECKOUT_ROOT`.

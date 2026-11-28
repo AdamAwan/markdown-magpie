@@ -5,7 +5,8 @@ import {
   ON_BEHALF_OF_SCOPE,
   parseOnBehalfRoles,
   resolveEffectivePrincipal,
-  serializeOnBehalfRoles
+  serializeOnBehalfRoles,
+  tokenGrantsOnBehalfOf
 } from "./on-behalf-of.js";
 
 function principal(scopes: string[], roles?: string[]): Principal {
@@ -60,4 +61,32 @@ test("an empty forwarded roles list is fail-closed (role-aware with no flow acce
   const caller = principal([ON_BEHALF_OF_SCOPE], undefined);
   const effective = resolveEffectivePrincipal(caller, { subject: "auth0|user", roles: "[]" });
   assert.deepEqual(effective.roles, []);
+});
+
+// An unsigned JWT is enough: tokenGrantsOnBehalfOf decodes without verifying.
+function unsignedJwt(payload: Record<string, unknown>): string {
+  const encode = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64url");
+  return `${encode({ alg: "none", typ: "JWT" })}.${encode(payload)}.`;
+}
+
+test("tokenGrantsOnBehalfOf reads the Auth0 scope claim", () => {
+  const granted = unsignedJwt({ gty: "client-credentials", scope: `read:knowledge ${ON_BEHALF_OF_SCOPE}` });
+  const missing = unsignedJwt({ gty: "client-credentials", scope: "read:knowledge ask:knowledge" });
+  assert.equal(tokenGrantsOnBehalfOf(granted, "auth0"), true);
+  assert.equal(tokenGrantsOnBehalfOf(missing, "auth0"), false);
+});
+
+test("tokenGrantsOnBehalfOf reads an Entra app token's roles (application permissions)", () => {
+  const granted = unsignedJwt({ idtyp: "app", roles: ["read:knowledge", ON_BEHALF_OF_SCOPE] });
+  const missing = unsignedJwt({ idtyp: "app", roles: ["read:knowledge"] });
+  // Without idtyp an Entra token is not an app token: its `roles` are user roles,
+  // never scopes, so the grant does not count (matching the verifier).
+  const notApp = unsignedJwt({ roles: [ON_BEHALF_OF_SCOPE] });
+  assert.equal(tokenGrantsOnBehalfOf(granted, "entra"), true);
+  assert.equal(tokenGrantsOnBehalfOf(missing, "entra"), false);
+  assert.equal(tokenGrantsOnBehalfOf(notApp, "entra"), false);
+});
+
+test("tokenGrantsOnBehalfOf cannot inspect an opaque token", () => {
+  assert.equal(tokenGrantsOnBehalfOf("opaque-static-token", "auth0"), undefined);
 });
