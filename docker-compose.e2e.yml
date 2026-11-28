@@ -28,7 +28,7 @@ services:
 
   openai-fixture:
     image: markdown-magpie:latest
-    command: node scripts/fixtures/openai-fixture.mjs
+    command: ["node", "scripts/fixtures/openai-fixture.mjs"]
     environment:
       FIXTURE_PORT: "8800"
       # Long enough for the cancel scenario to land while the answer call is in
