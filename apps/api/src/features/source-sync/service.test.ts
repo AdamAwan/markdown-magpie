@@ -98,6 +98,30 @@ test("constrainToCandidates drops deletes and paths outside the candidate set", 
   assert.equal(constrained[0].content, "updated");
 });
 
+test("constrainToCandidates re-keys a kept write to the candidate's indexed path", async () => {
+  const constrained = constrainToCandidates(
+    [{ path: "/guides\\setup.md/", content: "updated" }],
+    [{ path: "guides/setup.md", content: "x" }]
+  );
+  assert.deepEqual(constrained, [{ path: "guides/setup.md", content: "updated" }]);
+});
+
+test("constrainToCandidates never writes a candidate outside the document-path policy", async () => {
+  // The indexer only skips .git/node_modules, so a .github/*.md doc can be indexed and
+  // offered; the destination policy still refuses to write it.
+  const constrained = constrainToCandidates(
+    [
+      { path: ".github/copilot-instructions.md", content: "pwned" },
+      { path: "a.md", content: "ok" }
+    ],
+    [
+      { path: ".github/copilot-instructions.md", content: "x" },
+      { path: "a.md", content: "x" }
+    ]
+  );
+  assert.deepEqual(constrained, [{ path: "a.md", content: "ok" }]);
+});
+
 test("stripNulBytes removes NUL bytes and leaves clean text untouched", () => {
   assert.equal(stripNulBytes(`a${NUL}b${NUL}c`), "abc");
   const clean = "no nulls here";

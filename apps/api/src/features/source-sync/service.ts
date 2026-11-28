@@ -11,7 +11,14 @@ import type {
 } from "@magpie/core";
 import type { JobView } from "@magpie/jobs";
 import { syncSourceChangesGeneratePlanInputSchema, syncSourceChangesGeneratePlanOutputSchema } from "@magpie/jobs";
-import { buildGitAuthEnv, diffChangedFiles, ensureGitCheckout, getHeadSha, type SourceFileChange } from "@magpie/git";
+import {
+  buildGitAuthEnv,
+  checkDocumentPath,
+  diffChangedFiles,
+  ensureGitCheckout,
+  getHeadSha,
+  type SourceFileChange
+} from "@magpie/git";
 import type { AppContext } from "../../context.js";
 import { defaultDestinationId, selectFlow } from "../../platform/repositories.js";
 import type { ConfiguredKnowledgeRepository } from "../../stores/knowledge-repositories.js";
@@ -486,13 +493,23 @@ export function selectCandidateDocuments(
 }
 
 // Keeps only writes that target a candidate document, dropping deletes and any
-// path the model invented outside the set it was given.
+// path the model invented outside the set it was given. A kept write is re-keyed
+// to the candidate's own (indexed) path rather than the model's spelling of it, and
+// a candidate outside the destination document-path policy (e.g. an indexed doc
+// under `.github/`) is never written — the same rule the publisher re-applies.
 export function constrainToCandidates(
   changes: ChangesetChange[],
   candidateDocuments: SourceSyncCandidateDocument[]
 ): ChangesetChange[] {
-  const allowed = new Set(candidateDocuments.map((document) => normalizeRelativePath(document.path)));
-  return changes.filter((change) => !change.delete && allowed.has(normalizeRelativePath(change.path)));
+  const allowed = new Map(
+    candidateDocuments
+      .filter((document) => checkDocumentPath(document.path).ok)
+      .map((document) => [normalizeRelativePath(document.path), document.path])
+  );
+  return changes.flatMap((change) => {
+    const candidatePath = change.delete ? undefined : allowed.get(normalizeRelativePath(change.path));
+    return candidatePath === undefined ? [] : [{ ...change, path: candidatePath }];
+  });
 }
 
 // Flattens a plan's operations into a single de-duplicated changeset. Deletes are

@@ -54,6 +54,7 @@ import { buildAnswerQuestionInput, recordAnswerQuestionLog } from "../../platfor
 import { logger } from "../../logger.js";
 import { advisoryNote, collectAdvisoryHeadings, flagAdvisoryDraft } from "./register-check.js";
 import { attributionForMergedProposal } from "./change-attribution.js";
+import { rejectUnsafeChangeset } from "../../scheduling/changeset.js";
 
 type PublishProposalJobOutput = z.infer<typeof publishProposalOutputSchema>;
 
@@ -1879,6 +1880,16 @@ export async function createDedupeProposalFromCompletedJob(
   }
   const otherPath = changeset.find((change) => change.path !== primaryPath)?.path ?? "a neighbour";
   const input = job.input as Partial<DedupeDocumentsJobInput>;
+  // Model-chosen paths: a dedupe may only touch the reviewed document and the
+  // neighbours it was given, and every path must pass the destination policy.
+  const offeredPaths = new Set(
+    [input.path, ...(input.neighbours ?? []).map((neighbour) => neighbour.path)].filter(
+      (offered): offered is string => typeof offered === "string"
+    )
+  );
+  if (rejectUnsafeChangeset(job, changeset, offeredPaths)) {
+    return undefined;
+  }
   return ctx.stores.proposals.create({
     title: `Dedupe: reconcile ${primaryPath} with ${otherPath}`,
     targetPath: primaryPath,
@@ -1920,6 +1931,11 @@ export async function createSplitProposalFromCompletedJob(
 
   const primaryWrite = changeset.find((change) => change.path === primaryPath);
   if (!primaryWrite || primaryWrite.content === undefined) {
+    return undefined;
+  }
+  // A split may create NEW paths, so there is no offered-path allowlist here —
+  // but every path (new or existing, write or delete) must pass the policy.
+  if (rejectUnsafeChangeset(job, changeset)) {
     return undefined;
   }
 
