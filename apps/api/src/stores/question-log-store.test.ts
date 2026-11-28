@@ -125,6 +125,23 @@ test("list and count narrow to a case-insensitive substring of the question text
   assert.equal(await store.count("   "), 3, "a blank search means no filter");
 });
 
+test("list and count narrow to a set of flows; an empty set matches nothing and unrouted questions never match", async () => {
+  const store = new InMemoryQuestionLogStore();
+  await store.record({ question: "HR q", chatProvider: "codex", retrievedSectionIds: [], flowId: "hr" });
+  await store.record({ question: "Eng q", chatProvider: "codex", retrievedSectionIds: [], flowId: "eng" });
+  await store.record({ question: "Unrouted q", chatProvider: "codex", retrievedSectionIds: [] });
+
+  assert.deepEqual(
+    (await store.list(50, 0, undefined, ["hr"])).map((log) => log.question),
+    ["HR q"]
+  );
+  assert.equal(await store.count(undefined, ["hr", "eng"]), 2);
+  assert.equal(await store.count("q", ["eng"]), 1, "combines with the text search");
+  assert.deepEqual(await store.list(50, 0, undefined, []), []);
+  assert.equal(await store.count(undefined, []), 0);
+  assert.equal(await store.count(), 3, "no flow filter lists every flow, unrouted included");
+});
+
 test("recordManualGap flags the question and stores the provided summary as a manual gap", async () => {
   const store = new InMemoryQuestionLogStore();
   const log = await store.record({ question: "How do I adopt?", chatProvider: "codex", retrievedSectionIds: [] });

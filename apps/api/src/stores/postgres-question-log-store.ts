@@ -757,25 +757,30 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
     return this.get(id);
   }
 
-  async list(limit: number, offset = 0, search?: string): Promise<QuestionLog[]> {
+  async list(limit: number, offset = 0, search?: string, flowIds?: readonly string[]): Promise<QuestionLog[]> {
     // Only live questions surface in the console list; verification re-asks (#154)
-    // are synthetic audit records, not questions a human asked.
+    // are synthetic audit records, not questions a human asked. A flow filter
+    // matches only questions routed to one of the flows (NULL flow_id never
+    // matches `= ANY`), and an empty array matches nothing.
     const result = await this.pool.query<QuestionRow>(
       `SELECT * FROM questions
        WHERE purpose = 'live' AND ($3::text IS NULL OR question ILIKE $3)
+         AND ($4::text[] IS NULL OR flow_id = ANY($4::text[]))
        ORDER BY asked_at DESC LIMIT $1 OFFSET $2`,
-      [limit, offset, searchPattern(search)]
+      [limit, offset, searchPattern(search), flowIds === undefined ? null : [...flowIds]]
     );
     const gapsByQuestion = await this.loadGaps(result.rows.map((row) => row.id));
     return result.rows.map((row) => mapQuestionRow(row, gapsByQuestion.get(row.id) ?? []));
   }
 
-  async count(search?: string): Promise<number> {
+  async count(search?: string, flowIds?: readonly string[]): Promise<number> {
     // Same filter as list(): the total the pager reports must match what a full
     // page walk would return.
     const result = await this.pool.query<{ count: number }>(
-      "SELECT count(*)::int AS count FROM questions WHERE purpose = 'live' AND ($1::text IS NULL OR question ILIKE $1)",
-      [searchPattern(search)]
+      `SELECT count(*)::int AS count FROM questions
+       WHERE purpose = 'live' AND ($1::text IS NULL OR question ILIKE $1)
+         AND ($2::text[] IS NULL OR flow_id = ANY($2::text[]))`,
+      [searchPattern(search), flowIds === undefined ? null : [...flowIds]]
     );
     return result.rows[0]?.count ?? 0;
   }

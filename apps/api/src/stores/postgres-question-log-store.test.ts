@@ -476,6 +476,29 @@ describe("PostgresQuestionLogStore", { skip: databaseUrl ? false : "DATABASE_URL
     assert.deepEqual(await store.list(50, 0, `%${token}%`), [], "percent signs are literal too");
   });
 
+  it("narrows list and count to a set of flows (NULL flow never matches; empty set matches nothing)", async () => {
+    const token = `flows-${randomUUID()}`;
+    const hrFlow = `hr-${token}`;
+    const engFlow = `eng-${token}`;
+    const hr = await store.record({
+      question: `HR ${token}`,
+      chatProvider: "codex",
+      retrievedSectionIds: [],
+      flowId: hrFlow
+    });
+    await store.record({ question: `Eng ${token}`, chatProvider: "codex", retrievedSectionIds: [], flowId: engFlow });
+    await store.record({ question: `Unrouted ${token}`, chatProvider: "codex", retrievedSectionIds: [] });
+
+    assert.deepEqual(
+      (await store.list(50, 0, token, [hrFlow])).map((log) => log.id),
+      [hr.id]
+    );
+    assert.equal(await store.count(token, [hrFlow, engFlow]), 2);
+    assert.equal(await store.count(token), 3, "no flow filter includes the unrouted question");
+    assert.deepEqual(await store.list(50, 0, token, []), []);
+    assert.equal(await store.count(token, []), 0);
+  });
+
   it("resolves gaps by question id and summary", async () => {
     const uniqueId = randomUUID();
     const recorded = await store.record({

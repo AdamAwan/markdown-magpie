@@ -166,9 +166,13 @@ export interface QuestionLogStore {
   // One page of the question list (newest first, live questions only —
   // verification re-asks are synthetic audit records). `search` narrows to
   // questions whose text contains it (case-insensitive substring). `count`
-  // reports the same filtered set's total so list callers can page.
-  list(limit: number, offset?: number, search?: string): Promise<QuestionLog[]>;
-  count(search?: string): Promise<number>;
+  // reports the same filtered set's total so list callers can page. `flowIds`
+  // (a flow-scoped caller's readable flows, docs/authorization.md AZ33) narrows
+  // to questions routed to one of those flows — a question with no flow is
+  // excluded — and an empty array matches nothing; undefined applies no flow
+  // filter.
+  list(limit: number, offset?: number, search?: string, flowIds?: readonly string[]): Promise<QuestionLog[]>;
+  count(search?: string, flowIds?: readonly string[]): Promise<number>;
   // A capped, DISPLAY-ONLY view of the strongest gap candidates across every flow
   // (count desc, then most recent). Never drive clustering or drafting off it: a
   // busy flow's candidates fill the window and starve smaller flows. Use
@@ -777,24 +781,27 @@ export class InMemoryQuestionLogStore implements QuestionLogStore {
   }
 
   // The shared list()/count() filter: live questions only, optionally narrowed
-  // by a case-insensitive substring of the question text.
-  private listableLogs(search?: string): QuestionLog[] {
+  // by a case-insensitive substring of the question text and/or to a set of flows.
+  private listableLogs(search?: string, flowIds?: readonly string[]): QuestionLog[] {
     const needle = search?.trim().toLowerCase();
     return [...this.logs.values()].filter(
-      (log) => log.purpose !== "verification" && (!needle || log.question.toLowerCase().includes(needle))
+      (log) =>
+        log.purpose !== "verification" &&
+        (!needle || log.question.toLowerCase().includes(needle)) &&
+        (flowIds === undefined || (log.flowId !== undefined && flowIds.includes(log.flowId)))
     );
   }
 
-  async list(limit: number, offset = 0, search?: string): Promise<QuestionLog[]> {
-    return this.listableLogs(search)
+  async list(limit: number, offset = 0, search?: string, flowIds?: readonly string[]): Promise<QuestionLog[]> {
+    return this.listableLogs(search, flowIds)
       .sort((left, right) => right.askedAt.localeCompare(left.askedAt))
       .slice(offset, offset + limit);
   }
 
-  async count(search?: string): Promise<number> {
+  async count(search?: string, flowIds?: readonly string[]): Promise<number> {
     // Same filter as list(): the total the pager reports must match what a full
     // page walk would return.
-    return this.listableLogs(search).length;
+    return this.listableLogs(search, flowIds).length;
   }
 
   async reset(): Promise<void> {
