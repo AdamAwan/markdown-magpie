@@ -213,8 +213,8 @@ export function SchedulesPanel({
   scheduledTasks: ScheduledTask[];
 }) {
   const [groupBy, setGroupBy] = useState<GroupBy>("type");
-  const flowName = (flowId?: string) =>
-    flows.find((flow) => flow.id === flowId)?.name ?? flowId ?? "Default knowledge base";
+  // A task without a flowId is an all-flows task: one run covers every flow.
+  const flowName = (flowId?: string) => flows.find((flow) => flow.id === flowId)?.name ?? flowId ?? "All flows";
 
   // Each scheduled task carries both grouping axes — the flow-free task type and
   // the flow it runs for — so the table can group by either without re-parsing

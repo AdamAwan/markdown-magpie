@@ -231,8 +231,10 @@ Entry: `reconcileGaps` (`POST /api/gaps/reconcile`), driven by the
 ## Scheduled-task model
 
 - **G29** — Background tasks are registered **per flow**: each template expands to one
-  concrete task per configured flow (`github`-only templates are skipped for local-git
-  flows). The model is **two-tier** — each scheduled task fires *exactly one* orchestrator
+  concrete task per configured flow. The one exception is `snapshot-refresh`, an
+  **all-flows** task (key `snapshot-refresh::all`): a single run polls every flow's open
+  PRs and rewrites every flow's snapshot, so it is scheduled once rather than once per
+  flow. It is `github`-only — registered only while at least one flow publishes to GitHub. The model is **two-tier** — each scheduled task fires *exactly one* orchestrator
   job on its cron (tier 1); maintenance orchestrators fan out into the provider AI +
   GitHub jobs that do the real work (tier 2). The job-type identifier is the pg-boss queue
   name, so the same string names the Schedules row, the dataflow box, and the job-queue
@@ -242,7 +244,7 @@ Entry: `reconcileGaps` (`POST /api/gaps/reconcile`), driven by the
 | --- | --- | --- | --- | --- |
 | gaps-to-pull-requests | `process_gaps_to_pull_requests` | `*/10 * * * *` | maintenance | `reconcile_gap_clusters`, `draft_markdown_proposal` |
 | source-change-sync | `source_change_sync` | `*/10 * * * *` | maintenance | `sync_source_changes_generate_plan` |
-| snapshot-refresh | `refresh_flow_snapshot` | `*/5 * * * *` | github (github-only) | — (leaf) |
+| snapshot-refresh | `refresh_flow_snapshot` | `*/5 * * * *` | github (github-only, all-flows) | — (leaf) |
 | fix-patrol | `correctness_patrol` | `0 * * * *` | maintenance | `verify_document` → `correct_document`, `dedupe_documents`, `split_document` |
 | improve-patrol | `editorial_patrol` | `0 * * * *` | maintenance | `improve_document` |
 | seed-bootstrap | `seed_bootstrap` | `0 * * * *` | maintenance | `outline_flow_seed` |

@@ -212,7 +212,7 @@ function automation(modelInfo: ModelInfo): FlowGraph {
   return {
     direction: "LR",
     groups: [
-      { id: "fetch", label: "snapshot refresh · fetch (per flow · ~5 min)" },
+      { id: "fetch", label: "snapshot refresh · fetch (all flows · ~5 min)" },
       { id: "gaps", label: "gaps → pull requests · process (per flow · ~10 min)" },
       { id: "sync", label: "source change → KB sync (per flow · ~10 min)" },
       { id: "patrol", label: "Patrol (per flow · scheduled)" }
@@ -276,7 +276,7 @@ function automation(modelInfo: ModelInfo): FlowGraph {
       { id: "resolve", kind: "processing", label: "✅ Resolve Gaps\n+ Re-index KB" }
     ],
     edges: [
-      { from: "scheduler", to: "fgather", label: "one job per flow" },
+      { from: "scheduler", to: "fgather", label: "one job for all flows" },
       { from: "scheduler", to: "gread", label: "maintenance orchestrator job per flow" },
       { from: "scheduler", to: "swatch", label: "one job per flow" },
       { from: "scheduler", to: "pscan", label: "per flow" },
@@ -417,7 +417,7 @@ function perflow(): FlowGraph {
   return {
     direction: "LR",
     groups: [
-      { id: "fetch", label: "FETCH · snapshot refresh (Flow A · ~5 min)" },
+      { id: "fetch", label: "FETCH · snapshot refresh (all flows · ~5 min)" },
       { id: "recon", label: "PROCESS · reconciler (Flow A · ~10 min)" }
     ],
     nodes: [

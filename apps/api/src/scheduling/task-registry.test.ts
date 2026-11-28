@@ -19,7 +19,7 @@ test("with no flows configured, no flow-scoped tasks are registered", () => {
   assert.equal(findScheduledTask(ctx, "pull-request-refresh"), undefined, "the separate refresh task stays removed");
 });
 
-test("each configured flow gets its own per-flow instance of every task", () => {
+test("each configured flow gets its own instance of every per-flow task", () => {
   const ctx = makeTestContext();
   ctx.knowledgeConfig.flows = [
     { id: "alpha", name: "Alpha", sourceIds: [], destinationId: "kb" },
@@ -27,12 +27,12 @@ test("each configured flow gets its own per-flow instance of every task", () => 
   ];
 
   const tasks = listScheduledTasks(ctx);
-  assert.equal(tasks.length, 12, "six templates × two flows");
+  assert.equal(tasks.length, 11, "five per-flow templates × two flows, plus the all-flows snapshot refresh");
 
   for (const flowId of ["alpha", "beta"]) {
     assert.ok(findScheduledTask(ctx, `gaps-to-pull-requests::${flowId}`), `gaps task exists for ${flowId}`);
     assert.ok(findScheduledTask(ctx, `source-change-sync::${flowId}`), `source sync exists for ${flowId}`);
-    assert.ok(findScheduledTask(ctx, `snapshot-refresh::${flowId}`), `snapshot fetch exists for ${flowId}`);
+    assert.equal(findScheduledTask(ctx, `snapshot-refresh::${flowId}`), undefined, "snapshot refresh is not per-flow");
     assert.ok(findScheduledTask(ctx, `fix-patrol::${flowId}`), `fix patrol exists for ${flowId}`);
     assert.ok(findScheduledTask(ctx, `improve-patrol::${flowId}`), `improve patrol exists for ${flowId}`);
     assert.ok(findScheduledTask(ctx, `seed-bootstrap::${flowId}`), `seed bootstrap exists for ${flowId}`);
@@ -42,7 +42,24 @@ test("each configured flow gets its own per-flow instance of every task", () => 
   assert.match(findScheduledTask(ctx, "gaps-to-pull-requests::alpha")!.label, /Alpha/);
 });
 
-test("a local-git flow is not offered the github-only snapshot-refresh (PR poll) task", () => {
+test("snapshot refresh is one all-flows task, since a single run polls every flow's PRs", () => {
+  const ctx = makeTestContext();
+  ctx.knowledgeConfig.flows = [
+    { id: "alpha", name: "Alpha", sourceIds: [], destinationId: "kb" },
+    { id: "beta", name: "Beta", sourceIds: [], destinationId: "kb" }
+  ];
+
+  const refreshes = listScheduledTasks(ctx).filter((task) => task.baseKey === "snapshot-refresh");
+  assert.equal(refreshes.length, 1, "scheduled once, not once per flow");
+  const [refresh] = refreshes;
+  assert.equal(refresh.key, "snapshot-refresh::all");
+  assert.equal(refresh.flowId, undefined, "an all-flows task belongs to no single flow");
+  assert.equal(refresh.jobType, "refresh_flow_snapshot");
+  assert.deepEqual(refresh.input, {});
+  assert.match(refresh.label, /All flows/);
+});
+
+test("a local-git flow gets no per-flow PR work, and the PR poll needs a GitHub flow", () => {
   const ctx = makeTestContext();
   ctx.knowledgeConfig.destinations = [
     { id: "local", name: "Local", url: "file:///tmp/demo-repo", kind: "git" },
@@ -53,13 +70,17 @@ test("a local-git flow is not offered the github-only snapshot-refresh (PR poll)
     { id: "hosted-flow", name: "Hosted", sourceIds: [], destinationId: "hosted" }
   ];
 
-  // The local flow keeps the reconcile/publish + patrol + seed-bootstrap tasks
-  // (five templates) but drops snapshot-refresh; the hosted flow keeps all six.
-  assert.equal(findScheduledTask(ctx, "snapshot-refresh::local-flow"), undefined, "no PR poll for a local-git flow");
-  assert.ok(findScheduledTask(ctx, "snapshot-refresh::hosted-flow"), "the hosted flow still polls PRs");
+  // Both flows keep the five per-flow tasks; the hosted flow is what keeps the
+  // single all-flows PR poll registered.
+  assert.ok(findScheduledTask(ctx, "snapshot-refresh::all"), "a GitHub flow keeps the PR poll registered");
   assert.ok(findScheduledTask(ctx, "gaps-to-pull-requests::local-flow"), "the local flow still reconciles/publishes");
   assert.ok(findScheduledTask(ctx, "fix-patrol::local-flow"), "the local flow still patrols");
-  assert.equal(listScheduledTasks(ctx).length, 5 + 6, "local flow: 5 tasks, hosted flow: 6 tasks");
+  assert.equal(listScheduledTasks(ctx).length, 5 + 5 + 1, "five per flow, plus the PR poll");
+
+  // With only local-git flows there are no pull requests to poll at all.
+  ctx.knowledgeConfig.flows = [{ id: "local-flow", name: "Local", sourceIds: [], destinationId: "local" }];
+  assert.equal(findScheduledTask(ctx, "snapshot-refresh::all"), undefined, "no PR poll without a GitHub flow");
+  assert.equal(listScheduledTasks(ctx).length, 5);
 });
 
 test("the gaps-to-pull-requests task queues the reconciler job with the flow in its input", () => {
