@@ -38,6 +38,15 @@ describe("HttpWatcherApi.release", () => {
         init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
       });
     const api = new HttpWatcherApi({ apiBaseUrl: "http://api.test", workerName: "w1" });
-    await assert.rejects(api.release({ id: "job-1", retryCount: 0 }, AbortSignal.timeout(10)));
+    // AbortSignal.timeout's timer is unref'd, so with a fetch that never
+    // settles nothing would keep the event loop alive until it fires; a ref'd
+    // timer driving an AbortController does.
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(new Error("release deadline")), 10);
+    try {
+      await assert.rejects(api.release({ id: "job-1", retryCount: 0 }, controller.signal));
+    } finally {
+      clearTimeout(timer);
+    }
   });
 });
