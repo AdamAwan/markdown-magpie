@@ -71,7 +71,7 @@ export interface SpawnedCli {
 // (rather than `typeof spawn`) because a test fake cannot implement spawn's full
 // overload set — every overload returns a concrete ChildProcess class — without
 // unsafe casts.
-export interface CliSpawnOptions {
+interface CliSpawnOptions {
   stdio: ["pipe", "pipe", "pipe"];
   cwd?: string;
   env?: NodeJS.ProcessEnv;
