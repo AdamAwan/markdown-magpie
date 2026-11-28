@@ -33,6 +33,7 @@
     "verify:fix": "npm run format && npm run lint:fix",
     "prepare": "husky",
     "test": "npm run test --workspaces --if-present",
+    "pretest:scripts": "npm run build:libs",
     "test:scripts": "node --test \"scripts/**/*.test.mjs\"",
     "test:timings": "node scripts/test-timings.mjs",
     "test:slow": "node scripts/test-timings.mjs --verify",
