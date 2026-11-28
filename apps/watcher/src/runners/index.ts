@@ -6,7 +6,7 @@ import { CAPABILITY_GATES, DEFAULT_CAPABILITY_RUNTIME, type CapabilityRuntime } 
 import type { WatcherApi } from "../http-client.js";
 import { logger } from "../logger.js";
 import { ChatRunner } from "./chat.js";
-import { CliRunner, type PromptMode } from "./cli.js";
+import { CliRunner, DEFAULT_CLI_MAX_OUTPUT_BYTES, type PromptMode } from "./cli.js";
 import { MaintenanceRunner } from "./maintenance.js";
 import { createGitPublicationDeps, PublicationRunner } from "./publication.js";
 import { RefreshFlowSnapshotRunner } from "./refresh-flow-snapshot.js";
@@ -134,6 +134,7 @@ export function createConfiguredRunners(
         timeoutMs: positiveInt(env.AGENT_CLI_TIMEOUT_MS, DEFAULT_CHAT_TIMEOUT_MS),
         agenticTimeoutMs,
         undeclaredOutputFields,
+        maxOutputBytes: positiveInt(env.AGENT_CLI_MAX_OUTPUT_BYTES, DEFAULT_CLI_MAX_OUTPUT_BYTES),
         ...(env.CLI_CANCEL_GRACE_MS ? { cancelGraceMs: positiveInt(env.CLI_CANCEL_GRACE_MS, 5_000) } : {})
       })
     );
@@ -151,6 +152,7 @@ export function createConfiguredRunners(
         timeoutMs: positiveInt(env.AGENT_CLI_TIMEOUT_MS, DEFAULT_CHAT_TIMEOUT_MS),
         agenticTimeoutMs,
         undeclaredOutputFields,
+        maxOutputBytes: positiveInt(env.AGENT_CLI_MAX_OUTPUT_BYTES, DEFAULT_CLI_MAX_OUTPUT_BYTES),
         ...(env.CLI_CANCEL_GRACE_MS ? { cancelGraceMs: positiveInt(env.CLI_CANCEL_GRACE_MS, 5_000) } : {})
       })
     );
@@ -187,8 +189,10 @@ function splitArgs(value: string): string[] {
     .filter(Boolean);
 }
 
-function normalizePromptMode(value: string | undefined): PromptMode {
-  return value === "stdin" ? "stdin" : "arg";
+// stdin unless the operator explicitly asks for `arg` (J80): an argv prompt
+// fails to spawn above the OS argument limit, which real prompts exceed.
+export function normalizePromptMode(value: string | undefined): PromptMode {
+  return value?.trim().toLowerCase() === "arg" ? "arg" : "stdin";
 }
 
 // Only pass `model` when a non-blank value is configured: for CLI runners an

@@ -16,8 +16,20 @@ import {
   type PreparedSources
 } from "../source-workspace.js";
 import { PROVIDER_JOB_TYPES, runGenerativeJob } from "./generative.js";
+import {
+  BoundedOutput,
+  killProcessTree,
+  processTreeSpawnOptions,
+  TailOutput,
+  trackProcessGroup
+} from "./cli-process.js";
 import { runRepairReprompt } from "./repair.js";
 
+// How the prompt reaches the CLI. `stdin` is the default (J80): a prompt passed
+// as one argv element fails to spawn above the OS per-argument limit (E2BIG at
+// ~128 KB on Linux; ENAMETOOLONG at ~32 KB of total command line on Windows),
+// and retrieval-augmented / source-grounded prompts routinely exceed both.
+// `arg` remains for a CLI build that cannot read stdin.
 export type PromptMode = "arg" | "stdin";
 
 const DEFAULT_TIMEOUT_MS = 120_000;
@@ -25,11 +37,27 @@ const DEFAULT_TIMEOUT_MS = 120_000;
 // minutes, not the seconds a one-shot completion needs.
 const DEFAULT_AGENTIC_TIMEOUT_MS = 600_000;
 const DEFAULT_CANCEL_GRACE_MS = 5_000;
+// A job's output is a JSON document — kilobytes, rarely a few hundred. 8 MiB is
+// far above any legitimate reply and far below what would hurt the watcher.
+export const DEFAULT_CLI_MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
+// stderr is kept only as a tail, for the failure message.
+const STDERR_TAIL_BYTES = 64 * 1024;
+const STDERR_MESSAGE_CHARS = 2_000;
+
+// The end of a CLI's stderr, bounded for an error message (which reaches the job
+// record and the console): the final lines carry the actual failure.
+function tailForMessage(stderr: string): string {
+  const trimmed = stderr.trim();
+  return trimmed.length > STDERR_MESSAGE_CHARS ? `…${trimmed.slice(-STDERR_MESSAGE_CHARS)}` : trimmed;
+}
 
 // The slice of a spawned child process that spawnCli consumes. The real
 // implementation is node's ChildProcess with fully piped stdio; tests substitute
 // a scripted stand-in.
 export interface SpawnedCli {
+  // Undefined when the process failed to spawn (and for test stand-ins); the
+  // tree kill then falls back to the direct child.
+  readonly pid?: number | undefined;
   stdout: Readable;
   stderr: Readable;
   stdin: Writable;
@@ -43,11 +71,15 @@ export interface SpawnedCli {
 // (rather than `typeof spawn`) because a test fake cannot implement spawn's full
 // overload set — every overload returns a concrete ChildProcess class — without
 // unsafe casts.
-export type CliSpawn = (
-  command: string,
-  args: readonly string[],
-  options: { stdio: ["pipe", "pipe", "pipe"]; cwd?: string; env?: NodeJS.ProcessEnv }
-) => SpawnedCli;
+export interface CliSpawnOptions {
+  stdio: ["pipe", "pipe", "pipe"];
+  cwd?: string;
+  env?: NodeJS.ProcessEnv;
+  detached?: boolean;
+  windowsHide?: boolean;
+}
+
+export type CliSpawn = (command: string, args: readonly string[], options: CliSpawnOptions) => SpawnedCli;
 
 // Environment allowlist for spawned agent CLIs (#290c). A child spawned with no
 // `env` inherits the watcher's ENTIRE process.env — every provider key,
@@ -168,6 +200,8 @@ export interface CliRunnerOptions {
   checkoutRoot?: string;
   // How long to wait after SIGTERM before SIGKILL when aborting.
   cancelGraceMs?: number;
+  // Cap on captured stdout; exceeding it stops the run (J85).
+  maxOutputBytes?: number;
   // Test seam: override the prompt the CLI receives so stdout is deterministic.
   buildPromptOverride?: (job: JobView) => string;
   // Test seam: substitute workspace preparation (no real checkouts in tests).
@@ -202,6 +236,7 @@ export class CliRunner {
   private readonly agenticTimeoutMs: number;
   private readonly checkoutRoot: string;
   private readonly cancelGraceMs: number;
+  private readonly maxOutputBytes: number;
   private readonly buildPromptOverride?: (job: JobView) => string;
   private readonly prepareWorkspaces: typeof prepareSourceWorkspaces;
   private readonly spawnFn: CliSpawn;
@@ -219,6 +254,7 @@ export class CliRunner {
     this.agenticTimeoutMs = options.agenticTimeoutMs ?? DEFAULT_AGENTIC_TIMEOUT_MS;
     this.checkoutRoot = options.checkoutRoot ?? process.env.MAGPIE_CHECKOUT_ROOT ?? ".magpie/checkouts";
     this.cancelGraceMs = options.cancelGraceMs ?? DEFAULT_CANCEL_GRACE_MS;
+    this.maxOutputBytes = options.maxOutputBytes ?? DEFAULT_CLI_MAX_OUTPUT_BYTES;
     this.buildPromptOverride = options.buildPromptOverride;
     this.prepareWorkspaces = options.prepareWorkspaces ?? prepareSourceWorkspaces;
     this.spawnFn = options.spawnOverride ?? spawn;
@@ -476,59 +512,96 @@ export class CliRunner {
       // Minimal env allowlist (#290c): the child never inherits the watcher's
       // full process.env — only non-secret operational vars and this CLI's own
       // provider credential.
-      const spawnOptions: { stdio: ["pipe", "pipe", "pipe"]; cwd?: string; env: NodeJS.ProcessEnv } = {
+      // The CLI is its own process group (POSIX) so a timeout, cancellation or
+      // output overflow can take down every helper it started, not just the
+      // direct child (J85).
+      const spawnOptions: CliSpawnOptions = {
         stdio: ["pipe", "pipe", "pipe"],
-        env: buildChildEnv(this.capability, this.spawnEnv)
+        env: buildChildEnv(this.capability, this.spawnEnv),
+        ...processTreeSpawnOptions(),
+        ...(opts?.cwd !== undefined ? { cwd: opts.cwd } : {})
       };
-      if (opts?.cwd !== undefined) {
-        spawnOptions.cwd = opts.cwd;
-      }
       const child = this.spawnFn(this.command, args, spawnOptions);
+      const untrack = trackProcessGroup(child);
 
-      const stdoutChunks: Buffer[] = [];
-      const stderrChunks: Buffer[] = [];
-      let forceKillTimer: NodeJS.Timeout | undefined;
+      // Bounded capture (J85): stdout is the job output, so overflowing it fails
+      // the run; stderr keeps only its tail for the failure message.
+      const stdout = new BoundedOutput(this.maxOutputBytes);
+      const stderr = new TailOutput(STDERR_TAIL_BYTES);
+      let settled = false;
+      let killStarted = false;
+
+      // Graceful SIGTERM to the whole tree, then SIGKILL after the grace window.
+      // The escalation is NOT cancelled when the direct child exits: a helper
+      // that ignores SIGTERM can outlive its parent, and the group kill reaches
+      // it. The timer is unref'd so it never holds the watcher open by itself.
+      const terminate = (): void => {
+        if (killStarted) {
+          return;
+        }
+        killStarted = true;
+        killProcessTree(child, "SIGTERM");
+        setTimeout(() => killProcessTree(child, "SIGKILL"), this.cancelGraceMs).unref();
+      };
+
+      const fail = (error: Error): void => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        cleanup();
+        reject(error);
+      };
 
       const timeoutMs = opts?.timeoutMs ?? this.timeoutMs;
       const timeout = setTimeout(() => {
-        // Escalate exactly as the abort path does: a hung agent that ignores
-        // SIGTERM (or whose exit stalls) is force-killed after the grace window
-        // rather than left orphaned consuming API tokens until the host reaps it.
-        child.kill("SIGTERM");
-        forceKillTimer = setTimeout(() => child.kill("SIGKILL"), this.cancelGraceMs);
-        reject(new Error(`Agent CLI timed out after ${timeoutMs}ms`));
+        terminate();
+        fail(new Error(`Agent CLI timed out after ${timeoutMs}ms`));
       }, timeoutMs);
 
-      // On abort: graceful SIGTERM, then SIGKILL after the grace window.
       const onAbort = (): void => {
-        child.kill("SIGTERM");
-        forceKillTimer = setTimeout(() => child.kill("SIGKILL"), this.cancelGraceMs);
-        reject(new Error("CLI runner aborted"));
+        terminate();
+        fail(new Error("CLI runner aborted"));
       };
       signal.addEventListener("abort", onAbort, { once: true });
 
-      const cleanup = (): void => {
+      function cleanup(): void {
         clearTimeout(timeout);
-        if (forceKillTimer) {
-          clearTimeout(forceKillTimer);
-        }
         signal.removeEventListener("abort", onAbort);
-      };
+      }
 
-      child.stdout.on("data", (chunk: Buffer) => stdoutChunks.push(chunk));
-      child.stderr.on("data", (chunk: Buffer) => stderrChunks.push(chunk));
+      child.stdout.on("data", (chunk: Buffer) => {
+        if (!stdout.push(chunk)) {
+          terminate();
+          fail(
+            new Error(
+              `Agent CLI output exceeded ${this.maxOutputBytes} bytes (AGENT_CLI_MAX_OUTPUT_BYTES); the run was stopped`
+            )
+          );
+        }
+      });
+      child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
       child.on("error", (error) => {
-        cleanup();
-        reject(error);
+        untrack();
+        fail(error);
       });
       child.on("close", (code) => {
-        cleanup();
+        untrack();
         if (code !== 0) {
-          reject(new Error(`Agent CLI exited with ${code}: ${Buffer.concat(stderrChunks).toString("utf8")}`));
+          fail(new Error(`Agent CLI exited with ${code}: ${tailForMessage(stderr.text())}`));
           return;
         }
-        resolve(Buffer.concat(stdoutChunks).toString("utf8"));
+        if (settled) {
+          return;
+        }
+        settled = true;
+        cleanup();
+        resolve(stdout.text());
       });
+      // A child that exits before reading all of a large stdin prompt closes the
+      // pipe (EPIPE); its exit code / stderr is the real diagnosis, reported by
+      // the close handler above, so the write error itself is not.
+      child.stdin.on("error", () => undefined);
 
       if (this.promptMode === "stdin") {
         child.stdin.end(prompt);
