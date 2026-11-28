@@ -94,7 +94,21 @@ export function splitClauses(question) {
 // Parses the "[section <id>] # <heading>\n<content>" blocks the watcher renders
 // into the assess/verify context. Section content may itself contain blank
 // lines, so blocks are delimited by the next "[section " label, not by "\n\n".
-export function parseSections(context) {
+// The untrusted-content delimiters the watcher wraps reference material in
+// (packages/prompts wrapUntrusted, docs/threat-model.md TM3/TM31):
+// `<<<UNTRUSTED_REFERENCE_MATERIAL id=<nonce>>>>` … `<<<END_UNTRUSTED_REFERENCE_MATERIAL
+// id=<nonce>>>>`, with a fresh random id per block. They are framing, not content
+// — an obedient model reads what is between them — so the fixture drops them
+// before treating text as sections, answers or questions. The id is optional
+// here so a prompt from before the nonce (TM31) still parses.
+const UNTRUSTED_MARKER = /<<<(?:END_)?UNTRUSTED_REFERENCE_MATERIAL(?: id=[0-9a-z]+)?>>>/gi;
+
+export function stripUntrustedMarkers(text) {
+  return text.replace(UNTRUSTED_MARKER, "");
+}
+
+export function parseSections(rawContext) {
+  const context = stripUntrustedMarkers(rawContext);
   const sections = [];
   const pattern = /\[section ([^\]]+)\] # ([^\n]*)\n?/g;
   let match = pattern.exec(context);
@@ -347,5 +361,6 @@ function extractLabelled(message, startLabel, endLabel) {
     return "";
   }
   const from = start + startLabel.length;
-  return (end === -1 ? message.slice(from) : message.slice(from, end)).trim();
+  // The answer under review arrives wrapped as untrusted material (TM31).
+  return stripUntrustedMarkers(end === -1 ? message.slice(from) : message.slice(from, end)).trim();
 }
