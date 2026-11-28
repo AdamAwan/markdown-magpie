@@ -124,14 +124,15 @@ The API is a [Hono](https://hono.dev) app served under `/api`. It listens on `PO
   the result from the resource link. Enqueue-only routes are **idempotent while queued**:
   a repeat request for a resource with a job already in flight reuses that job rather than
   enqueueing a duplicate.
-- **API16** — **Service-principal callbacks.** The watcher (a service principal, or a
-  `manage:jobs` holder) calls back into the API for the scoped context a job needs and to
-  record results. These are ordinary HTTP endpoints, not a side channel: the pure
+- **API16** — **Service-principal callbacks.** The watcher (a service principal) calls
+  back into the API for the scoped context a job needs and to record results. These are ordinary HTTP endpoints, not a side channel: the pure
   retrieval/routing callbacks (`POST /api/retrieve`, `POST /api/route`), the job
   lifecycle callbacks (`claim` / `heartbeat` / `complete` / `fail`), the maintenance
   orchestration triggers (`/api/fix-patrol/*`, `/api/source-sync/run`,
   `/api/scheduled-tasks/:key/run`), and the closure callback
   (`/api/proposals/:id/verify-closure`). The watcher itself has **no database access**.
+  With auth on, the job lifecycle callbacks accept **only** a service principal — a human
+  `manage:jobs` holder gets 403 ([authorization.md](./authorization.md) AZ29).
 
 ## Mount map
 
@@ -1033,7 +1034,8 @@ Retries a `failed` job. `409 job_not_failed` if it is not failed; `404 job_not_f
 ### Watcher-only endpoints
 
 `POST /api/jobs/claim`, `POST /api/jobs/:id/heartbeat`, `POST /api/jobs/:id/complete`, and
-`POST /api/jobs/:id/fail` are driven by the watcher (API16). Claim takes `{ "workerName",
+`POST /api/jobs/:id/fail` are driven by the watcher (API16) and, with auth on, require a
+service (client-credentials) principal: anyone else gets `403 forbidden` (AZ29). Claim takes `{ "workerName",
 "capabilities": [...] }` and returns `{ "job": Job }` or `{ "job": null }`; fail takes a
 structured `error` object. Complete takes `{ "output", "executor"?, "usage"?, "provider"?,
 "model"? }` — usage is the run's summed provider-reported token spend (#241), and

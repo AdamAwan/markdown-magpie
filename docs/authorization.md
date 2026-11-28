@@ -214,6 +214,21 @@ in three deliberately-permissive cases.
     (`assertCan(ctx, c, "ask", undefined)`).
 - **AZ20** — The watcher itself is unaffected: its M2M token hits carve-out AZ13, and
   deployments with no grants configured behave exactly as before.
+- **AZ29** — The watcher's **job-lifecycle** endpoints — `POST /api/jobs/claim`,
+  `POST /api/jobs/:id/heartbeat`, `POST /api/jobs/:id/complete`,
+  `POST /api/jobs/:id/fail` — MUST accept only a genuine **service** principal
+  (`isService`, AZ13), on top of their `manage:jobs` scope gate
+  (`requireServicePrincipal`, `apps/api/src/auth/middleware.ts`). Human ops admins hold
+  `manage:jobs` too; without this a human could claim a job (reading its input, which
+  may embed source-derived content) or post a forged completion that the API then
+  applies. A human or an on-behalf-of delegated principal gets 403 `forbidden`; a
+  principal-absent request gets 401 unless auth is explicitly disabled, in which case
+  the endpoints stay open exactly as before (local dev, the e2e/eval harnesses). The
+  watcher's credential therefore MUST be a client-credentials token: the
+  `WATCHER_API_CLIENT_ID`/`SECRET` pair, or a legacy static `API_TOKEN` that was itself
+  minted by the client-credentials grant — a pasted **user** token no longer works.
+  Operator job management (`cancel`, `retry`, `accept-failure`) stays a human action
+  (AZ27).
 
 ### Service-token acquisition (machine-to-machine callers)
 
@@ -448,7 +463,7 @@ JWKS and token endpoints, the roles claim, and the client-credentials scope
 | Per-provider profiles: issuer/JWKS/token URL defaults, claim mapping, `isService`, client-credentials request shape, MCP advertisement (authorization server, scope form, Entra resource checks) | `packages/auth/src/provider.ts` |
 | Runtime M2M service-token acquisition (client-credentials) | `packages/auth/src/api-token.ts` |
 | On-behalf-of delegation (headers, scope, resolver) | `packages/auth/src/on-behalf-of.ts` |
-| `requireAuth` / `requireScopes` + delegation wiring | `apps/api/src/auth/middleware.ts` |
+| `requireAuth` / `requireScopes` / `requireServicePrincipal` + delegation wiring | `apps/api/src/auth/middleware.ts` |
 | Flow-scoped check, `can` / `assertCan`, roleless-human alert, privileged-action gate (`requirePrivilege`) | `apps/api/src/auth/capabilities.ts` |
 | Entra boot check (no role grants with auth on) | `apps/api/src/platform/config.ts` (`authorizationConfigIssues`) |
 | Capability set, `KNOWLEDGE_ROLE_GRANTS` parsing | `apps/api/src/stores/knowledge-repositories.ts` (`getConfiguredRoleGrants`) |
@@ -461,7 +476,8 @@ JWKS and token endpoints, the roles claim, and the client-credentials scope
 endpoint defaults, claim mapping, form-encoded client-credentials, legacy-env
 fallbacks), `apps/api/src/platform/config.test.ts`, `apps/watcher/src/config.test.ts`,
 `apps/api/src/auth/{capabilities,middleware,middleware.delegation,privileged-routes}.test.ts`,
-`apps/api/src/features/{retrieve,route}/routes.flow-scope.test.ts`.
+`apps/api/src/features/{retrieve,route}/routes.flow-scope.test.ts`,
+`apps/api/src/features/jobs/routes.worker-auth.test.ts`.
 
 ## Provenance (design history)
 

@@ -98,6 +98,9 @@ and opens pull requests to the configured destination repositories.
   every user who can sign in, privileged actions (config writes, deletes, reset,
   job and schedule management) are authorized from app roles (`admin` / `ops`
   capabilities, AZ27), and the API refuses to start without role grants (AZ28).
+  The watcher's job claim/heartbeat/complete/fail endpoints accept only service
+  (client-credentials) principals, so a human operator cannot read job inputs by
+  claiming jobs or forge job results (AZ29).
 - **Mandatory human review of AI output.** No AI-generated content reaches a
   destination repository's default branch without a human merging a pull
   request. See [threat-model.md](threat-model.md) (control C4) and the operator

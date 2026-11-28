@@ -99,7 +99,7 @@ See [authorization.md](./authorization.md). Auth **fails closed**: it is on unle
 | Variable | Read by | Default | Class | Notes |
 | --- | --- | --- | --- | --- |
 | `WATCHER_API_CLIENT_ID`, `WATCHER_API_CLIENT_SECRET` | watcher | — | **essential** when auth is on (or `API_TOKEN`) | Client-credentials pair; must be set together. Preferred — the token refreshes itself. |
-| `API_TOKEN` | watcher | — | common (legacy) | Static pre-minted token; used only when the pair is unset. Expires. |
+| `API_TOKEN` | watcher | — | common (legacy) | Static pre-minted token; used only when the pair is unset. Expires. Must be a client-credentials (service) token: the job claim/heartbeat/complete/fail endpoints reject user tokens ([AZ29](./authorization.md)). |
 | `MCP_API_CLIENT_ID`, `MCP_API_CLIENT_SECRET` | mcp (HTTP) | — | **essential** for HTTP MCP when auth is on (or `MCP_API_AUTH_TOKEN`) | The MCP server's own machine identity for calling the API. |
 | `MCP_API_AUTH_TOKEN` | mcp (HTTP) | — | common (legacy) | Static alternative to the pair. Expires. |
 | `MCP_AUTH_TOKEN` | mcp (stdio) | — | **essential** for stdio MCP when auth is on | Bearer token the stdio transport presents to the API. |

@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator";
 import type { AppContext } from "../../context.js";
-import { requireScopes } from "../../auth/middleware.js";
+import { requireScopes, requireServicePrincipal } from "../../auth/middleware.js";
 import { requirePrivilege } from "../../auth/capabilities.js";
 import { HttpError } from "../../http/errors.js";
 import { readJsonBody } from "../../http/body.js";
@@ -41,9 +41,14 @@ export function jobRoutes(ctx: AppContext): Hono {
     c.json({ schedules: await ctx.jobs.listSchedules() })
   );
 
+  // The watcher's job-lifecycle endpoints (claim / heartbeat / complete / fail)
+  // are restricted to service principals: a human ops admin holds manage:jobs
+  // too, and must not claim jobs (reading their inputs) or forge outcomes for
+  // them. No-op when auth is disabled. See docs/authorization.md AZ29.
   app.post(
     "/claim",
     requireScopes("manage:jobs"),
+    requireServicePrincipal(),
     zValidator("json", claimJobBodySchema, (result, c) => {
       if (!result.success) return c.json({ error: "worker_capabilities_required" }, 400);
     }),
@@ -63,7 +68,7 @@ export function jobRoutes(ctx: AppContext): Hono {
     }
   });
 
-  app.post("/:id/heartbeat", requireScopes("manage:jobs"), async (c) => {
+  app.post("/:id/heartbeat", requireScopes("manage:jobs"), requireServicePrincipal(), async (c) => {
     try {
       const parsed = heartbeatJobBodySchema.safeParse(await readJsonBody(c));
       const workerName = parsed.success ? parsed.data.workerName : undefined;
@@ -78,6 +83,7 @@ export function jobRoutes(ctx: AppContext): Hono {
   app.post(
     "/:id/complete",
     requireScopes("manage:jobs"),
+    requireServicePrincipal(),
     zValidator("json", completeJobBodySchema, (result, c) => {
       if (!result.success) return c.json({ error: "invalid_output" }, 400);
     }),
@@ -121,6 +127,7 @@ export function jobRoutes(ctx: AppContext): Hono {
   app.post(
     "/:id/fail",
     requireScopes("manage:jobs"),
+    requireServicePrincipal(),
     zValidator("json", failJobBodySchema, (result, c) => {
       if (!result.success) return c.json({ error: "invalid_job_error" }, 400);
     }),

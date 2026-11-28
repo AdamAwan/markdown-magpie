@@ -348,7 +348,9 @@ paid-for generation away and force pg-boss to redo the whole job; both are close
   `job_not_failed` unless the job is `failed`); `POST /api/jobs/:id/accept-failure`
   (acknowledge a failure without changing queue state — it stays inspectable/retryable but
   stops warning).
-- **J34** — Watcher-only surface (operators rarely call directly): `POST /api/jobs/claim`
+- **J34** — Watcher-only surface, restricted to service principals when auth is on
+  (a human `manage:jobs` holder gets 403 —
+  [authorization.md](./authorization.md) AZ29): `POST /api/jobs/claim`
   (J17); `POST /api/jobs/:id/heartbeat` (keep a claim alive; the response flags `cancelled`
   so the runner aborts); `POST /api/jobs/:id/complete` (`{output, executor, usage?,
   provider?, model?}` → the envelope of J18–J25; 500 `side_effects_failed`, 404
