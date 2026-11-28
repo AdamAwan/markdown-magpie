@@ -121,10 +121,11 @@ they reported (a bounded wait expiring, a request aborting mid-wait) no longer
 exist.
 
 Retry budget: the re-ask is an `answer_question` job with its own pg-boss retry
-budget, and with no watcher free it simply waits in the queue. A re-ask that fails
-*terminally* leaves the proposal unverified (as an exhausted `verify_gap_closure`
-job did before) and logs an error; retrying that job in the console resumes the
-verification, as does re-running `verify_gap_closure`.
+budget, and with no watcher free it simply waits in the queue. A re-ask that ends
+without an answer (failed, cancelled, expired, gone) is replaced by the reconcile
+tick's stalled-verification sweep, up to three re-ask jobs per question; after
+that the question is parked and the proposal marked `needs_attention`, still with
+no verdict recorded (see "Review follow-up" below).
 
 Re-asks are still created directly (not through the maintenance fan-out budget),
 so they keep `answer_question`'s interactive standing exactly as before.
@@ -181,14 +182,50 @@ verify settles, so its findings and summary are final rather than always zero.
   the whole pipeline. `runJobToCompletion`, its orphan-cancel and `MaintenanceShedError`
   are deleted with their last caller.
 
-## Left for a follow-up
+## Review follow-up (2026-11-28)
 
-- **The console's single-watcher warning is still there** (`apps/web/src/lib/console.ts`,
-  the `single-watcher` notice). It is now wrong, but a test in
-  `apps/web/src/lib/console.test.tsx` pins it and the web tests were out of scope for this
-  change. Removing it is a two-hunk edit: delete the `workers.length === 1` block, and turn
-  the "warns when exactly one watcher is connected" test into "raises nothing for a single
-  fully-capable watcher".
-- **`JOB_RUN_TO_COMPLETION_TIMEOUT_MS` / `settings.jobs.runToCompletionTimeoutMs` no longer
-  do anything** — the bounded wait they capped is gone. The config key, its test and the
-  `.env.example` line were left in place for the separate env-var cleanup.
+An independent review found gaps in the first cut; each is closed.
+
+- **`verify_gap_closure` had no sweeper.** The patrol and the reshape were picked up by
+  their own next tick, but nothing periodic looked at a stalled verification, and the
+  orphaned-merge sweep (#282) could not see one (it keys on "no `verify_gap_closure` job
+  ever existed"). A lost continuation, or a re-ask that was cancelled, expired in the
+  queue, failed terminally or vanished, left a merged proposal unverified forever — worse
+  than the old path, which retried. Every reconcile tick now calls
+  `redriveStalledGapClosure` for each merged proposal of the flow that has no verdict but
+  does have re-ask rows. It is the orchestrator call itself: a completed re-ask nobody
+  applied is applied from the job row; a dead one is replaced; one still queued or running
+  is left alone.
+- **The re-drive is bounded.** A question gets `REASK_ATTEMPT_CAP = 3` re-ask jobs (each
+  with its own pg-boss retries). Past that it is `exhausted`: the question is **parked**
+  with a note saying verification could not run, and the proposal is marked
+  `needs_attention`. No `gap_closure_verification` row is written, nothing counts against
+  `CLOSURE_RETRY_CAP`, and no gap is reopened for re-drafting — an unanswered re-ask still
+  never yields `still_open`.
+- **Register races.** `verifyGapClosure` already read a new re-ask back immediately after
+  registering it, which is what closes the window; that is now stated and tested. The
+  reshape compared the *pre-register* job view and so deferred such a completion to the
+  next tick; it now reads the job back too.
+- **Replays between a paid enqueue and the settle.** `correct_document` has a reuse key
+  (provider, flow, destination, path, content hash, claims hash): a correction already
+  queued, running or completed for exactly that work is reused. Reshape decisions are
+  de-duplicated against those already on record for the flow. A replayed reshape sees the
+  composition its own first attempt changed and takes the safe branch (no drafting; the
+  next tick re-judges).
+- **`finalizeFixPatrolRun` was read-then-write.** It now runs under a per-run lock, so a
+  finaliser that listed the rows before a sibling settled cannot overwrite `completed`
+  with a stale `running`.
+- **Pruning.** `pruneSettledBefore` is per orchestrator and skips any scope that still
+  holds a pending row. Gap-closure rows are never pruned on age at all — they are dropped
+  when the verdict is recorded — so a stalled verification keeps the answers it paid for.
+- **A stalled reshape no longer freezes a flow.** A reshape still unclaimed
+  `RESHAPE_STALL_MS` (30 min) after it was enqueued is cancelled and written off, and the
+  tick drafts without it — the old "timed out, draft anyway" behaviour. A reshape a watcher
+  is actually running is never written off; its own expiry bounds it.
+- **Connection pinning.** A continuation holds one pooled connection for its whole run
+  (a session-level advisory lock lives on the connection that took it) and needs others
+  for its queries. Enough simultaneous holders would leave none; each would then fail on
+  the pool's connection timeout and be replayed. `withFlowRunLockWaiting` now admits at
+  most half the pool as holders per process; the rest wait holding nothing.
+- The console's single-watcher notice and the dead `JOB_RUN_TO_COMPLETION_TIMEOUT_MS` key
+  are removed.

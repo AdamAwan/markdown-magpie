@@ -115,7 +115,11 @@ Entry: `reconcileGaps` (`POST /api/gaps/reconcile`), driven by the
   and the run continues to drafting, and when the reshape of *this exact composition*
   failed or was cancelled the next tick drafts without it rather than re-buying the same
   failing generation. A tick also applies a completed reshape whose completion-side
-  continuation never ran.
+  continuation never ran. A reshape still **unclaimed** `RESHAPE_STALL_MS` (30 min) after
+  it was enqueued — no capable watcher — is cancelled (so no paid generation runs unread)
+  and written off the same way, so the flow drafts instead of freezing; one a watcher is
+  running is never written off. Decision audit rows are recorded once even if the
+  completion is replayed.
 - **G18** — **Composition short-circuit**: before enqueuing the reshape, the reconciler
   hashes the active cluster composition (sorted cluster ids each paired with sorted member
   gap ids) and compares it to `last_reshape_composition_hash`. An identical hash means the
@@ -163,8 +167,19 @@ Entry: `reconcileGaps` (`POST /api/gaps/reconcile`), driven by the
   infrastructure failure can never become a `still_open` content verdict that would wrongly
   reopen a correctly-merged doc (#150). The evaluation is serialised per proposal and its
   entry guard re-read under that lock, so two re-asks completing together cannot
-  double-record. A re-ask that fails **terminally** leaves the proposal unverified and logs
-  an error; retrying that job, or re-running `verify_gap_closure`, resumes it.
+  double-record.
+- **G23b** — **Stalled verifications are re-driven, and bounded.** Nothing fires when a
+  re-ask ends without its continuation running — the continuation was lost (the watcher's
+  `complete()` retries ran out, the API restarted), or the re-ask was cancelled, expired in
+  the queue, failed terminally, or vanished. So every `process_gaps_to_pull_requests` tick
+  re-drives each of its flow's merged proposals that has no verdict but has re-ask rows
+  (`stalledVerificationsRedriven` in the run details): a completed re-ask nobody applied is
+  applied, a dead one is replaced, one still queued or running is left alone. A question
+  gets `REASK_ATTEMPT_CAP = 3` re-ask jobs; past that it is **parked** with a note that
+  verification could not run and the proposal is marked `needs_attention`. That escalation
+  records **no** verdict: no `gap_closure_verification` row, nothing counted against
+  `CLOSURE_RETRY_CAP`, no gap reopened for re-drafting (G23 still holds). Answered re-asks
+  are kept until the verdict is recorded, however long the verification stalls.
 - **G23a** — **No orchestrator needs a second watcher.** None of the maintenance
   orchestrators waits on the AI jobs it enqueues — `seed_bootstrap`, `source_change_sync`
   and `editorial_patrol` always were enqueue-only; `verify_gap_closure` (G23),
@@ -183,7 +198,8 @@ Entry: `reconcileGaps` (`POST /api/gaps/reconcile`), driven by the
   unchanged), runs the dedupe and split lenses, and returns; its maintenance run is
   recorded `running`. Each verify's **completion** applies that document's verdict —
   annotate source conflicts, repair resolved ones, reconcile-gate the finding, enqueue
-  `correct_document` — stamps the patrol cursor with the hash of the content it verified,
+  `correct_document` (reusing an identical correction already queued, running or completed,
+  so a replayed completion never buys it twice) — stamps the patrol cursor with the hash of the content it verified,
   and folds the outcome into the run, which completes when its last verify settles. A
   verdict for content re-indexed while the verify ran is dropped and the doc left
   unstamped; a failed or cancelled verify leaves its doc unchecked and re-checkable. Each
@@ -247,6 +263,8 @@ Entry: `reconcileGaps` (`POST /api/gaps/reconcile`), driven by the
 | `GAP_CLUSTER_ASSIGN_THRESHOLD` | 0.84 | `apps/api/src/platform/config.ts` |
 | `MAX_DRAFTS_PER_TICK` | 10 | `apps/api/src/scheduling/gap-reconciler.ts` |
 | `CLOSURE_RETRY_CAP` | 2 | `apps/api/src/features/proposals/service.ts` |
+| `REASK_ATTEMPT_CAP` | 3 | `apps/api/src/features/proposals/service.ts` |
+| `RESHAPE_STALL_MS` | 30 min | `apps/api/src/scheduling/gap-reconciler.ts` |
 | `PATROL_BATCH_SIZE` / `PATROL_RANDOM_COUNT` | 10 / 2 | `apps/api/src/features/patrol/service.ts` |
 | `IMPROVE_PATROL_BATCH_SIZE` / `_RANDOM_COUNT` | 2 / 1 | `apps/api/src/features/patrol/service.ts` |
 | `WATCHER_MAINTENANCE_TIMEOUT_MS` | 15 min | `apps/watcher/src/config.ts` |

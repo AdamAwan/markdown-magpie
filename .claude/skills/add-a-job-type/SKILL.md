@@ -135,7 +135,10 @@ Postgres-backed broker integration test and `scripts/e2e-jobs.ts`).
   for the lock, it must not skip), **idempotent** (re-read the row under the lock; a settled
   row is a no-op; do paid enqueues before settling), and **self-healing** (the orchestrator's
   next tick applies a `completed` follow-up whose continuation never ran and writes off one
-  that failed — the broker, not the row, says whether a job is still running).
+  that failed — the broker, not the row, says whether a job is still running). The sweep is
+  not optional: a completion's continuation can be lost, and a job can end without one
+  (cancelled, expired in the queue), so an orchestration with no periodic re-drive stalls
+  forever. Bound the re-drive and make exhaustion visible (see `redriveStalledGapClosure`).
 - **A follow-up that has not completed is not a result.** Only a job in state `completed`
   carries an outcome. Treating a queued, failed or cancelled follow-up as a *content*
   verdict silently converts an infrastructure outage into a wrong answer — report it as

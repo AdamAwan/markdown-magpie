@@ -920,7 +920,8 @@ closes; otherwise they are reopened (with the verification detail as a `note`), 
 `needs_attention` after repeated failures. The outcome is persisted to
 `proposals.closure_status` and each re-ask to `gap_closure_verification`. The endpoint is
 re-entrant: calling it again reuses re-asks already in flight or answered, replaces only
-ones that failed, and returns the recorded verdict once there is one. See
+ones that died (at most three re-ask jobs per question, then `needs_attention` with no
+verdict recorded), and returns the recorded verdict once there is one. See
 [gaps-and-maintenance.md](./gaps-and-maintenance.md), [ai-jobs.md](ai-jobs.md), and
 [question-logging.md](question-logging.md).
 

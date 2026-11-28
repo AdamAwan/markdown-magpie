@@ -362,11 +362,18 @@ What happens to a re-ask that does not complete:
 
 - **Nobody is free to run it** — it waits in the queue and the verification finishes when a
   watcher picks it up. There is no deadline to miss.
-- **It fails terminally** (its own pg-boss retry budget is spent) — the proposal stays
-  unverified and the API logs an error naming it. Retrying the failed job from the Jobs
-  console, or re-running `verify_gap_closure` for the proposal, resumes the verification:
-  the orchestrator is re-entrant and replaces only the re-asks that failed, reusing those
-  already in flight or answered.
+- **It ends without an answer** — it failed terminally, was cancelled, expired in the
+  queue, or its row is gone — or **it completed but the continuation was lost** (the
+  watcher gave up re-POSTing the completion, the API restarted). Nothing fires in either
+  case, so the gap reconciler's tick sweeps for it: each merged proposal with no verdict
+  and outstanding re-asks is re-driven. A completed re-ask is applied from the stored
+  answer; a dead one is replaced, reusing those already in flight or answered. Retrying a
+  failed re-ask from the Jobs console also resumes the verification.
+- **It keeps dying** — a question gets three re-ask jobs. After the third ends without an
+  answer the question is **parked** with a note that verification could not run, and the
+  proposal is marked `needs_attention`. This is deliberately *not* a verdict: no
+  `still_open` is recorded, the retry cap is untouched and nothing is re-drafted. A human
+  dismisses it (the merge stands) or retries it.
 
 The whole evaluation runs under a per-proposal lock, and the `closure_status` entry guard is
 re-read under it, so two re-asks completing at the same instant on two watchers — or two

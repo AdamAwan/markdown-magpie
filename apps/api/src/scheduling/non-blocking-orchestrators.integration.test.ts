@@ -5,6 +5,7 @@ import type { JobCapability } from "@magpie/jobs";
 import { Pool } from "pg";
 import type { AppContext } from "../context.js";
 import { completeJob } from "../features/jobs/service.js";
+import * as patrol from "../features/patrol/service.js";
 import * as proposals from "../features/proposals/service.js";
 import { PgBossJobBroker } from "../jobs/pg-boss-broker.js";
 import { makeTestContext } from "../test-support/context.js";
@@ -127,6 +128,60 @@ test(
           "one still_open per question — the second continuation recorded nothing"
         );
       }
+    });
+
+    await t.test("the reconcile tick re-drives a verification whose continuation was lost", async () => {
+      const ctx = makeTestContext({ jobs: broker, pool });
+      const { merged } = await mergedProposal(ctx, ["How do I configure X?"]);
+      assert.equal((await proposals.verifyGapClosure(ctx, merged)).closureStatus, "pending");
+
+      // The re-ask completes in pg-boss, but the dispatcher's side effects never run
+      // (the watcher gave up re-POSTing; the API restarted mid-completion).
+      const reask = await ctx.jobs.claim("solo", SOLO_CAPABILITIES);
+      assert.equal(reask?.type, "answer_question");
+      await ctx.jobs.complete(reask!.id, { result: closing, executor: "solo" });
+      assert.equal((await ctx.stores.proposals.get(merged.id))?.closureStatus, undefined);
+
+      await reconcileGaps(ctx, undefined, { fetchPullRequestStatus: async () => undefined });
+
+      assert.equal((await ctx.stores.proposals.get(merged.id))?.closureStatus, "verified_closed");
+    });
+
+    await t.test("correctness_patrol: verifies completing at the same instant leave the run completed", async () => {
+      // Two completions finalise the same run concurrently. Without the per-run lock
+      // one could list the rows before its sibling settled and then overwrite
+      // `completed` with a stale `running`.
+      const ctx = makeTestContext({ jobs: broker, pool });
+      await ctx.stores.knowledgeIndex.indexMarkdownDocuments({
+        repositoryId: "docs",
+        documents: [
+          { path: "a.md", content: "# a.md" },
+          { path: "b.md", content: "# b.md" }
+        ]
+      });
+      const outcome = await patrol.runFixPatrol(
+        ctx,
+        { trigger: "scheduled" },
+        { dedupeDocument: async () => {}, splitDocument: async () => {} }
+      );
+      assert.ok(outcome.ok);
+      if (!outcome.ok) return;
+      assert.equal(outcome.pendingVerifyCount, 2);
+
+      const first = await ctx.jobs.claim("w1", SOLO_CAPABILITIES);
+      const second = await ctx.jobs.claim("w2", SOLO_CAPABILITIES);
+      assert.ok(first && second);
+      const healthy = { verdict: "healthy", claims: [] };
+      const [a, b] = await Promise.all([
+        completeJob(ctx, first.id, healthy, "w1"),
+        completeJob(ctx, second.id, healthy, "w2")
+      ]);
+      assert.equal(a.ok, true);
+      assert.equal(b.ok, true);
+
+      const run = await ctx.stores.maintenanceRuns.get(outcome.runId);
+      assert.equal(run?.status, "completed");
+      assert.equal(run?.summary, "checked 2/2 docs · 0 findings");
     });
 
     await t.test(
