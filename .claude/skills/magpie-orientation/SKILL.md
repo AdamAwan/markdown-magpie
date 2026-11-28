@@ -398,7 +398,7 @@ apps/
 packages/
   core/       Shared domain types + provider interfaces (incl. ProvenanceClaim).
   auth/       Auth0 / Entra token validation + on-behalf-of helpers.
-  db/         SQL migrations (0001–0071; see the write-a-migration skill).
+  db/         SQL migrations (0001–0073; see the write-a-migration skill).
   git/        Git sync + PR adapters: ensureGitCheckout (blobless partial clones),
               PR status/mergeability polling, LocalGitProposalPublisher, checkout locks.
   jobs/       Job contracts: JOB_TYPES, capabilities, input/output schemas, queue
