@@ -4,7 +4,7 @@ import { describe, it } from "node:test";
 import type { JobCapability, JobError, JobType, JobView } from "@magpie/jobs";
 import { createLogger } from "@magpie/logger";
 import type { JobRunner } from "./runners/types.js";
-import type { WatcherApiClient } from "./http-client.js";
+import type { WorkerLoopApiClient } from "./http-client.js";
 import { WorkerLoop } from "./worker-loop.js";
 
 function fakeJob(overrides: Partial<JobView> = {}): JobView {
@@ -31,7 +31,7 @@ interface FakeApiOptions {
   heartbeats?: boolean[];
 }
 
-class FakeApiClient implements WatcherApiClient {
+class FakeApiClient implements WorkerLoopApiClient {
   claims: { workerName: string; capabilities: JobCapability[] }[] = [];
   completed: { id: string; output: unknown; usage?: unknown; identity?: unknown }[] = [];
   failed: { id: string; error: JobError }[] = [];
@@ -65,6 +65,14 @@ class FakeApiClient implements WatcherApiClient {
 
   async fail(id: string, error: JobError): Promise<void> {
     this.failed.push({ id, error });
+  }
+
+  released: string[] = [];
+  releaseError: Error | undefined;
+
+  async release(id: string): Promise<void> {
+    if (this.releaseError) throw this.releaseError;
+    this.released.push(id);
   }
 }
 
@@ -243,7 +251,7 @@ describe("WorkerLoop", () => {
     // off, and retry on the next cycle rather than letting the rejection escape
     // and kill the process.
     let calls = 0;
-    const api: WatcherApiClient = {
+    const api: WorkerLoopApiClient = {
       async claim() {
         calls += 1;
         if (calls === 1) {
@@ -256,7 +264,8 @@ describe("WorkerLoop", () => {
         return { cancelled: false };
       },
       async complete() {},
-      async fail() {}
+      async fail() {},
+      async release() {}
     };
     const cap = captureLogger();
     const loop = new WorkerLoop(api, [], CAPS, "w1", cap.logger, { pollIntervalMs: 1 });
@@ -294,6 +303,105 @@ describe("WorkerLoop", () => {
     await loop.stop();
     await ticking;
     assert.ok(seenSignal?.aborted, "shutdown should abort the active runner's signal");
+    // Even a runner that resolves on abort is released, never completed: its
+    // wound-down result cannot be told apart from a finished one (J53).
+    assert.deepEqual(api.released, ["job-1"]);
+    assert.equal(api.completed.length, 0);
+    assert.equal(api.failed.length, 0);
+  });
+
+  it("releases (never fails) a job whose runner rejects on shutdown (J53)", async () => {
+    const api = new FakeApiClient({ jobs: [fakeJob()] });
+    const runner = new FakeRunner(
+      (signal) =>
+        new Promise((_resolve, reject) => {
+          signal.addEventListener("abort", () => reject(new Error("aborted by signal")), { once: true });
+        })
+    );
+    const loop = new WorkerLoop(api, [runner], CAPS, "w1", silentLogger, { pollIntervalMs: 1 });
+    const running = loop.run();
+    while (runner.ran === 0) await new Promise((resolve) => setTimeout(resolve, 1));
+    await loop.stop();
+    await running;
+    assert.deepEqual(api.released, ["job-1"]);
+    assert.equal(api.failed.length, 0, "an interrupted job must not burn a retry");
+    assert.equal(api.completed.length, 0);
+  });
+
+  it("stops waiting for a runner that ignores its abort and releases after the grace (J53)", async () => {
+    const api = new FakeApiClient({ jobs: [fakeJob()] });
+    const runner = new FakeRunner(() => new Promise(() => {})); // never settles
+    const loop = new WorkerLoop(api, [runner], CAPS, "w1", silentLogger, { pollIntervalMs: 1, shutdownGraceMs: 10 });
+    const ticking = loop.tick();
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    await loop.stop();
+    await ticking;
+    assert.deepEqual(api.released, ["job-1"]);
+  });
+
+  it("releases a job claimed after stop() without running it", async () => {
+    const api = new FakeApiClient({ jobs: [fakeJob()] });
+    const runner = new FakeRunner(async () => ({ answer: "ok" }));
+    const loop = new WorkerLoop(api, [runner], CAPS, "w1", silentLogger, { pollIntervalMs: 1 });
+    await loop.stop();
+    await loop.tick();
+    assert.equal(runner.ran, 0);
+    assert.deepEqual(api.released, ["job-1"]);
+  });
+
+  it("does not release a job the server cancelled, even if shutdown follows", async () => {
+    const api = new FakeApiClient({ jobs: [fakeJob({ heartbeatSeconds: 0.02 })], heartbeats: [true] });
+    const runner = new FakeRunner(
+      (signal) =>
+        new Promise((_resolve, reject) => {
+          signal.addEventListener("abort", () => setTimeout(() => reject(new Error("aborted")), 20), { once: true });
+        })
+    );
+    const loop = new WorkerLoop(api, [runner], CAPS, "w1", silentLogger, { pollIntervalMs: 1 });
+    const ticking = loop.tick();
+    while (!runner.lastSignal?.aborted) await new Promise((resolve) => setTimeout(resolve, 2));
+    await loop.stop();
+    await ticking;
+    assert.deepEqual(api.released, []);
+    assert.equal(api.failed.length, 0);
+  });
+
+  it("still exits cleanly when the shutdown release itself fails", async () => {
+    const api = new FakeApiClient({ jobs: [fakeJob()] });
+    api.releaseError = new Error("ECONNREFUSED");
+    const runner = new FakeRunner(
+      (signal) =>
+        new Promise((_resolve, reject) => {
+          signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+        })
+    );
+    const cap = captureLogger();
+    const loop = new WorkerLoop(api, [runner], CAPS, "w1", cap.logger, { pollIntervalMs: 1 });
+    const ticking = loop.tick();
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    await loop.stop();
+    await ticking;
+    assert.equal(api.failed.length, 0);
+    assert.ok(cap.lines().some((line) => /could not release/.test(String(line["msg"]))));
+  });
+
+  it("ticks liveness from the job heartbeat, not only from the poll loop (J55)", async () => {
+    // heartbeatSeconds 0.04 => a 20ms heartbeat; the job runs ~90ms, so the poll
+    // loop ticks only once at the end while the heartbeat ticks throughout.
+    const api = new FakeApiClient({ jobs: [fakeJob({ heartbeatSeconds: 0.04 })] });
+    const runner = new FakeRunner(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 90));
+      return {};
+    });
+    let ticks = 0;
+    const loop = new WorkerLoop(api, [runner], CAPS, "w1", silentLogger, {
+      pollIntervalMs: 1,
+      onTick: () => {
+        ticks += 1;
+      }
+    });
+    await loop.tick(); // tick() is one cycle WITHOUT run()'s per-iteration onTick
+    assert.ok(ticks >= 2, `expected heartbeat-driven liveness ticks during the job, got ${ticks}`);
   });
 
   it("logs a structured completion line on success", async () => {
