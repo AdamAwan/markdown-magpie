@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { Principal } from "@magpie/auth";
-import { isRolelessHumanToken, principalHasCapability } from "./capabilities.js";
+import { isRolelessHumanToken, principalHasCapability, principalHasPrivilege } from "./capabilities.js";
 import type { KnowledgeRoleGrants } from "../stores/knowledge-repositories.js";
 
 const GRANTS: KnowledgeRoleGrants = {
@@ -104,4 +104,38 @@ test("multiple roles union their grants", () => {
 
 test("unknown roles on the token are simply ignored", () => {
   assert.equal(principalHasCapability(GRANTS, principal(["not-a-configured-role"]), "read", "hr"), false);
+});
+
+// AZ27: privileged actions on a provider whose user scopes are NOT per-user (Entra).
+const PRIVILEGED_GRANTS: KnowledgeRoleGrants = {
+  "magpie-admins": { "*": ["admin", "ops"] },
+  "magpie-ops": { "*": ["ops"] },
+  "kb-hr-curators": { hr: ["read", "manage", "ops"] }
+};
+
+test("privilege: Entra human needs the capability on * via a role grant", () => {
+  assert.equal(principalHasPrivilege(PRIVILEGED_GRANTS, principal(["magpie-admins"]), "admin", false), true);
+  assert.equal(principalHasPrivilege(PRIVILEGED_GRANTS, principal(["magpie-ops"]), "ops", false), true);
+  assert.equal(principalHasPrivilege(PRIVILEGED_GRANTS, principal(["magpie-ops"]), "admin", false), false);
+  // A per-flow grant of a deployment-wide capability matches nothing.
+  assert.equal(principalHasPrivilege(PRIVILEGED_GRANTS, principal(["kb-hr-curators"]), "ops", false), false);
+  assert.equal(principalHasPrivilege(PRIVILEGED_GRANTS, principal([]), "ops", false), false);
+});
+
+test("privilege: Entra human with no roles claim is denied (no-assignment users)", () => {
+  assert.equal(principalHasPrivilege(PRIVILEGED_GRANTS, principal(undefined), "admin", false), false);
+});
+
+test("privilege: no 'no grants configured' carve-out on Entra (fails closed)", () => {
+  assert.equal(principalHasPrivilege({}, principal(["magpie-admins"]), "admin", false), false);
+});
+
+test("privilege: service principals and auth-disabled requests keep scope-only behaviour", () => {
+  assert.equal(principalHasPrivilege({}, m2m(), "ops", false), true);
+  assert.equal(principalHasPrivilege(PRIVILEGED_GRANTS, undefined, "admin", false), true);
+});
+
+test("privilege: providers with per-user scopes (Auth0) stay scope-only", () => {
+  assert.equal(principalHasPrivilege({}, principal(undefined), "admin", true), true);
+  assert.equal(principalHasPrivilege(PRIVILEGED_GRANTS, principal([]), "ops", true), true);
 });

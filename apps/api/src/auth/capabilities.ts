@@ -1,5 +1,5 @@
-import type { Context } from "hono";
-import type { Principal } from "@magpie/auth";
+import type { Context, MiddlewareHandler } from "hono";
+import { providerProfile, type Principal } from "@magpie/auth";
 import type { AppContext } from "../context.js";
 import { HttpError } from "../http/errors.js";
 import { logger } from "../logger.js";
@@ -51,18 +51,81 @@ export function principalHasCapability(
     return principal.isService;
   }
 
-  return principal.roles.some((role) => {
+  return rolesGrant(grants, principal.roles, capability, flowId);
+}
+
+// Whether any of the roles is granted the capability on the flow. A "*" grant
+// covers every flow (and is the only way to match a flow-less resource, e.g. a
+// proposal drafted before flows existed, or a deployment-wide capability).
+function rolesGrant(
+  grants: KnowledgeRoleGrants,
+  roles: readonly string[],
+  capability: KnowledgeCapability,
+  flowId: string | undefined
+): boolean {
+  return roles.some((role) => {
     const perFlow = grants[role];
     if (!perFlow) {
       return false;
     }
-    // A "*" grant covers every flow (and is the only way to match a flow-less
-    // resource, e.g. a proposal drafted before flows existed).
     if (perFlow["*"]?.includes(capability)) {
       return true;
     }
     return flowId !== undefined && (perFlow[flowId]?.includes(capability) ?? false);
   });
+}
+
+// The deployment-wide capabilities that authorize privileged actions for HUMAN
+// principals when the IdP's scopes are not per-user (docs/authorization.md AZ27):
+// `admin` for config writes and destructive deletes/reset, `ops` for job and
+// schedule management.
+export type PrivilegedCapability = Extract<KnowledgeCapability, "admin" | "ops">;
+
+// Privileged-action check, layered on top of the route's scope gate.
+//
+// Scopes are a per-user signal only when the IdP filters them per user (Auth0
+// RBAC). Entra grants every consented delegated scope to EVERY user who can sign
+// in, so on Entra a user token holding `manage:admin`/`manage:jobs` proves
+// nothing about the user; the only per-user signal is the app ROLES on the token.
+// So, for a human principal on a provider without per-user scopes, the action
+// requires the capability on the "*" flow via KNOWLEDGE_ROLE_GRANTS — strictly:
+// there is NO "no grants configured" carve-out here (the API refuses to boot on
+// Entra without grants anyway), and a roleless human is denied.
+//
+// Unchanged cases: no principal (auth disabled; the scope layer already passed),
+// a genuine service principal (its scopes are per-application permissions an
+// administrator consented to), and providers whose scopes are per-user (Auth0),
+// where the scope gate alone is the per-user check — exactly as before.
+export function principalHasPrivilege(
+  grants: KnowledgeRoleGrants,
+  principal: PrincipalForCheck | undefined,
+  capability: PrivilegedCapability,
+  perUserScopes: boolean
+): boolean {
+  if (!principal || principal.isService || perUserScopes) {
+    return true;
+  }
+  if (principal.roles === undefined) {
+    return false;
+  }
+  return rolesGrant(grants, principal.roles, capability, undefined);
+}
+
+// Route middleware form of principalHasPrivilege: mount it after the route's
+// requireScopes gate. Denies with 403 forbidden, matching requireScopes.
+export function requirePrivilege(ctx: AppContext, capability: PrivilegedCapability): MiddlewareHandler {
+  return async (c, next) => {
+    const principal = c.get("principal");
+    const perUserScopes = providerProfile(ctx.settings.auth.provider).perUserScopes;
+    if (!principalHasPrivilege(ctx.knowledgeConfig.roleGrants, principal, capability, perUserScopes)) {
+      logger.warn(
+        { subject: principal?.subject, capability, roles: principal?.roles },
+        'privileged action denied: the identity provider\'s scopes are not per-user, so this action requires the capability on "*" via a role in KNOWLEDGE_ROLE_GRANTS'
+      );
+      return c.json({ error: "forbidden" }, 403);
+    }
+    await next();
+  };
 }
 
 // A token that hits the roles-absent branch above but carries NO positive service

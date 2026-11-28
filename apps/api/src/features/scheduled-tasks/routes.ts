@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { isValidCron } from "@magpie/core";
 import type { AppContext } from "../../context.js";
 import { requireScopes } from "../../auth/middleware.js";
+import { requirePrivilege } from "../../auth/capabilities.js";
 import { rateLimit } from "../../http/rate-limit.js";
 import { apiLink } from "../../platform/paths.js";
 import { HttpError } from "../../http/errors.js";
@@ -14,7 +15,7 @@ export function scheduledTaskRoutes(ctx: AppContext): Hono {
 
   app.get("/", requireScopes("read:knowledge"), async (c) => c.json({ tasks: await scheduledTasksForResponse(ctx) }));
 
-  app.post("/:key/settings", requireScopes("manage:jobs"), async (c) => {
+  app.post("/:key/settings", requireScopes("manage:jobs"), requirePrivilege(ctx, "ops"), async (c) => {
     const payload = await readJsonBody<{ enabled?: boolean; cron?: string }>(c);
     const cron = typeof payload.cron === "string" ? payload.cron.trim() : "";
     if (!isValidCron(cron)) {
@@ -35,25 +36,31 @@ export function scheduledTaskRoutes(ctx: AppContext): Hono {
     return c.json({ tasks: await scheduledTasksForResponse(ctx) });
   });
 
-  app.post("/:key/run", requireScopes("manage:jobs"), rateLimit(ctx, "trigger"), async (c) => {
-    const outcome = await service.runScheduledTask(ctx, c.req.param("key"));
-    if (!outcome.ok) {
-      if (outcome.code === "already_running") {
-        throw new HttpError(409, outcome.code, `A ${outcome.jobType} job for this task is already in flight.`);
+  app.post(
+    "/:key/run",
+    requireScopes("manage:jobs"),
+    requirePrivilege(ctx, "ops"),
+    rateLimit(ctx, "trigger"),
+    async (c) => {
+      const outcome = await service.runScheduledTask(ctx, c.req.param("key"));
+      if (!outcome.ok) {
+        if (outcome.code === "already_running") {
+          throw new HttpError(409, outcome.code, `A ${outcome.jobType} job for this task is already in flight.`);
+        }
+        throw new HttpError(404, outcome.code);
       }
-      throw new HttpError(404, outcome.code);
-    }
 
-    const { job } = outcome;
-    return c.json(
-      {
-        job,
-        links: { job: apiLink(`/jobs/${job.id}`), wait: apiLink(`/jobs/${job.id}/wait`) },
-        tasks: await scheduledTasksForResponse(ctx)
-      },
-      202
-    );
-  });
+      const { job } = outcome;
+      return c.json(
+        {
+          job,
+          links: { job: apiLink(`/jobs/${job.id}`), wait: apiLink(`/jobs/${job.id}/wait`) },
+          tasks: await scheduledTasksForResponse(ctx)
+        },
+        202
+      );
+    }
+  );
 
   return app;
 }

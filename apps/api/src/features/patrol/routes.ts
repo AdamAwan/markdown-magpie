@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import type { AppContext } from "../../context.js";
 import { requireScopes } from "../../auth/middleware.js";
+import { requirePrivilege } from "../../auth/capabilities.js";
 import { rateLimit } from "../../http/rate-limit.js";
 import { HttpError } from "../../http/errors.js";
 import { readJsonBody } from "../../http/body.js";
@@ -17,7 +18,7 @@ export function fixPatrolRoutes(ctx: AppContext): Hono {
   // hand and `pendingVerifyCount` the verifies still to answer. Body optional; an
   // absent flowId patrols the default (unscoped) flow. (Run history is read via
   // GET /api/maintenance-runs.)
-  app.post("/run", requireScopes("manage:jobs"), rateLimit(ctx, "trigger"), async (c) => {
+  app.post("/run", requireScopes("manage:jobs"), requirePrivilege(ctx, "ops"), rateLimit(ctx, "trigger"), async (c) => {
     const payload = await readJsonBody<{ flowId?: string }>(c);
     const outcome = await patrolService.runFixPatrol(ctx, {
       flowId: payload.flowId?.trim() || undefined,
@@ -34,21 +35,27 @@ export function fixPatrolRoutes(ctx: AppContext): Hono {
     });
   });
 
-  app.post("/improve/run", requireScopes("manage:jobs"), rateLimit(ctx, "trigger"), async (c) => {
-    const payload = await readJsonBody<{ flowId?: string }>(c);
-    const outcome = await patrolService.runImprovePatrol(ctx, {
-      flowId: payload.flowId?.trim() || undefined,
-      trigger: "scheduled"
-    });
-    if (!outcome.ok) {
-      throw new HttpError(400, outcome.code);
+  app.post(
+    "/improve/run",
+    requireScopes("manage:jobs"),
+    requirePrivilege(ctx, "ops"),
+    rateLimit(ctx, "trigger"),
+    async (c) => {
+      const payload = await readJsonBody<{ flowId?: string }>(c);
+      const outcome = await patrolService.runImprovePatrol(ctx, {
+        flowId: payload.flowId?.trim() || undefined,
+        trigger: "scheduled"
+      });
+      if (!outcome.ok) {
+        throw new HttpError(400, outcome.code);
+      }
+      return c.json({
+        runId: outcome.runId,
+        selectedCount: outcome.selectedCount,
+        enqueuedCount: outcome.enqueuedCount
+      });
     }
-    return c.json({
-      runId: outcome.runId,
-      selectedCount: outcome.selectedCount,
-      enqueuedCount: outcome.enqueuedCount
-    });
-  });
+  );
 
   return app;
 }

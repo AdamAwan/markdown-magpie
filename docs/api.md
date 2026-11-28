@@ -61,7 +61,11 @@ The API is a [Hono](https://hono.dev) app served under `/api`. It listens on `PO
 
 - **API7** — Scope is coarse; **flow-scoped capability** authorization (`assertCan(ctx, c,
   capability, flow)`, `apps/api/src/auth/capabilities.ts`) is the fine grain. Capabilities
-  are `ask` / `read` / `manage` / `admin`, checked per flow. A flow-less/`"auto"` request
+  are `ask` / `read` / `manage` per flow and `admin` / `ops` on `*` only. On Entra
+  (delegated scopes are not per-user) the privileged routes — config writes, question
+  purge, reset, job/schedule management and maintenance triggers — additionally require
+  `admin` or `ops` from a human principal's roles (`requirePrivilege`;
+  [authorization.md](./authorization.md) AZ27). A flow-less/`"auto"` request
   is the wildcard case: only a `*`-scoped principal (or a genuine service principal, e.g.
   the watcher) may run it unpinned; a single-flow principal must name their flow. A flow
   the caller cannot see reads as **404** (never a cross-flow-enumerating 403).

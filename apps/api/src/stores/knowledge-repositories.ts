@@ -46,11 +46,13 @@ export interface KnowledgeRepositorySelection {
 }
 
 // Flow-scoped capabilities a role can be granted. `read`/`manage`/`ask` are
-// evaluated per flow; `admin` is a deployment-wide capability (gating destructive
-// actions like data reset) and is only ever granted on the "*" flow.
+// evaluated per flow; `admin` (config writes and destructive actions like data
+// reset or question purge) and `ops` (job and schedule management) are
+// deployment-wide capabilities, only ever granted on the "*" flow. See
+// docs/authorization.md AZ5 and AZ27.
 // Module-local: the capability set is exposed to the rest of the app through the
 // KnowledgeCapability type (below), not the array itself.
-const KNOWLEDGE_CAPABILITIES = ["read", "manage", "ask", "admin"] as const;
+const KNOWLEDGE_CAPABILITIES = ["read", "manage", "ask", "admin", "ops"] as const;
 export type KnowledgeCapability = (typeof KNOWLEDGE_CAPABILITIES)[number];
 
 // role name -> flow id (or "*" for all flows) -> granted capabilities. This is the

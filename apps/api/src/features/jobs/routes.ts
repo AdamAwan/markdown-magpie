@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator";
 import type { AppContext } from "../../context.js";
 import { requireScopes } from "../../auth/middleware.js";
+import { requirePrivilege } from "../../auth/capabilities.js";
 import { HttpError } from "../../http/errors.js";
 import { readJsonBody } from "../../http/body.js";
 import * as jobsService from "./service.js";
@@ -20,6 +21,7 @@ export function jobRoutes(ctx: AppContext): Hono {
   app.post(
     "/",
     requireScopes("manage:jobs"),
+    requirePrivilege(ctx, "ops"),
     zValidator("json", createJobBodySchema, (result, c) => {
       if (!result.success) return c.json({ error: "invalid_job" }, 400);
     }),
@@ -132,7 +134,7 @@ export function jobRoutes(ctx: AppContext): Hono {
     }
   );
 
-  app.post("/:id/cancel", requireScopes("manage:jobs"), async (c) => {
+  app.post("/:id/cancel", requireScopes("manage:jobs"), requirePrivilege(ctx, "ops"), async (c) => {
     try {
       return c.json({ job: await jobsService.cancelJob(ctx, c.req.param("id")) });
     } catch {
@@ -140,7 +142,7 @@ export function jobRoutes(ctx: AppContext): Hono {
     }
   });
 
-  app.post("/:id/retry", requireScopes("manage:jobs"), async (c) => {
+  app.post("/:id/retry", requireScopes("manage:jobs"), requirePrivilege(ctx, "ops"), async (c) => {
     try {
       return c.json({ job: await jobsService.retryJob(ctx, c.req.param("id")) });
     } catch (error) {
@@ -149,7 +151,7 @@ export function jobRoutes(ctx: AppContext): Hono {
     }
   });
 
-  app.post("/:id/accept-failure", requireScopes("manage:jobs"), async (c) => {
+  app.post("/:id/accept-failure", requireScopes("manage:jobs"), requirePrivilege(ctx, "ops"), async (c) => {
     try {
       return c.json({ job: await jobsService.acceptFailedJob(ctx, c.req.param("id")) });
     } catch (error) {

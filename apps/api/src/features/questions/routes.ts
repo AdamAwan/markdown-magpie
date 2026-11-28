@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator";
 import type { AppContext } from "../../context.js";
 import { requireScopes } from "../../auth/middleware.js";
+import { requirePrivilege } from "../../auth/capabilities.js";
 import { parseLimit, parseOffset } from "../../platform/paths.js";
 import { HttpError } from "../../http/errors.js";
 import { readJsonBody } from "../../http/body.js";
@@ -36,7 +37,7 @@ export function questionRoutes(ctx: AppContext): Hono {
   // cleans the downstream clusters and unpublished proposals it seeded (published
   // proposals come back as warnings). Destructive and irreversible, so gated by
   // manage:admin like the other data-wiping endpoints.
-  app.delete("/:id", requireScopes("manage:admin"), async (c) => {
+  app.delete("/:id", requireScopes("manage:admin"), requirePrivilege(ctx, "admin"), async (c) => {
     const scrub = c.req.query("scrub") === "true";
     const report = await questionsService.deleteQuestion(ctx, c.req.param("id"), { scrub });
     if (!report) {

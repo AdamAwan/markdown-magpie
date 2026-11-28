@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import type { AppContext } from "../../context.js";
 import { requireScopes } from "../../auth/middleware.js";
-import { assertCan } from "../../auth/capabilities.js";
+import { assertCan, requirePrivilege } from "../../auth/capabilities.js";
 import { normalizeAiProvider } from "../../config-holder.js";
 import { HttpError } from "../../http/errors.js";
 import { readJsonBody } from "../../http/body.js";
@@ -13,7 +13,7 @@ export function configRoutes(ctx: AppContext): Hono {
 
   app.get("/", requireScopes("manage:admin"), (c) => c.json(configService.getRuntimeConfig(ctx)));
 
-  app.post("/", requireScopes("manage:admin"), async (c) => {
+  app.post("/", requireScopes("manage:admin"), requirePrivilege(ctx, "admin"), async (c) => {
     const payload = await readJsonBody<{
       aiProvider?: string;
       ai?: { provider?: string };
@@ -41,7 +41,7 @@ export function configRoutes(ctx: AppContext): Hono {
 export function adminRoutes(ctx: AppContext): Hono {
   const app = new Hono();
 
-  app.post("/reset", requireScopes("manage:admin"), async (c) => {
+  app.post("/reset", requireScopes("manage:admin"), requirePrivilege(ctx, "admin"), async (c) => {
     // Reset is the single destructive, deployment-wide action (it wipes all data).
     // Beyond the manage:admin scope it also requires the `admin` capability, so a
     // routine admin can't be handed the power to erase everyone's knowledge base by
