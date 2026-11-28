@@ -741,7 +741,9 @@ function storageScheduleKey(key: string): string {
   return `${SCHEDULE_KEY_PREFIX}${Buffer.from(key, "utf8").toString("base64url")}`;
 }
 
-function publicScheduleKey(key: string): string {
+// Exported for the queue-health metrics reader (platform/queue-stats.ts), which
+// labels schedules read straight from the pg-boss schedule table.
+export function publicScheduleKey(key: string): string {
   if (!key.startsWith(SCHEDULE_KEY_PREFIX)) return key;
   return Buffer.from(key.slice(SCHEDULE_KEY_PREFIX.length), "base64url").toString("utf8");
 }

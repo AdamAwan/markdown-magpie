@@ -1,7 +1,7 @@
 import { metrics, type Counter, type Histogram } from "@opentelemetry/api";
 
 // The meter (instrumentation-scope) name for Magpie's own metrics.
-const METER_NAME = "@magpie/telemetry";
+export const METER_NAME = "@magpie/telemetry";
 
 interface Instruments {
   jobsFinished: Counter;

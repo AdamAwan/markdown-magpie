@@ -3,3 +3,4 @@ export { initTelemetry, type TelemetryHandle } from "./init.js";
 export { injectTraceContext, recordException, runJobSpan, type TraceCarrier } from "./tracing.js";
 export { recordJobDuration, recordJobFinished } from "./instruments.js";
 export { loggerTraceMixin } from "./logging.js";
+export { registerQueueMetrics, type QueueStatsSnapshot, type QueueStatsSource } from "./queue-metrics.js";

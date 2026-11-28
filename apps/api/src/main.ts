@@ -8,6 +8,7 @@ import { buildApp } from "./app.js";
 import * as configService from "./features/config/service.js";
 import { reconcileSchedules } from "./jobs/schedule-reconciler.js";
 import { preflightDataPaths } from "./platform/preflight.js";
+import { startQueueMetrics } from "./platform/queue-stats.js";
 import { checkoutRoot, snapshotRoot } from "./platform/repositories.js";
 import { logger } from "./logger.js";
 
@@ -35,6 +36,8 @@ async function start(): Promise<void> {
     // Reconcile saved product schedules into pg-boss now the broker is up. The
     // queue, not an in-process timer, fires scheduled work from here on.
     await reconcileSchedules(ctx);
+    // Queue-health gauges (O16–O22); read only at telemetry collection time.
+    startQueueMetrics(ctx);
   } catch (error) {
     logger.error({ err: error instanceof Error ? error.message : "Unknown error" }, "API startup failed");
     await ctx.jobs.stop().catch(() => undefined);
