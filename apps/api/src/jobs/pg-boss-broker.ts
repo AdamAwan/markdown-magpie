@@ -20,6 +20,7 @@ import type {
   InFlightCapacity,
   JobBroker,
   JobListFilters,
+  JobMatch,
   ScheduleView
 } from "./broker.js";
 import { logger } from "../logger.js";
@@ -78,10 +79,55 @@ function isInteractiveQueue(queueName: string): boolean {
   return queue !== undefined && isInteractiveJobType(queue.type);
 }
 
-// Bounds how many queues locate() probes concurrently for a single job id, so a
-// get()/mutate() call cannot open one connection per queue (128+ in this catalog)
-// against pg-boss's pool all at once.
-const LOCATE_CONCURRENCY = 8;
+// Every queue this catalog defines, work and dead-letter alike — the scope of an
+// untyped list() and of locate()'s by-id lookup.
+const ALL_QUEUE_NAMES = queueDefinitions.map((queue) => queue.name);
+
+// pg-boss job ids are Postgres uuids (gen_random_uuid()).
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// The job-row fields toJobView reads. A subset of pg-boss's JobWithMetadata (so
+// fetch()/getJobById() rows satisfy it directly), with the stored jsonb columns
+// widened to `unknown` because our own SQL reads them untyped — toJobView
+// validates the envelope and narrows the output before using either.
+type JobRow = Pick<
+  JobWithMetadata<JobEnvelope>,
+  | "id"
+  | "name"
+  | "state"
+  | "blocked"
+  | "retryCount"
+  | "retryLimit"
+  | "createdOn"
+  | "startedOn"
+  | "heartbeatOn"
+  | "completedOn"
+  | "startAfter"
+  | "heartbeatSeconds"
+  | "expireInSeconds"
+> & { data: unknown; output: unknown };
+
+// The SELECT list producing a JobRow, aliased to pg-boss's own camelCase names
+// (plans.js JOB_COLUMNS_ALL) for the columns toJobView reads.
+const JOB_ROW_COLUMNS = `id, name, data, state::text AS state, blocked, output,
+  retry_count AS "retryCount", retry_limit AS "retryLimit",
+  created_on AS "createdOn", started_on AS "startedOn", heartbeat_on AS "heartbeatOn",
+  completed_on AS "completedOn", start_after AS "startAfter",
+  heartbeat_seconds AS "heartbeatSeconds", expire_seconds AS "expireInSeconds"`;
+
+// The SQL predicate for a list() state filter, appending its parameter. JobView's
+// `blocked` is derived (toJobView): a created/retry row pg-boss holds back with
+// `blocked = true`. So `blocked` selects those rows, and `created`/`retry` must
+// exclude them — otherwise the SQL filter would disagree with the state the
+// returned view reports.
+function stateCondition(state: JobState, params: unknown[]): string {
+  if (state === "blocked") {
+    return `state IN ('created', 'retry') AND blocked`;
+  }
+  params.push(state);
+  const condition = `state = $${params.length}`;
+  return state === "created" || state === "retry" ? `${condition} AND NOT blocked` : condition;
+}
 
 // The queues a given job type can land in: its work queue(s) plus their
 // dead-letter queues. Exported standalone (pure, no pg-boss instance needed) so
@@ -199,8 +245,8 @@ export class PgBossJobBroker implements JobBroker {
   // their count concurrently: whoever holds the lock counts, decides, and (if
   // admitted) enqueues before the next admission can even count.
   async createIfAdmitted(type: JobType, input: unknown, capacity: InFlightCapacity): Promise<AdmissionResult> {
-    const globalNames = this.inFlightQueueNames(capacity.types);
-    const reserveNames = capacity.reserve ? this.inFlightQueueNames(capacity.reserve.types) : [];
+    const globalNames = this.workQueueNames(capacity.types);
+    const reserveNames = capacity.reserve ? this.workQueueNames(capacity.reserve.types) : [];
 
     const client = await this.pool.connect();
     try {
@@ -349,63 +395,103 @@ export class PgBossJobBroker implements JobBroker {
   async retry(id: string): Promise<JobView> {
     const located = await this.locate(id);
     if (!located) throw new Error(`Job not found: ${id}`);
-    if (toJobView(located.queue.name, located.job).state !== "failed") {
+    if (located.state !== "failed") {
       throw new Error(`Cannot retry job ${id}; only failed jobs can be retried`);
     }
-    await this.boss.retry(located.queue.name, id);
-    return this.requireJob(located.queue.name, id);
+    await this.boss.retry(located.queueName, id);
+    return this.requireJob(located.queueName, id);
   }
 
   async get(id: string): Promise<JobView | undefined> {
-    const located = await this.locate(id);
-    return located ? toJobView(located.queue.name, located.job) : undefined;
+    return this.locate(id);
   }
 
-  // pg-boss 12's findJobs(name, options) has no limit/offset/orderBy and no
-  // state or createdAt filter — it always returns every row in the named queue's
-  // table (see node_modules/pg-boss/dist/plans.js#findJobs). The one lever we do
-  // have is *which queues* get scanned: when the caller filters by job type, we
-  // only need the (small, fixed) set of queues that type can ever land in —
-  // queuesByType, built from the catalog's provider fan-out — instead of every
-  // queue pg-boss knows about (128 in this catalog at the time of writing).
-  // Without a type filter we still have to scan every queue; that case is
-  // unavoidable with the public API and is unchanged from before.
+  // Direct SQL over pg-boss's job table, NOT boss.findJobs. pg-boss 12's public
+  // findJobs(name) is a list read capped at LIMIT 1000 by default
+  // (LIST_LIMIT_DEFAULT in node_modules/pg-boss/dist/attorney.js) and ordered
+  // `created_on ASC` (plans.js#findJobs): once a queue retained more than 1000
+  // rows (completed jobs are kept for 30 days — packages/jobs/src/catalog.ts) a
+  // findJobs-based listing only ever saw the OLDEST 1000 jobs, so the console
+  // showed stale jobs and every in-flight guard built on it went blind.
   //
-  // Because state/createdAfter/pagination still happen in JS after the fetch,
-  // `total` reflects an exact count of the rows in the scanned queues after
-  // filtering — it is not an approximation, but it does mean a query that scans
-  // many queues without a type filter still loads every job in them to compute
-  // it. There's no count-only pg-boss API that accepts our state/createdAfter
-  // filters to avoid that.
+  // So the whole read happens in Postgres: the type → queue-name set, the state
+  // and createdAfter filters, newest-first ordering, LIMIT/OFFSET, and an exact
+  // COUNT for `total`. In pg-boss 12 every job, whatever its state, lives in the
+  // one `job` table (partitioned by queue name; there is no archive table — the
+  // retention sweep deletes rows outright), so this sees every retained job. The
+  // `name = ANY(...)` predicate keeps the scan to this catalog's queues and lets
+  // job_i15 (name, created_on) serve the ordering.
   async list(filters: JobListFilters): Promise<{ jobs: JobView[]; total: number }> {
-    const queuesToScan = filters.type ? queueDefinitionsForType(filters.type) : queueDefinitions;
-    const batches = await Promise.all(
-      queuesToScan.map(async (queue) => {
-        const jobs = await this.boss.findJobs<JobEnvelope>(queue.name);
-        return jobs.map((job) => toJobView(queue.name, job));
-      })
+    const queueNames = (filters.type ? queueDefinitionsForType(filters.type) : queueDefinitions).map(
+      (queue) => queue.name
     );
-    let jobs = batches.flat();
-    if (filters.state) jobs = jobs.filter((job) => job.state === filters.state);
-    if (filters.createdAfter) jobs = jobs.filter((job) => job.createdAt > filters.createdAfter!);
-
-    jobs.sort((left, right) => right.createdAt.localeCompare(left.createdAt));
-    const total = jobs.length;
+    const params: unknown[] = [queueNames];
+    const conditions = ["name = ANY($1)"];
+    if (filters.state) {
+      conditions.push(stateCondition(filters.state, params));
+    }
+    if (filters.createdAfter) {
+      params.push(filters.createdAfter);
+      conditions.push(`created_on > $${params.length}::timestamptz`);
+    }
+    const where = conditions.join(" AND ");
     const offset = Math.max(0, filters.offset ?? 0);
     const limit = Math.min(200, Math.max(1, filters.limit ?? 200));
-    return { jobs: jobs.slice(offset, offset + limit), total };
+    const [page, count] = await Promise.all([
+      this.pool.query<JobRow>(
+        `SELECT ${JOB_ROW_COLUMNS}
+           FROM "${this.schema}".job
+          WHERE ${where}
+          ORDER BY created_on DESC, id DESC
+          LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+        [...params, limit, offset]
+      ),
+      this.pool.query<{ total: number }>(
+        `SELECT count(*)::int AS total FROM "${this.schema}".job WHERE ${where}`,
+        params
+      )
+    ]);
+    return {
+      jobs: page.rows.map((row) => toJobView(row.name, row)),
+      total: Number(count.rows[0]?.total ?? 0)
+    };
+  }
+
+  // The dedupe/overlap-guard read (see JobMatch): the type's work queues only,
+  // the in-flight states and the input containment pushed into SQL, and every
+  // match returned unpaged — a guard asking "is a publish for proposal P already
+  // queued?" must see that job however many finished publishes are retained.
+  // `data @> {"input": {...}}` matches the envelope enqueue() stored.
+  async findMatchingJobs(match: JobMatch): Promise<JobView[]> {
+    const params: unknown[] = [this.workQueueNames([match.type])];
+    const conditions = ["name = ANY($1)"];
+    if (match.inFlight) {
+      params.push([...IN_FLIGHT_STATES]);
+      conditions.push(`state = ANY($${params.length})`);
+    }
+    if (match.input && Object.keys(match.input).length > 0) {
+      params.push(JSON.stringify({ input: match.input }));
+      conditions.push(`data @> $${params.length}::jsonb`);
+    }
+    const result = await this.pool.query<JobRow>(
+      `SELECT ${JOB_ROW_COLUMNS}
+         FROM "${this.schema}".job
+        WHERE ${conditions.join(" AND ")}
+        ORDER BY created_on DESC, id DESC`,
+      params
+    );
+    return result.rows.map((row) => toJobView(row.name, row));
   }
 
   // One aggregate COUNT over the (partitioned) job table, scoped to the work
-  // queues the given types fan out to and to the in-flight states. This is
-  // deliberately not built on list()/findJobs: that loads every row in each
-  // scanned queue to count in JS, which is far too expensive for a per-request
-  // admission check. pg-boss exposes no count API that takes our filters, so we
+  // queues the given types fan out to and to the in-flight states — a bare count
+  // with no rows materialised, cheap enough for a per-request admission check.
+  // pg-boss exposes no count API that takes our filters, so we
   // query its table directly via getDb() — the name predicate prunes to the
   // relevant partitions. Dead-letter queues are excluded (a dead-lettered job is
   // finished work, not in flight).
   async countInFlight(types: JobType[]): Promise<number> {
-    const queueNames = this.inFlightQueueNames(types);
+    const queueNames = this.workQueueNames(types);
     if (queueNames.length === 0) {
       return 0;
     }
@@ -418,12 +504,13 @@ export class PgBossJobBroker implements JobBroker {
     return Number(result.rows[0]?.count ?? 0);
   }
 
-  // The in-flight work queues the given job types fan out to (provider/destination
-  // fan-out per the catalog), excluding dead-letter queues (a dead-lettered job is
-  // finished work, not in flight). Shared by countInFlight (the cheap pre-check)
-  // and createIfAdmitted (the atomic count), so both scope to the exact same
+  // The work queues the given job types fan out to (provider/destination fan-out
+  // per the catalog), excluding dead-letter queues (a dead-lettered job is
+  // finished work, not in flight, and not a second job). Shared by countInFlight
+  // (the cheap pre-check), createIfAdmitted (the atomic count) and
+  // findMatchingJobs (the dedupe guards), so all scope to the exact same
   // partitions — they must never disagree on which queues count.
-  private inFlightQueueNames(types: JobType[]): string[] {
+  private workQueueNames(types: JobType[]): string[] {
     return types
       .flatMap((type) => queueDefinitionsForType(type))
       .filter((queue) => !queue.deadLetter)
@@ -496,46 +583,49 @@ export class PgBossJobBroker implements JobBroker {
     await this.boss.deleteAllJobs();
   }
 
-  // The post-operation requireJob() fetch here is a second round trip, but it is
-  // not a redundant queue *scan* — it already knows located.queue.name, so it is
-  // a single scoped lookup, not another locate() loop. It can't be replaced with
-  // located.job (the pre-operation row): every current operation (touch/
+  // The post-operation requireJob() fetch is a second round trip, a single
+  // primary-key lookup on the queue locate() already resolved. It can't be
+  // replaced with the pre-operation row: every current operation (touch/
   // complete/fail/cancel) changes a field mutate()'s callers depend on
   // (heartbeatAt, state, output, error, completedAt/cancelledAt/failedAt,
   // retryCount) and pg-boss's complete/fail/cancel/touch calls return no row data
   // to apply those changes from (CommandResponse is empty), so returning stale
-  // pre-operation state would be wrong. Only locate()'s queue *scan* is the part
-  // this change bounds (see locate() below); the scoped refetch stays.
+  // pre-operation state would be wrong.
   private async mutate(id: string, operation: (queueName: string) => Promise<unknown>): Promise<JobView> {
     const located = await this.locate(id);
     if (!located) throw new Error(`Job not found: ${id}`);
-    await operation(located.queue.name);
-    return this.requireJob(located.queue.name, id);
+    await operation(located.queueName);
+    return this.requireJob(located.queueName, id);
   }
 
-  // pg-boss has no global "find job by id across all queues" call — every read is
-  // scoped to one queue name (see node_modules/pg-boss/dist/manager.js#findJobs /
-  // #getJobById), and a job id alone doesn't tell us which of this catalog's 128
-  // queues holds it. We still have to probe queues, but probing them
-  // LOCATE_CONCURRENCY-at-a-time instead of one sequential round trip per queue
-  // turns up to 128 serial awaits into a small number of parallel batches.
-  private async locate(id: string): Promise<{ queue: QueueDefinition; job: JobWithMetadata<JobEnvelope> } | undefined> {
-    for (let start = 0; start < queueDefinitions.length; start += LOCATE_CONCURRENCY) {
-      const batch = queueDefinitions.slice(start, start + LOCATE_CONCURRENCY);
-      const results = await Promise.all(
-        batch.map(async (queue) => {
-          const [job] = await this.boss.findJobs<JobEnvelope>(queue.name, { id });
-          return job ? { queue, job } : undefined;
-        })
-      );
-      const found = results.find((result) => result !== undefined);
-      if (found) return found;
-    }
-    return undefined;
+  // Find a job by id alone. pg-boss's own reads are all scoped to one queue name
+  // (manager.js#findJobs / #getJobById) and an id doesn't say which of this
+  // catalog's queues holds it, so this used to probe every queue in turn — up to
+  // one query per queue on every get()/heartbeat/complete, and waitForJob polls
+  // get() every 250 ms. Instead it is ONE query over the job table. The
+  // `name = ANY(<catalog queues>)` predicate is load-bearing, not just scoping:
+  // the table's primary key is (name, id), and pinning name lets Postgres probe
+  // that index per queue name rather than scan every retained row for the id.
+  // A non-uuid id can't name a pg-boss job (the column is uuid), so it is "not
+  // found" rather than a Postgres cast error — matching the in-memory broker.
+  private async locate(id: string): Promise<JobView | undefined> {
+    if (!UUID_PATTERN.test(id)) return undefined;
+    const result = await this.pool.query<JobRow>(
+      `SELECT ${JOB_ROW_COLUMNS}
+         FROM "${this.schema}".job
+        WHERE name = ANY($1) AND id = $2`,
+      [ALL_QUEUE_NAMES, id]
+    );
+    const row = result.rows[0];
+    return row ? toJobView(row.name, row) : undefined;
   }
 
+  // Deliberately on pg-boss's own connection (getJobById), not this.pool:
+  // createIfAdmitted calls this while holding one pool client inside its
+  // advisory-lock transaction, and taking a second client from the same pool
+  // there could deadlock against admissions queued on that lock.
   private async requireJob(queueName: string, id: string): Promise<JobView> {
-    const [job] = await this.boss.findJobs<JobEnvelope>(queueName, { id });
+    const job = await this.boss.getJobById<JobEnvelope>(queueName, id);
     if (!job) throw new Error(`Job not found after pg-boss operation: ${id}`);
     return toJobView(queueName, job);
   }
@@ -563,7 +653,7 @@ export function pgBossQueueOptions(
   return options;
 }
 
-function toJobView(queueName: string, job: JobWithMetadata<JobEnvelope>): JobView {
+function toJobView(queueName: string, job: JobRow): JobView {
   const queue = queueByName.get(queueName);
   if (!queue) throw new Error(`Unknown pg-boss queue: ${queueName}`);
   if (!isJobEnvelope(job.data)) throw new Error(`Invalid job envelope for ${job.id}`);

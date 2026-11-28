@@ -993,11 +993,13 @@ before it is persisted or dispatched.
 
 ### `GET /api/jobs`
 
-Lists jobs. Optional query: `type`, `state`, `createdAfter`, `limit` (default 100, max 200),
-`offset`.
+Lists jobs, newest first (by creation time). Optional query: `type`, `state`,
+`createdAfter`, `limit` (default 100, max 200), `offset`. Filtering, ordering and paging run
+over every retained job, and `total` is the exact number matching the filters across all
+pages (see [ai-jobs.md](./ai-jobs.md) J49).
 
 ```json
-{ "jobs": [ Job, ... ] }
+{ "jobs": [ Job, ... ], "total": 1234 }
 ```
 
 ### `GET /api/jobs/:id`

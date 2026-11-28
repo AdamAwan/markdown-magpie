@@ -188,3 +188,33 @@ test("failTerminal is a no-op on an already-terminal job", async () => {
     assert.deepEqual(after, before, `terminal=${terminal}: unchanged`);
   }
 });
+
+test("findMatchingJobs returns every in-flight match by input, newest first, ignoring other types", async () => {
+  const broker = new FakeJobBroker();
+  const done = await broker.create("verify_gap_closure", { proposalId: "p1" });
+  await broker.complete(done.id, {});
+  const older = await broker.create("verify_gap_closure", { proposalId: "p1" });
+  await broker.create("verify_gap_closure", { proposalId: "p2" });
+  await broker.create("answer_question", validAnswerInput);
+  // Move past the older job's millisecond so "newest first" is observable.
+  await new Promise((resolve) => setTimeout(resolve, 2));
+  const newer = await broker.create("verify_gap_closure", { proposalId: "p1" });
+
+  const inFlight = await broker.findMatchingJobs({
+    type: "verify_gap_closure",
+    inFlight: true,
+    input: { proposalId: "p1" }
+  });
+  assert.deepEqual(
+    inFlight.map((job) => job.id),
+    [newer.id, older.id]
+  );
+
+  // Without inFlight, finished jobs match too.
+  const any = await broker.findMatchingJobs({ type: "verify_gap_closure", input: { proposalId: "p1" } });
+  assert.deepEqual(new Set(any.map((job) => job.id)), new Set([done.id, older.id, newer.id]));
+
+  // Without input, every in-flight job of the type matches.
+  assert.equal((await broker.findMatchingJobs({ type: "verify_gap_closure", inFlight: true })).length, 3);
+  assert.deepEqual(await broker.findMatchingJobs({ type: "verify_gap_closure", input: { proposalId: "none" } }), []);
+});

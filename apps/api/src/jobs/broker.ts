@@ -8,6 +8,19 @@ export interface JobListFilters {
   offset?: number; // >= 0
 }
 
+// Criteria for findMatchingJobs: the "is one already queued/running?" guards.
+// Scoped to the type's WORK queues (a dead-lettered copy is finished work, not
+// a second job). `inFlight` keeps only not-yet-finished jobs (created | retry |
+// active, which includes the derived `blocked`); `input` keeps only jobs whose
+// input carries every listed field with exactly that value (JSON containment
+// in the real broker). Every match is returned — no page limit — so a guard can
+// never go blind behind a large backlog of retained, finished jobs.
+export interface JobMatch {
+  type: JobType;
+  inFlight?: boolean;
+  input?: Readonly<Record<string, string>>;
+}
+
 export interface DesiredSchedule {
   type: JobType;
   key: string;
@@ -90,7 +103,17 @@ export interface JobBroker {
   cancel(id: string): Promise<JobView>;
   retry(id: string): Promise<JobView>;
   get(id: string): Promise<JobView | undefined>;
+  // One page of jobs, newest first (created time descending), with `total` the
+  // exact number of jobs matching the filters across every page. Filtering,
+  // ordering and paging all happen over the whole job set, so the page is the
+  // true newest `limit` jobs however many finished jobs are retained. This is a
+  // console/report read: do NOT build an "already in flight?" guard on it — a
+  // page can miss an in-flight job — use findMatchingJobs.
   list(filters: JobListFilters): Promise<{ jobs: JobView[]; total: number }>;
+  // Every job matching `match`, newest first (see JobMatch). The primitive for
+  // dedupe/overlap guards: filters by state and input in the store itself, so the
+  // answer is complete regardless of how many other jobs the type's queues hold.
+  findMatchingJobs(match: JobMatch): Promise<JobView[]>;
   // Count jobs of the given types currently in flight (states created | retry |
   // active) across their work queues. Used by the API's AI cost controls to
   // enforce a global cap on concurrent metered work at enqueue time. Implemented
