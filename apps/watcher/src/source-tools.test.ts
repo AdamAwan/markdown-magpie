@@ -108,6 +108,59 @@ describe("tools", () => {
     assert.ok(performance.now() - started < 1000, "glob matching must not backtrack");
   });
 
+  // TM32 / J87: grep is bounded on every axis and shares the read budget.
+  it("charges the grep result against the read budget and refuses once it is spent", async () => {
+    const { workspaces } = fixture();
+    const budget: ToolBudget = { remainingBytes: 1000 };
+    const hits = await grepWorkspaces(workspaces, "statement", undefined, { budget });
+    assert.equal(budget.remainingBytes, 1000 - Buffer.byteLength(hits, "utf8"));
+    budget.remainingBytes = 0;
+    await assert.rejects(grepWorkspaces(workspaces, "statement", undefined, { budget }), /budget exhausted/);
+  });
+
+  it("skips binary content behind a text extension", async () => {
+    const { root, workspaces } = fixture();
+    writeFileSync(path.join(root, "blob.json"), Buffer.concat([Buffer.from("statement"), Buffer.from([0, 0, 1])]));
+    assert.doesNotMatch(await grepWorkspaces(workspaces, "statement"), /blob\.json/);
+  });
+
+  it("stops at the file cap and says so", async () => {
+    const { root, workspaces } = fixture();
+    for (let i = 0; i < 10; i += 1) {
+      writeFileSync(path.join(root, `n${i}.md`), "nothing here");
+    }
+    const result = await grepWorkspaces(workspaces, "statement", undefined, { limits: { maxFiles: 3 } });
+    assert.match(result, /search stopped early: scanned the 3-file limit/);
+  });
+
+  it("stops at the total-byte cap and only searches the head of a large file", async () => {
+    const { root, workspaces } = fixture();
+    writeFileSync(path.join(root, "big.md"), `${"x".repeat(5000)}\nstatement at the tail`);
+    const perFile = await grepWorkspaces(workspaces, "at the tail", "s1/big.md", { limits: { maxBytesPerFile: 1000 } });
+    assert.match(perFile, /\(no matches\)/);
+    assert.match(perFile, /only the first 1000 bytes of 1 large file/);
+    const total = await grepWorkspaces(workspaces, "zzz-never", undefined, { limits: { maxTotalBytes: 10 } });
+    assert.match(total, /scanned the 10-byte limit/);
+  });
+
+  it("stops at the match cap", async () => {
+    const { root, workspaces } = fixture();
+    writeFileSync(path.join(root, "many.md"), Array.from({ length: 20 }, () => "statement").join("\n"));
+    const result = await grepWorkspaces(workspaces, "statement", undefined, { limits: { maxMatches: 5 } });
+    assert.equal(result.split("\n").filter((line) => line.includes(": statement")).length, 5);
+    assert.match(result, /reached the 5-match limit/);
+  });
+
+  it("honours the abort signal", async () => {
+    const { workspaces } = fixture();
+    const controller = new AbortController();
+    controller.abort(new Error("job cancelled"));
+    await assert.rejects(
+      grepWorkspaces(workspaces, "statement", undefined, { signal: controller.signal }),
+      /job cancelled/
+    );
+  });
+
   it("rejects empty grep queries", async () => {
     const { workspaces } = fixture();
     await assert.rejects(grepWorkspaces(workspaces, ""), SourceToolError);
