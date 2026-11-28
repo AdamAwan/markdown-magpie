@@ -343,7 +343,7 @@ live ask via the interactive reserve.
 | `editorial_patrol` | maintenance | cron hourly | orchestrator → `POST /api/fix-patrol/improve/run` |
 | `verify_gap_closure` | maintenance | **on merge** (not cron) | orchestrator → `POST /api/proposals/:id/verify-closure` |
 | `seed_bootstrap` | maintenance | cron hourly | guard-check → `POST /api/flows/:id/seed-bootstrap/run` (enqueue-and-return) |
-| `refresh_flow_snapshot` | github | cron ~5 min (GitHub flows only) | leaf: polls PRs, reports mergeability |
+| `refresh_flow_snapshot` | github | cron ~5 min (one all-flows task; needs a GitHub flow) | leaf: polls PRs, reports mergeability |
 | `publish_proposal` | github / local-git (destination fan-out) | event | leaf: push branch, open PR |
 | `crosslink_pull_requests` | github | event | leaf: comment linking two PRs |
 | `comment_pull_request` | github | event | leaf: one PR comment |
@@ -362,7 +362,8 @@ continuation is serialised, idempotent and replay-safe. A Postgres advisory lock
 (taskType, flowId) serialises overlapping runs (`apps/api/src/scheduling/run-lock.ts`;
 continuations use `withFlowRunLockWaiting`, which waits instead of skipping). Cron tasks are registered **per flow** from
 `flowTaskTemplates` in `apps/api/src/scheduling/task-registry.ts` and managed from the
-Schedules page.
+Schedules page — except an `allFlows` template (`snapshot-refresh`), whose one run covers
+every flow and so registers a single `<baseKey>::all` task.
 
 ## 4. Where code lives
 
@@ -395,7 +396,7 @@ apps/
 packages/
   core/       Shared domain types + provider interfaces (incl. ProvenanceClaim).
   auth/       Auth0 / Entra token validation + on-behalf-of helpers.
-  db/         SQL migrations (0001–0070; see the write-a-migration skill).
+  db/         SQL migrations (0001–0071; see the write-a-migration skill).
   git/        Git sync + PR adapters: ensureGitCheckout (blobless partial clones),
               PR status/mergeability polling, LocalGitProposalPublisher, checkout locks.
   jobs/       Job contracts: JOB_TYPES, capabilities, input/output schemas, queue

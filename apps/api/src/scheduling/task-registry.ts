@@ -3,9 +3,10 @@ import type { JobType } from "@magpie/jobs";
 import type { AppContext } from "../context.js";
 import { flowPublishMode } from "../platform/repositories.js";
 
-// A concrete, schedulable side-process. Each one is a single flow's instance of a
-// template below: it has its own key, schedule, and queued job, so the UI and the
-// schedule reconciler treat per-flow tasks as independent units. `jobType`/`input`
+// A concrete, schedulable side-process. Each one is an instance of a template
+// below — one per flow for a per-flow template, exactly one for an all-flows
+// template: it has its own key, schedule, and queued job, so the UI and the
+// schedule reconciler treat tasks as independent units. `jobType`/`input`
 // are the queue contract both the schedule reconciler and the manual "Run now"
 // route enqueue — there is no in-process handler; a capability-matched watcher
 // executes the work.
@@ -15,6 +16,7 @@ export interface ScheduledTaskDefinition {
   // base task's `typeLabel`/`description`, and every base task runs once per flow.
   // Surfacing them structurally lets the console group without parsing the
   // composite key or the " · "-joined display label (which itself can contain "·").
+  // `flowId` is absent for an all-flows task, whose single run covers every flow.
   baseKey: string;
   flowId?: string;
   // Flow-free name of the task type, e.g. "Clustered gaps → pull requests".
@@ -58,6 +60,12 @@ interface FlowTaskTemplate {
   // (e.g. PR polling). It is NOT expanded for a local-git flow, which has no pull
   // requests and must never be offered GitHub-shaped scheduled work.
   githubOnly?: boolean;
+  // When true, the job is not flow-scoped: one run already covers every flow, so
+  // the template expands to a SINGLE task (key `<baseKey>::all`) instead of one
+  // per flow. Expanding it per flow would only schedule N identical runs. Combined
+  // with `githubOnly`, the task exists only while at least one flow publishes to
+  // GitHub.
+  allFlows?: boolean;
 }
 
 const flowTaskTemplates: FlowTaskTemplate[] = [
@@ -93,15 +101,19 @@ const flowTaskTemplates: FlowTaskTemplate[] = [
     baseKey: "snapshot-refresh",
     typeLabel: "Snapshot refresh · gaps · proposals · PRs",
     description:
-      "Downloads this flow's gaps, in-flight proposals, and open pull-request state to an on-disk snapshot the " +
+      "Downloads every flow's gaps, in-flight proposals, and open pull-request state to an on-disk snapshot the " +
       "reconciler reads. PR polling happens here, on this job's own cadence, instead of during reconciliation — so " +
       "the reconciler stops calling the git host live. Runs more often than the reconciler by default.",
     defaultCron: "*/5 * * * *",
     jobType: "refresh_flow_snapshot",
     input: () => ({}),
     // PR polling: only ever relevant to a GitHub flow. A local-git flow has no pull
-    // requests, so this task is not expanded for it (see listScheduledTasks).
+    // requests, so the task is not registered when every flow is local-git (see
+    // listScheduledTasks).
     githubOnly: true,
+    // One run lists every open PR across flows and rewrites every flow's snapshot
+    // (recordSnapshotsFromPullRequestResults), so it is scheduled once, not per flow.
+    allFlows: true,
     // A leaf GitHub job — polls PR state, spends no model tokens.
     aiJobTypes: []
   },
@@ -155,6 +167,11 @@ const flowTaskTemplates: FlowTaskTemplate[] = [
 // so "::" can't collide with one.
 const FLOW_KEY_SEPARATOR = "::";
 const DEFAULT_FLOW_TOKEN = "default";
+// Key suffix and display name of an all-flows task. An all-flows template never
+// expands per flow, so the token can't collide with a flow that happens to be
+// called "all".
+const ALL_FLOWS_TOKEN = "all";
+const ALL_FLOWS_NAME = "All flows";
 
 function taskKey(baseKey: string, flowId: string | undefined): string {
   return `${baseKey}${FLOW_KEY_SEPARATOR}${flowId ?? DEFAULT_FLOW_TOKEN}`;
@@ -166,31 +183,50 @@ function expansionFlows(ctx: AppContext): Array<{ id: string | undefined; name: 
   return ctx.knowledgeConfig.flows.map((flow) => ({ id: flow.id, name: flow.name }));
 }
 
-// Every concrete scheduled task: the cartesian product of templates and flows.
-// Computed from config on each call so adding/removing a flow is picked up
-// without a restart.
+// Every concrete scheduled task: each per-flow template expanded over the flows,
+// plus one task per all-flows template. Computed from config on each call so
+// adding/removing a flow is picked up without a restart.
 export function listScheduledTasks(ctx: AppContext): ScheduledTaskDefinition[] {
   const deps = ctx.repositoryDeps();
-  return expansionFlows(ctx).flatMap((flow) => {
-    const isLocalGit = flowPublishMode(deps, flow.id) === "local-git";
-    return (
-      flowTaskTemplates
-        // A local-git flow is never offered GitHub-only tasks (PR polling).
-        .filter((template) => !(template.githubOnly && isLocalGit))
-        .map((template) => ({
-          key: taskKey(template.baseKey, flow.id),
-          baseKey: template.baseKey,
-          flowId: flow.id,
-          typeLabel: template.typeLabel,
-          label: `${template.typeLabel} · ${flow.name}`,
-          description: template.description,
-          defaultCron: template.defaultCron,
-          jobType: template.jobType,
-          input: template.input(flow.id),
-          aiJobTypes: template.aiJobTypes
-        }))
-    );
-  });
+  const flows = expansionFlows(ctx).map((flow) => ({
+    ...flow,
+    isLocalGit: flowPublishMode(deps, flow.id) === "local-git"
+  }));
+  const perFlowTasks = flows.flatMap((flow) =>
+    flowTaskTemplates
+      .filter((template) => !template.allFlows)
+      // A local-git flow is never offered GitHub-only tasks.
+      .filter((template) => !(template.githubOnly && flow.isLocalGit))
+      .map((template) => ({
+        key: taskKey(template.baseKey, flow.id),
+        baseKey: template.baseKey,
+        flowId: flow.id,
+        typeLabel: template.typeLabel,
+        label: `${template.typeLabel} · ${flow.name}`,
+        description: template.description,
+        defaultCron: template.defaultCron,
+        jobType: template.jobType,
+        input: template.input(flow.id),
+        aiJobTypes: template.aiJobTypes
+      }))
+  );
+  const allFlowsTasks = flowTaskTemplates
+    .filter((template) => template.allFlows)
+    // Nothing to run without a flow; a GitHub-only task (PR polling) needs at
+    // least one flow that actually publishes to GitHub.
+    .filter((template) => flows.some((flow) => !(template.githubOnly && flow.isLocalGit)))
+    .map((template) => ({
+      key: `${template.baseKey}${FLOW_KEY_SEPARATOR}${ALL_FLOWS_TOKEN}`,
+      baseKey: template.baseKey,
+      typeLabel: template.typeLabel,
+      label: `${template.typeLabel} · ${ALL_FLOWS_NAME}`,
+      description: template.description,
+      defaultCron: template.defaultCron,
+      jobType: template.jobType,
+      input: template.input(undefined),
+      aiJobTypes: template.aiJobTypes
+    }));
+  return [...perFlowTasks, ...allFlowsTasks];
 }
 
 export function findScheduledTask(ctx: AppContext, key: string): ScheduledTaskDefinition | undefined {
@@ -207,7 +243,7 @@ function defaultScheduledTaskSettings(task: ScheduledTaskDefinition): ScheduledT
 // enabled+cron, plus the next-run time sourced from pg-boss (not stored here).
 type ScheduledTaskResponseSettings = ScheduledTaskSettings & { nextRunAt?: string };
 
-// One row per concrete (per-flow) task, merging in any saved schedule so the UI
+// One row per concrete task, merging in any saved schedule so the UI
 // can render a control even before the schedule has been saved once. Next-run
 // timing is read from the queue (pg-boss) and joined by the stable schedule key.
 export async function scheduledTasksForResponse(ctx: AppContext): Promise<
