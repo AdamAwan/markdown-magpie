@@ -61,7 +61,11 @@ The API is a [Hono](https://hono.dev) app served under `/api`. It listens on `PO
 
 - **API7** — Scope is coarse; **flow-scoped capability** authorization (`assertCan(ctx, c,
   capability, flow)`, `apps/api/src/auth/capabilities.ts`) is the fine grain. Capabilities
-  are `ask` / `read` / `manage` / `admin`, checked per flow. A flow-less/`"auto"` request
+  are `ask` / `read` / `manage` per flow and `admin` / `ops` on `*` only. On Entra
+  (delegated scopes are not per-user) the privileged routes — config writes, question
+  purge, reset, job/schedule management and maintenance triggers — additionally require
+  `admin` or `ops` from a human principal's roles (`requirePrivilege`;
+  [authorization.md](./authorization.md) AZ27). A flow-less/`"auto"` request
   is the wildcard case: only a `*`-scoped principal (or a genuine service principal, e.g.
   the watcher) may run it unpinned; a single-flow principal must name their flow. A flow
   the caller cannot see reads as **404** (never a cross-flow-enumerating 403).
@@ -120,14 +124,15 @@ The API is a [Hono](https://hono.dev) app served under `/api`. It listens on `PO
   the result from the resource link. Enqueue-only routes are **idempotent while queued**:
   a repeat request for a resource with a job already in flight reuses that job rather than
   enqueueing a duplicate.
-- **API16** — **Service-principal callbacks.** The watcher (a service principal, or a
-  `manage:jobs` holder) calls back into the API for the scoped context a job needs and to
-  record results. These are ordinary HTTP endpoints, not a side channel: the pure
+- **API16** — **Service-principal callbacks.** The watcher (a service principal) calls
+  back into the API for the scoped context a job needs and to record results. These are ordinary HTTP endpoints, not a side channel: the pure
   retrieval/routing callbacks (`POST /api/retrieve`, `POST /api/route`), the job
   lifecycle callbacks (`claim` / `heartbeat` / `complete` / `fail`), the maintenance
   orchestration triggers (`/api/fix-patrol/*`, `/api/source-sync/run`,
   `/api/scheduled-tasks/:key/run`), and the closure callback
   (`/api/proposals/:id/verify-closure`). The watcher itself has **no database access**.
+  With auth on, the job lifecycle callbacks accept **only** a service principal — a human
+  `manage:jobs` holder gets 403 ([authorization.md](./authorization.md) AZ29).
 
 ## Mount map
 
@@ -989,15 +994,24 @@ before it is persisted or dispatched.
 
 - `400 invalid_job` — unknown/missing type, or a body that is not `{ type, input }`.
 - `400 invalid_job_input` — `input` failed the job type's `inputSchema`.
+- `400 unconfigured_job_source` — `input.sources` contains a descriptor that is not exactly
+  one the API builds from the operator's configured sources (an unknown id, or a different
+  path, url, subpath, name or fetch allowlist). Callers reference sources; they never
+  author them ([ai-jobs.md](ai-jobs.md) J52).
 - `202` — `{ "job": Job }`.
+
+With auth on and `AUTH_PROVIDER=entra`, a human caller also needs the `ops` capability
+([authorization.md](authorization.md) AZ27).
 
 ### `GET /api/jobs`
 
-Lists jobs. Optional query: `type`, `state`, `createdAfter`, `limit` (default 100, max 200),
-`offset`.
+Lists jobs, newest first (by creation time). Optional query: `type`, `state`,
+`createdAfter`, `limit` (default 100, max 200), `offset`. Filtering, ordering and paging run
+over every retained job, and `total` is the exact number matching the filters across all
+pages (see [ai-jobs.md](./ai-jobs.md) J49).
 
 ```json
-{ "jobs": [ Job, ... ] }
+{ "jobs": [ Job, ... ], "total": 1234 }
 ```
 
 ### `GET /api/jobs/:id`
@@ -1029,7 +1043,8 @@ Retries a `failed` job. `409 job_not_failed` if it is not failed; `404 job_not_f
 ### Watcher-only endpoints
 
 `POST /api/jobs/claim`, `POST /api/jobs/:id/heartbeat`, `POST /api/jobs/:id/complete`, and
-`POST /api/jobs/:id/fail` are driven by the watcher (API16). Claim takes `{ "workerName",
+`POST /api/jobs/:id/fail` are driven by the watcher (API16) and, with auth on, require a
+service (client-credentials) principal: anyone else gets `403 forbidden` (AZ29). Claim takes `{ "workerName",
 "capabilities": [...] }` and returns `{ "job": Job }` or `{ "job": null }`; fail takes a
 structured `error` object. Complete takes `{ "output", "executor"?, "usage"?, "provider"?,
 "model"? }` — usage is the run's summed provider-reported token spend (#241), and

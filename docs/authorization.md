@@ -47,17 +47,19 @@ route's scope **and** the required capability on the resource's flow.
   **draft proposals embed source-derived material**; a draft can leak source content
   that is invisible everywhere else, so *who may see/administer drafts (and gaps) for
   which flow* is a real privilege, not just a global capability.
-- **AZ5** — The capability set is exactly `read`, `manage`, `ask`, `admin`
+- **AZ5** — The capability set is exactly `read`, `manage`, `ask`, `admin`, `ops`
   (`KNOWLEDGE_CAPABILITIES`, `apps/api/src/stores/knowledge-repositories.ts`).
-  `read`/`manage`/`ask` are evaluated **per flow**; `admin` is deployment-wide and MUST
-  only ever be granted on the wildcard `*` flow.
+  `read`/`manage`/`ask` are evaluated **per flow**; `admin` and `ops` are
+  deployment-wide and MUST only ever be granted on the wildcard `*` flow (a per-flow
+  grant of either matches nothing).
 
 | Capability | Scope of grant | Gates |
 |---|---|---|
 | `read`   | per flow | Reading proposals & gaps for that flow (list results are filtered; single resources in other flows report 404) |
 | `manage` | per flow | Drafting, publishing, status changes, reconcile for that flow |
 | `ask`    | per flow | Asking questions routed to that flow |
-| `admin`  | `*` only | The destructive `POST /api/admin/reset` (wipes all data) |
+| `admin`  | `*` only | The destructive `POST /api/admin/reset` (wipes all data); on Entra also config writes and question purge (AZ27) |
+| `ops`    | `*` only | On Entra only: job and schedule management and maintenance triggers (AZ27) |
 
 ## Where grants live: the IdP vs. the product
 
@@ -103,17 +105,22 @@ After deploying the Action **into the Login flow**, a decoded access token carri
   grant any bypass.
 - **AZ10** — The product half is `KNOWLEDGE_ROLE_GRANTS`: a JSON map of **role name →
   flow id (or `"*"`) → capabilities**, colocated with the flow config and parsed at
-  startup by `getConfiguredRoleGrants`
-  (`apps/api/src/stores/knowledge-repositories.ts`). Parsing MUST be **defensive** —
-  malformed entries and unknown capabilities are dropped rather than thrown, and an
-  unset/blank value yields an empty map (feature inactive, see AZ11).
+  startup by `parseRoleGrants` (`apps/api/src/stores/knowledge-repositories.ts`).
+  Parsing MUST be **strict**: only an unset/blank value yields an empty map (feature
+  inactive, see AZ11); unparseable JSON, a non-object, a role or flow entry of the
+  wrong shape, an unknown or non-string capability, or `admin`/`ops` granted on a
+  specific flow is a startup error naming `KNOWLEDGE_ROLE_GRANTS`
+  (`knowledgeConfigIssues`, reported by `loadConfig`). Duplicate capabilities are
+  de-duplicated. (Before this, malformed values were silently dropped — and a value
+  that failed to parse read as "no grants", switching flow-scoping **off**: a typo
+  failed authorization open.)
 
 ```jsonc
 KNOWLEDGE_ROLE_GRANTS = {
   "kb-hr-curators":  { "hr":  ["read", "manage"] },
   "kb-eng-curators": { "eng": ["read", "manage"] },
   "kb-askers-all":   { "*":   ["ask"] },
-  "kb-super":        { "*":   ["read", "manage", "ask", "admin"] }
+  "kb-super":        { "*":   ["read", "manage", "ask", "admin", "ops"] }
 }
 ```
 
@@ -125,6 +132,9 @@ in three deliberately-permissive cases.
 
 - **AZ11** — **No grants configured** (`KNOWLEDGE_ROLE_GRANTS` unset/empty): the
   feature is inactive and behaviour MUST be byte-identical to the scope-only model.
+  This carve-out exists only for providers with per-user scopes: on Entra the API
+  refuses to boot without grants (AZ28) and the privileged gate has no such carve-out
+  (AZ27).
 - **AZ12** — **No principal**: auth is disabled (local dev) and the scope layer
   already handled the request.
 - **AZ13** — **A genuine service / machine-to-machine token**, identified by a
@@ -177,11 +187,11 @@ in three deliberately-permissive cases.
 |---|---|---|
 | End user (MCP `ask`) | `{ "*": ["ask"] }` or `{ "hr": ["ask"] }` | Asks questions; never sees drafts/gaps/sources |
 | Knowledge-area owner | `{ "hr": ["read", "manage"] }` | Reads & administers HR proposals/gaps only |
-| Ops admin | *(no flow grant; relies on `manage:jobs`/`read:knowledge` scopes)* | Watches jobs/schedules/workers/health; sees **no** draft contents (holds no `read` capability) |
-| Super admin | `{ "*": ["read", "manage", "ask", "admin"] }` | Everything, including `/api/admin/reset` |
+| Ops admin | Auth0: *(no flow grant; relies on `manage:jobs`/`read:knowledge` scopes)*. Entra: `{ "*": ["ops"] }` (AZ27) | Watches and manages jobs/schedules/workers/health; sees **no** draft contents (holds no `read` capability) |
+| Super admin | `{ "*": ["read", "manage", "ask", "admin", "ops"] }` | Everything, including `/api/admin/reset` |
 
-- **AZ17** — An ops admin needs **no** entry in `KNOWLEDGE_ROLE_GRANTS`: their ops
-  routes are gated by scopes only, while the flow-scoped `read` capability they lack
+- **AZ17** — On Auth0, an ops admin needs **no** entry in `KNOWLEDGE_ROLE_GRANTS`:
+  their ops routes are gated by scopes only (on Entra they need `ops` on `*`, AZ27), while the flow-scoped `read` capability they lack
   keeps proposal/gap **contents** closed to them. This is how the previously-overloaded
   `read:knowledge` scope is effectively split — the separation emerges from the
   capability layer rather than a risky scope rename.
@@ -204,6 +214,21 @@ in three deliberately-permissive cases.
     (`assertCan(ctx, c, "ask", undefined)`).
 - **AZ20** — The watcher itself is unaffected: its M2M token hits carve-out AZ13, and
   deployments with no grants configured behave exactly as before.
+- **AZ29** — The watcher's **job-lifecycle** endpoints — `POST /api/jobs/claim`,
+  `POST /api/jobs/:id/heartbeat`, `POST /api/jobs/:id/complete`,
+  `POST /api/jobs/:id/fail` — MUST accept only a genuine **service** principal
+  (`isService`, AZ13), on top of their `manage:jobs` scope gate
+  (`requireServicePrincipal`, `apps/api/src/auth/middleware.ts`). Human ops admins hold
+  `manage:jobs` too; without this a human could claim a job (reading its input, which
+  may embed source-derived content) or post a forged completion that the API then
+  applies. A human or an on-behalf-of delegated principal gets 403 `forbidden`; a
+  principal-absent request gets 401 unless auth is explicitly disabled, in which case
+  the endpoints stay open exactly as before (local dev, the e2e/eval harnesses). The
+  watcher's credential therefore MUST be a client-credentials token: the
+  `WATCHER_API_CLIENT_ID`/`SECRET` pair, or a legacy static `API_TOKEN` that was itself
+  minted by the client-credentials grant — a pasted **user** token no longer works.
+  Operator job management (`cancel`, `retry`, `accept-failure`) stays a human action
+  (AZ27).
 
 ### Service-token acquisition (machine-to-machine callers)
 
@@ -300,6 +325,48 @@ everything that differs between providers is computed in one profile per provide
   An Entra app token **without** the `idtyp` optional claim is not recognised as a
   service and gets no scopes (it has no `scp`), so it fails closed with 403s.
 
+### Privileged actions when scopes are not per-user
+
+- **AZ27** — Auth0 RBAC issues each user only the scopes their roles carry, so a scope
+  gate is a per-user check. Entra grants every consented delegated scope to **every**
+  user who can sign in (the console requests all of them, including `manage:admin`), so
+  on Entra a user token's `scp` says nothing about the user. Each provider profile
+  declares this as `perUserScopes` (`packages/auth/src/provider.ts`: auth0 `true`, entra
+  `false`). Where it is `false`, the privileged routes below MUST authorize a **human**
+  principal from its app **roles**: the route's scope gate still applies, and
+  `requirePrivilege(ctx, capability)` (`apps/api/src/auth/capabilities.ts`) additionally
+  requires one of the principal's roles to hold the capability on `*` in
+  `KNOWLEDGE_ROLE_GRANTS`. A roleless human (an Entra user with no app-role assignment
+  carries no `roles` claim) is denied, and there is **no** "no grants configured"
+  carve-out (AZ11 does not apply here). Denials are 403 `forbidden` and logged.
+
+  | Capability | Routes |
+  | --- | --- |
+  | `admin` | `POST /api/config`, `POST /api/admin/reset` (which also keeps its AZ16 `assertCan(admin)`), `DELETE /api/questions/:id` |
+  | `ops` | `POST /api/jobs`, `POST /api/jobs/:id/{cancel,retry,accept-failure}`, `POST /api/scheduled-tasks/:key/{settings,run}`, `POST /api/fix-patrol/run`, `POST /api/fix-patrol/improve/run`, `POST /api/source-sync/run`, `POST /api/flows/:flowId/seed-bootstrap/run` |
+
+  Unchanged by AZ27: requests with **no principal** (auth disabled), **service**
+  principals (`isService` — their scopes are per-application permissions an
+  administrator consented to, so the watcher's orchestration calls keep working), and
+  every route on a provider whose scopes are per-user (Auth0 stays scope-only, exactly
+  as before). An MCP-delegated request (AZ23) is not a service principal, so on Entra it
+  is held to the forwarded user's roles.
+- **AZ28** — Because AZ27 makes role grants the only per-user authorization on such a
+  provider, the API MUST refuse to boot when `AUTH_PROVIDER=entra`, auth is enabled,
+  and `KNOWLEDGE_ROLE_GRANTS` is unset or empty (`authorizationConfigIssues`,
+  `apps/api/src/platform/config.ts`), naming `KNOWLEDGE_ROLE_GRANTS` in the startup
+  error. Previously such a deployment made every signed-in employee effectively an
+  admin. A minimal Entra grant set is
+  `{"magpie-admins": {"*": ["read", "manage", "ask", "admin", "ops"]}}`, plus per-flow
+  roles for everyone else (AZ14: a user whose roles match no grant sees no flow
+  content).
+
+> ⚠️ **Residual (Entra).** The flow-scoped `manage` capability (AZ14) already gates
+> per-flow writes, and the routes above are role-gated, but scope-only routes outside
+> that list still trust Entra's non-per-user scopes: `GET /api/config` (masked runtime
+> config, read by every console poll), `POST /api/knowledge/repositories/index`
+> (re-index), and `POST /api/proposals/:id/verify-closure` (a maintenance callback).
+
 ### Using Microsoft Entra ID
 
 Single-tenant only: the issuer is validated exactly, so tokens from any other tenant
@@ -353,8 +420,9 @@ JWKS and token endpoints, the roles claim, and the client-credentials scope
   support needs a name-mapping layer before it can be used.
 - **Delegated scopes are not per-user.** Auth0 RBAC can restrict which scopes a user
   receives; Entra grants every consented delegated scope the client requests to every
-  user who can sign in. Gate who can sign in (*Assignment required* on the enterprise
-  app) and rely on flow-scoped grants (`KNOWLEDGE_ROLE_GRANTS`) for per-user limits.
+  user who can sign in. The API therefore authorizes privileged actions from app roles
+  on Entra (AZ27) and refuses to boot without `KNOWLEDGE_ROLE_GRANTS` (AZ28). Also gate
+  who can sign in (*Assignment required* on the enterprise app).
 - **Multi-tenant is not supported** (single issuer, validated exactly).
 - **Switching an existing deployment changes subjects.** Entra subjects are `oid`s,
   not Auth0 `sub`s, so everything keyed on the subject (per-principal rate-limit
@@ -395,18 +463,21 @@ JWKS and token endpoints, the roles claim, and the client-credentials scope
 | Per-provider profiles: issuer/JWKS/token URL defaults, claim mapping, `isService`, client-credentials request shape, MCP advertisement (authorization server, scope form, Entra resource checks) | `packages/auth/src/provider.ts` |
 | Runtime M2M service-token acquisition (client-credentials) | `packages/auth/src/api-token.ts` |
 | On-behalf-of delegation (headers, scope, resolver) | `packages/auth/src/on-behalf-of.ts` |
-| `requireAuth` / `requireScopes` + delegation wiring | `apps/api/src/auth/middleware.ts` |
-| Flow-scoped check, `can` / `assertCan`, roleless-human alert | `apps/api/src/auth/capabilities.ts` |
+| `requireAuth` / `requireScopes` / `requireServicePrincipal` + delegation wiring | `apps/api/src/auth/middleware.ts` |
+| Flow-scoped check, `can` / `assertCan`, roleless-human alert, privileged-action gate (`requirePrivilege`) | `apps/api/src/auth/capabilities.ts` |
+| Entra boot check (no role grants with auth on) | `apps/api/src/platform/config.ts` (`authorizationConfigIssues`) |
 | Capability set, `KNOWLEDGE_ROLE_GRANTS` parsing | `apps/api/src/stores/knowledge-repositories.ts` (`getConfiguredRoleGrants`) |
 | Enforcement points (`assertCan`) | `apps/api/src/features/{ask,retrieve,route}/routes.ts`, `apps/api/src/features/config/routes.ts` (`/admin/reset`) |
+| Enforcement points (`requirePrivilege`, AZ27) | `apps/api/src/features/{config,jobs,questions,scheduled-tasks,patrol,source-sync,seed}/routes.ts` |
 
 ## Tests (behavioural contract)
 
 `packages/auth/src/{index,api-token,on-behalf-of}.test.ts` (incl. Entra issuer,
 endpoint defaults, claim mapping, form-encoded client-credentials, legacy-env
 fallbacks), `apps/api/src/platform/config.test.ts`, `apps/watcher/src/config.test.ts`,
-`apps/api/src/auth/{capabilities,middleware,middleware.delegation}.test.ts`,
-`apps/api/src/features/{retrieve,route}/routes.flow-scope.test.ts`.
+`apps/api/src/auth/{capabilities,middleware,middleware.delegation,privileged-routes}.test.ts`,
+`apps/api/src/features/{retrieve,route}/routes.flow-scope.test.ts`,
+`apps/api/src/features/jobs/routes.worker-auth.test.ts`.
 
 ## Provenance (design history)
 

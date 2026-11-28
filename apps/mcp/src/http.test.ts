@@ -831,3 +831,59 @@ test("mcpStartupIssues: entra requires MCP_AUDIENCE and an https, slash-free res
   // Auth0 deployments (default http localhost URL, defaulted audience) are unaffected.
   assert.deepEqual(issues({ AUTH0_DOMAIN: "t.auth0.com" }, "http://localhost:4001/mcp"), []);
 });
+
+test("one app instance serves many sequential MCP requests (fresh stateless transport per request)", async () => {
+  // Regression: the app used to build ONE stateless transport at construction
+  // and reuse it, so the SDK threw "Stateless transport cannot be reused across
+  // requests" on the second request and every later one returned 500. Drive a
+  // realistic client sequence against a single app instance.
+  const auth = await makeTestAuth();
+  const token = await auth.token(["read:knowledge"]);
+
+  const originalFetch = globalThis.fetch;
+  let downstreamCalls = 0;
+  const fetchStub: typeof fetch = async () => {
+    downstreamCalls += 1;
+    return new Response(JSON.stringify({ results: [] }), {
+      status: 200,
+      headers: { "content-type": "application/json" }
+    });
+  };
+  globalThis.fetch = fetchStub;
+
+  try {
+    const app = createHttpMcpApp(
+      testOptions({ auth: { required: true, issuer: authIssuer, audience: authAudience, jwks: auth.jwks } })
+    );
+    const messages = [
+      {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "test", version: "0" } }
+      },
+      { jsonrpc: "2.0", id: 2, method: "tools/list" },
+      { jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "kb_search", arguments: { query: "hi" } } },
+      { jsonrpc: "2.0", id: 4, method: "tools/list" }
+    ];
+
+    for (const message of messages) {
+      const res = await request(app)
+        .post("/mcp")
+        .set("authorization", token)
+        .set("accept", "application/json, text/event-stream")
+        .send(message);
+      assert.equal(res.status, 200, `${message.method} (id ${message.id}) returned ${res.status}: ${res.text}`);
+      assert.match(res.text, new RegExp(`"id":${message.id}\\b`));
+      assert.doesNotMatch(res.text, /"error"/);
+      if (message.method === "tools/list") {
+        // Tool registration runs per request, so every tools/list sees the full set.
+        assert.match(res.text, /kb_search/);
+        assert.match(res.text, /kb_changes/);
+      }
+    }
+    assert.equal(downstreamCalls, 1, "the kb_search call should reach the downstream API exactly once");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

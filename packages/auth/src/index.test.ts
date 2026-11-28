@@ -265,6 +265,12 @@ test("MCP authorization server default: auth0 advertises the issuer, entra the v
   );
 });
 
+test("only Auth0 user-token scopes are per-user; Entra delegated scopes reach every user (AZ27)", () => {
+  assert.equal(providerProfile("auth0").perUserScopes, true);
+  assert.equal(providerProfile(undefined).perUserScopes, true);
+  assert.equal(providerProfile("entra").perUserScopes, false);
+});
+
 test("MCP advertised scopes: auth0 short names, entra qualified with the MCP Application ID URI", () => {
   const idUri = "https://mcp.contoso.com/mcp";
   assert.equal(providerProfile("auth0").advertisedMcpScope("read:knowledge", idUri), "read:knowledge");

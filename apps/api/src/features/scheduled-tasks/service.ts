@@ -1,11 +1,7 @@
-import type { JobState, JobType, JobView } from "@magpie/jobs";
+import type { JobType, JobView } from "@magpie/jobs";
 import type { AppContext } from "../../context.js";
 import { reconcileSchedules } from "../../jobs/schedule-reconciler.js";
 import { findScheduledTask, type ScheduledTaskDefinition } from "../../scheduling/task-registry.js";
-
-// A run is "in flight" while it sits in any of these non-terminal states, so a
-// second manual run of the same task must not start.
-const IN_FLIGHT_JOB_STATES: ReadonlySet<JobState> = new Set<JobState>(["created", "active", "retry", "blocked"]);
 
 // A task's run targets one flow; some job inputs carry that flow, others (the `{}`
 // inputs) target the default flow. Compare flowIds so a manual run of one flow's
@@ -19,13 +15,16 @@ function inputFlowId(input: unknown): string | undefined {
 }
 
 // True when a job of this task's type, targeting this task's flow, is already in
-// flight. Overlap protection is broker-agnostic (pg-boss's `create` exposes no
-// singleton key): we scan for a non-terminal job whose type and flow match, so one
-// flow's task is never blocked by another flow's run of the same job type.
+// flight (created | retry | active, incl. blocked). Overlap protection is
+// broker-agnostic (pg-boss's `create` exposes no singleton key): the broker
+// returns every in-flight job of the type and we match the flow here, so one
+// flow's task is never blocked by another flow's run of the same job type. The
+// flow match stays in JS because the default flow's `{}` input carries NO flowId,
+// which an input-containment filter cannot express.
 async function isTaskRunning(ctx: AppContext, task: ScheduledTaskDefinition): Promise<boolean> {
   const targetFlowId = inputFlowId(task.input);
-  const { jobs } = await ctx.jobs.list({ type: task.jobType, limit: 200 });
-  return jobs.some((job) => IN_FLIGHT_JOB_STATES.has(job.state) && inputFlowId(job.input) === targetFlowId);
+  const jobs = await ctx.jobs.findMatchingJobs({ type: task.jobType, inFlight: true });
+  return jobs.some((job) => inputFlowId(job.input) === targetFlowId);
 }
 
 // Outcome of a manual run. `code`s are the API error keys the route maps to a

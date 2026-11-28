@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import { realpath } from "node:fs/promises";
 import path from "node:path";
 import type { SourceDescriptor, SourceMapEntry } from "@magpie/core";
 import { ensureGitCheckout, getHeadSha } from "@magpie/git";
@@ -138,10 +139,7 @@ export async function prepareSourceWorkspaces(
               })
             ).localPath
           : descriptor.path;
-      const rootDir = withSubpath(repoRoot, descriptor.subpath);
-      if (!existsSync(rootDir)) {
-        throw new Error(`resolved root does not exist: ${rootDir}`);
-      }
+      const rootDir = await confinedSourceRoot(repoRoot, descriptor.subpath);
       // Best-effort: a local-kind source need not be a git repo, and a sha is only
       // a staleness stamp for map hints — never fail workspace preparation for it.
       let headSha: string | undefined;
@@ -164,8 +162,41 @@ export async function prepareSourceWorkspaces(
   return { workspaces, notes, fetchable };
 }
 
-function withSubpath(root: string, subpath: string | undefined): string {
-  return subpath ? path.join(root, subpath) : root;
+// Resolves a source's workspace root: the checkout (or local path) itself, or the
+// descriptor's `subpath` inside it. Defence in depth behind the API's rule that
+// job sources must match operator config (docs/ai-jobs.md J52): a subpath MUST
+// stay inside the source root, so an absolute subpath, one that climbs out with
+// `..`, or one that reaches outside through a symlink (checked on the real,
+// symlink-resolved paths) is rejected. The rejection degrades that one source to
+// an "unavailable" note like any other resolution failure.
+async function confinedSourceRoot(repoRoot: string, subpath: string | undefined): Promise<string> {
+  if (!subpath) {
+    if (!existsSync(repoRoot)) {
+      throw new Error(`resolved root does not exist: ${repoRoot}`);
+    }
+    return repoRoot;
+  }
+  if (path.isAbsolute(subpath) || path.win32.isAbsolute(subpath)) {
+    throw new Error(`source subpath must be relative to the source root: ${subpath}`);
+  }
+  const root = path.resolve(repoRoot);
+  const rootDir = path.resolve(root, subpath);
+  if (!isWithin(root, rootDir)) {
+    throw new Error(`source subpath escapes the source root: ${subpath}`);
+  }
+  if (!existsSync(rootDir)) {
+    throw new Error(`resolved root does not exist: ${rootDir}`);
+  }
+  const [realRoot, realRootDir] = await Promise.all([realpath(root), realpath(rootDir)]);
+  if (!isWithin(realRoot, realRootDir)) {
+    throw new Error(`source subpath escapes the source root through a symlink: ${subpath}`);
+  }
+  return rootDir;
+}
+
+function isWithin(root: string, candidate: string): boolean {
+  const relative = path.relative(root, candidate);
+  return relative === "" || (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
 }
 
 // Fetches the source-map hints for the prepared fs workspaces. Best-effort by

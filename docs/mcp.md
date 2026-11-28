@@ -54,7 +54,19 @@ no generative or embedding work of its own, and proxies every request to the API
 - **M7** — **Streamable HTTP** (spec version 2025-03-26+) runs on a configurable port.
   Clients send JSON-RPC requests via HTTP `POST` to `/mcp` and receive JSON or
   Server-Sent Events (SSE). It is built on the official `@modelcontextprotocol/server` SDK
-  and supports both stateful and stateless modes. A health check is served at `/health`.
+  and runs in **stateless** mode (no `Mcp-Session-Id`). A health check is served at
+  `/health`.
+- **M7a** — **Per-request server lifecycle.** The SDK's stateless transport is single-use
+  (a second `handleRequest` throws), so every `/mcp` request that passes the auth/scope
+  gate gets a **fresh `McpServer` + `NodeStreamableHTTPServerTransport` pair**, built by
+  `createMcpServer()` in `http.ts`, and the pair is closed when the response finishes or
+  the client disconnects. One long-lived app therefore serves any number of sequential
+  requests; nothing per-request outlives its response. The tool handlers share the app's
+  downstream service credential and read the verified user from per-request
+  `AsyncLocalStorage` (on-behalf-of, M13).
+- **M7b** — **Generic 500s.** An unexpected error while handling `/mcp` returns
+  `500 {"error":"internal_error"}`; the underlying error is logged server-side and never
+  echoed to the client.
 
 ## Authentication & authorization
 
@@ -527,7 +539,7 @@ Continue, etc.).
 | --- | --- |
 | stdio transport: framing, JSON-RPC dispatch, tool declarations, `callTool` | `apps/mcp/src/main.ts` |
 | stdio auth guard (`resolveStdioAuthToken`) | `apps/mcp/src/main.ts` |
-| Streamable HTTP app: OAuth protected-resource metadata, 401/403 challenges, per-tool/batch scope gate, `/mcp`, `/health`, startup checks (`mcpStartupIssues`) | `apps/mcp/src/http.ts` |
+| Streamable HTTP app: OAuth protected-resource metadata, 401/403 challenges, per-tool/batch scope gate, per-request `McpServer` + transport (`createMcpServer`), `/mcp`, `/health`, startup checks (`mcpStartupIssues`) | `apps/mcp/src/http.ts` |
 | Per-provider MCP advertisement (authorization server, scope form) and Entra resource checks | `packages/auth/src/provider.ts` |
 | HTTP service credential (client-credentials or static token) + on-behalf-of headers | `apps/mcp/src/http.ts` |
 | API proxy client: `askQuestion`, `listFlows`, `getJson`/`postJson`, job wait/poll, `submitFeedback`, `generateOutline`, `approveSeedPlan`, `getCitationSections`, `listKnowledgeChanges`, questionnaire calls | `apps/mcp/src/kb-client.ts` |
@@ -538,7 +550,7 @@ Continue, etc.).
 ## Tests (behavioural contract)
 
 `apps/mcp/src/main.test.ts` (tool list + `callTool` dispatch, stdio auth guard),
-`apps/mcp/src/http.test.ts` (transport, OAuth metadata for Auth0 and Entra, 401/403
+`apps/mcp/src/http.test.ts` (transport, many sequential requests on one app, OAuth metadata for Auth0 and Entra, 401/403
 challenges, per-tool and batch-union scope gating, Entra startup checks, service
 credential), `packages/auth/src/index.test.ts` (provider MCP defaults), `apps/mcp/src/kb-client.test.ts` (API proxying, job
 wait/poll fallback, per-tool payload shaping), `apps/mcp/src/logger.test.ts`.

@@ -17,12 +17,23 @@ import type {
   InFlightCapacity,
   JobBroker,
   JobListFilters,
+  JobMatch,
   ScheduleView
 } from "./broker.js";
 
 // Job states pg-boss treats as finished (`state >= 'completed'` in its own enum
 // ordering) — see cancel()'s comment for why this matters.
 const TERMINAL_JOB_STATES: ReadonlySet<JobView["state"]> = new Set(["completed", "cancelled", "failed"]);
+
+// Not-yet-finished states, as the real broker's in-flight SQL counts them
+// (created | retry | active; `blocked` is a created/retry job pg-boss holds back).
+const IN_FLIGHT_JOB_STATES: ReadonlySet<JobView["state"]> = new Set(["created", "retry", "active", "blocked"]);
+
+// One field of a job's stored input, read without trusting its shape.
+function inputField(input: unknown, field: string): unknown {
+  if (typeof input !== "object" || input === null) return undefined;
+  return Object.entries(input).find(([key]) => key === field)?.[1];
+}
 
 // Test-only in-memory implementation of JobBroker. Backed by an insertion-ordered
 // Map. Does NOT read environment variables.
@@ -272,6 +283,23 @@ export class FakeJobBroker implements JobBroker {
     return { jobs: results, total };
   }
 
+  // Mirrors the real broker's SQL: every job of the type (the fake never
+  // dead-letters, so all its jobs sit on work queues), optionally only in-flight
+  // ones, optionally only those whose input carries each listed field verbatim,
+  // newest first and unpaged.
+  async findMatchingJobs(match: JobMatch): Promise<JobView[]> {
+    const wanted = Object.entries(match.input ?? {});
+    return [...this.jobs.values()]
+      .filter(
+        (job) =>
+          job.type === match.type &&
+          !job.deadLetter &&
+          (!match.inFlight || IN_FLIGHT_JOB_STATES.has(job.state)) &&
+          wanted.every(([field, value]) => inputField(job.input, field) === value)
+      )
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  }
+
   async countInFlight(types: JobType[]): Promise<number> {
     return this.countInFlightSync(types);
   }
@@ -282,7 +310,7 @@ export class FakeJobBroker implements JobBroker {
     const wanted = new Set(types);
     let count = 0;
     for (const job of this.jobs.values()) {
-      if (wanted.has(job.type) && (job.state === "created" || job.state === "retry" || job.state === "active")) {
+      if (wanted.has(job.type) && IN_FLIGHT_JOB_STATES.has(job.state)) {
         count += 1;
       }
     }

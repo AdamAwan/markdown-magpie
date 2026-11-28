@@ -252,18 +252,74 @@ describe("loadConfig — valid configs", () => {
     assert.equal(config.auth.issuer, "https://tenant.eu.auth0.com/");
   });
 
+  const entraEnv: NodeJS.ProcessEnv = {
+    ...minimalEnv,
+    AUTH_REQUIRED: "true",
+    AUTH_PROVIDER: "entra",
+    AUTH_ISSUER: "https://login.microsoftonline.com/tenant-id/v2.0",
+    AUTH_AUDIENCE: "api-client-guid"
+  };
+
   it("accepts the generic AUTH_* names for an Entra deployment", () => {
     const config = loadConfig({
-      ...minimalEnv,
-      AUTH_REQUIRED: "true",
-      AUTH_PROVIDER: "entra",
-      AUTH_ISSUER: "https://login.microsoftonline.com/tenant-id/v2.0",
-      AUTH_AUDIENCE: "api-client-guid"
+      ...entraEnv,
+      KNOWLEDGE_ROLE_GRANTS: JSON.stringify({ "magpie-admins": { "*": ["admin", "ops"] } })
     });
     assert.equal(config.auth.provider, "entra");
     assert.equal(config.auth.issuer, "https://login.microsoftonline.com/tenant-id/v2.0");
     assert.equal(config.auth.audience, "api-client-guid");
     assert.equal(config.auth.jwksUri, "https://login.microsoftonline.com/tenant-id/discovery/v2.0/keys");
+    assert.deepEqual(config.knowledge.roleGrants, { "magpie-admins": { "*": ["admin", "ops"] } });
+  });
+
+  // Entra delegated scopes reach every user, so privileged actions are authorized
+  // from app roles via KNOWLEDGE_ROLE_GRANTS (AZ27); booting without any is refused.
+  it("refuses to boot Entra with auth on and no KNOWLEDGE_ROLE_GRANTS", () => {
+    const error = assertThrowsNaming(entraEnv, "KNOWLEDGE_ROLE_GRANTS");
+    assert.match(error.message, /AUTH_PROVIDER=entra/);
+    assertThrowsNaming({ ...entraEnv, KNOWLEDGE_ROLE_GRANTS: "  " }, "KNOWLEDGE_ROLE_GRANTS");
+  });
+
+  it("refuses to boot on a malformed KNOWLEDGE_ROLE_GRANTS instead of failing open", () => {
+    assertThrowsNaming({ ...minimalEnv, KNOWLEDGE_ROLE_GRANTS: "{not json" }, "KNOWLEDGE_ROLE_GRANTS");
+    assertThrowsNaming(
+      { ...minimalEnv, KNOWLEDGE_ROLE_GRANTS: JSON.stringify({ "kb-hr": { hr: ["read", "bogus"] } }) },
+      "KNOWLEDGE_ROLE_GRANTS",
+      "bogus"
+    );
+    // On Entra a malformed value is reported once, as itself (not also as "missing").
+    const error = assertThrowsNaming({ ...entraEnv, KNOWLEDGE_ROLE_GRANTS: "[]" }, "KNOWLEDGE_ROLE_GRANTS");
+    assert.doesNotMatch(error.message, /is required when AUTH_PROVIDER/);
+  });
+
+  it("refuses to boot on unparseable knowledge JSON or flows referencing unknown ids", () => {
+    assertThrowsNaming({ ...minimalEnv, KNOWLEDGE_SOURCES: "[{" }, "KNOWLEDGE_SOURCES");
+    assertThrowsNaming(
+      {
+        ...minimalEnv,
+        KNOWLEDGE_SOURCES: JSON.stringify([{ id: "src", path: "knowledge-bases/src" }]),
+        KNOWLEDGE_DESTINATIONS: JSON.stringify([{ id: "kb", path: "knowledge-bases/kb" }]),
+        KNOWLEDGE_FLOWS: JSON.stringify([{ id: "f", sourceIds: ["src"], destinationId: "typo" }])
+      },
+      "KNOWLEDGE_FLOWS",
+      "typo"
+    );
+  });
+
+  it("boots Entra without role grants when auth is explicitly disabled", () => {
+    const config = loadConfig({ ...entraEnv, AUTH_REQUIRED: "false" });
+    assert.equal(config.auth.provider, "entra");
+    assert.deepEqual(config.knowledge.roleGrants, {});
+  });
+
+  it("still boots Auth0 with auth on and no role grants (scopes are per-user there)", () => {
+    const config = loadConfig({
+      ...minimalEnv,
+      AUTH_REQUIRED: "true",
+      AUTH0_AUDIENCE: "https://markdown-magpie/api",
+      AUTH0_DOMAIN: "tenant.eu.auth0.com"
+    });
+    assert.deepEqual(config.knowledge.roleGrants, {});
   });
 
   it("rejects an unrecognised AUTH_PROVIDER", () => {

@@ -46,11 +46,13 @@ export interface KnowledgeRepositorySelection {
 }
 
 // Flow-scoped capabilities a role can be granted. `read`/`manage`/`ask` are
-// evaluated per flow; `admin` is a deployment-wide capability (gating destructive
-// actions like data reset) and is only ever granted on the "*" flow.
+// evaluated per flow; `admin` (config writes and destructive actions like data
+// reset or question purge) and `ops` (job and schedule management) are
+// deployment-wide capabilities, only ever granted on the "*" flow. See
+// docs/authorization.md AZ5 and AZ27.
 // Module-local: the capability set is exposed to the rest of the app through the
 // KnowledgeCapability type (below), not the array itself.
-const KNOWLEDGE_CAPABILITIES = ["read", "manage", "ask", "admin"] as const;
+const KNOWLEDGE_CAPABILITIES = ["read", "manage", "ask", "admin", "ops"] as const;
 export type KnowledgeCapability = (typeof KNOWLEDGE_CAPABILITIES)[number];
 
 // role name -> flow id (or "*" for all flows) -> granted capabilities. This is the
@@ -63,46 +65,87 @@ function isKnowledgeCapability(value: string): value is KnowledgeCapability {
   return (KNOWLEDGE_CAPABILITIES as readonly string[]).includes(value);
 }
 
-// Parses KNOWLEDGE_ROLE_GRANTS into a normalized grants map. Defensive by design
-// (mirrors the flow/repository parsers): malformed entries and unknown capabilities
-// are dropped rather than throwing, and an unset/blank value yields an empty map —
-// which deliberately leaves flow-scoped authorization INACTIVE (legacy scope-only
-// behavior) until an operator opts in by configuring grants.
-export function getConfiguredRoleGrants(env: EnvLike = process.env): KnowledgeRoleGrants {
-  const raw = env.KNOWLEDGE_ROLE_GRANTS?.trim();
+// Capabilities that are deployment-wide: only meaningful on the "*" flow (a
+// per-flow grant of one would silently match nothing).
+const WILDCARD_ONLY_CAPABILITIES: readonly KnowledgeCapability[] = ["admin", "ops"];
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+// Parses KNOWLEDGE_ROLE_GRANTS STRICTLY. An unset/blank value is the only way to
+// get an empty map (flow-scoped authorization inactive, docs/authorization.md
+// AZ11); anything else must be a well-formed role -> flow id (or "*") ->
+// capabilities map. Every problem is reported in `errors` — unparseable JSON, a
+// wrong shape, an unknown capability, or `admin`/`ops` on a specific flow —
+// because silently dropping it would FAIL OPEN (a malformed value used to read as
+// "no grants", which switches the whole capability layer off). The API refuses to
+// boot on any error (loadConfig). Duplicate capabilities are de-duplicated, and a
+// role whose every flow lists no capabilities grants nothing.
+export function parseRoleGrants(value: string | undefined): { grants: KnowledgeRoleGrants; errors: string[] } {
+  const raw = value?.trim();
   if (!raw) {
-    return {};
+    return { grants: {}, errors: [] };
   }
 
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
-  } catch {
-    return {};
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : "parse error";
+    return { grants: {}, errors: [`is not valid JSON (${reason})`] };
+  }
+  if (!isPlainObject(parsed)) {
+    return {
+      grants: {},
+      errors: ['must be a JSON object mapping role name -> flow id (or "*") -> capability array']
+    };
   }
 
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    return {};
-  }
-
+  const errors: string[] = [];
   const grants: KnowledgeRoleGrants = {};
-  for (const [roleName, perFlow] of Object.entries(parsed as Record<string, unknown>)) {
+  for (const [roleName, perFlow] of Object.entries(parsed)) {
     const role = roleName.trim();
-    if (!role || !perFlow || typeof perFlow !== "object" || Array.isArray(perFlow)) {
+    if (!role) {
+      errors.push("has an empty role name");
+      continue;
+    }
+    if (!isPlainObject(perFlow)) {
+      errors.push(`role "${role}" must map flow ids (or "*") to capability arrays`);
       continue;
     }
 
     const normalizedPerFlow: Record<string, KnowledgeCapability[]> = {};
-    for (const [flowId, capabilities] of Object.entries(perFlow as Record<string, unknown>)) {
-      const flow = flowId.trim();
-      if (!flow || !Array.isArray(capabilities)) {
+    for (const [flowKey, capabilities] of Object.entries(perFlow)) {
+      const flow = flowKey.trim();
+      if (!flow) {
+        errors.push(`role "${role}" has an empty flow id`);
         continue;
       }
-      const normalized = capabilities
-        .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
-        .filter(isKnowledgeCapability);
+      if (!Array.isArray(capabilities)) {
+        errors.push(`role "${role}" flow "${flow}" must be an array of capabilities`);
+        continue;
+      }
+      const granted: KnowledgeCapability[] = [];
+      for (const entry of capabilities) {
+        const capability = typeof entry === "string" ? entry.trim() : "";
+        if (!isKnowledgeCapability(capability)) {
+          errors.push(
+            `role "${role}" flow "${flow}" has unknown capability ${JSON.stringify(entry)} ` +
+              `(expected one of ${KNOWLEDGE_CAPABILITIES.join(", ")})`
+          );
+          continue;
+        }
+        if (flow !== "*" && WILDCARD_ONLY_CAPABILITIES.includes(capability)) {
+          errors.push(
+            `role "${role}" grants "${capability}" on flow "${flow}"; "${capability}" may only be granted on "*"`
+          );
+          continue;
+        }
+        granted.push(capability);
+      }
       // De-duplicate while preserving the declared order.
-      const unique = [...new Set(normalized)];
+      const unique = [...new Set(granted)];
       if (unique.length > 0) {
         normalizedPerFlow[flow] = unique;
       }
@@ -113,11 +156,123 @@ export function getConfiguredRoleGrants(env: EnvLike = process.env): KnowledgeRo
     }
   }
 
+  return { grants, errors };
+}
+
+// The deployment's role grants. Throws on an invalid value rather than returning a
+// partial map: loadConfig reports parseRoleGrants' errors first, so this only
+// throws for a caller that skipped validation — and then fails closed.
+export function getConfiguredRoleGrants(env: EnvLike = process.env): KnowledgeRoleGrants {
+  const { grants, errors } = parseRoleGrants(env.KNOWLEDGE_ROLE_GRANTS);
+  if (errors.length > 0) {
+    throw new Error(`KNOWLEDGE_ROLE_GRANTS ${errors.join("; ")}`);
+  }
   return grants;
 }
 
+// The env var names each list is read from, in precedence order. The FIRST
+// defined one (an explicitly-empty value included, matching `??`) supplies the
+// value, so validation reports the variable that actually configured the list.
+const SOURCE_ENV_NAMES = ["KNOWLEDGE_SOURCES", "KNOWLEDGE_SOURCE", "SOURCE_DATA", "SOURCE"] as const;
+const DESTINATION_ENV_NAMES = ["KNOWLEDGE_DESTINATIONS", "KNOWLEDGE_DESTINATION", "DESTINATION"] as const;
+const FLOW_ENV_NAMES = ["KNOWLEDGE_FLOWS", "KNOWLEDGE_FLOW"] as const;
+const REPOSITORY_ENV_NAMES = ["KNOWLEDGE_REPOSITORIES"] as const;
+
+function configuredValue(env: EnvLike, names: readonly string[]): { name: string; value: string } | undefined {
+  for (const name of names) {
+    const value = env[name];
+    if (value !== undefined) {
+      return { name, value };
+    }
+  }
+  return undefined;
+}
+
+export interface KnowledgeConfigIssue {
+  variable: string;
+  message: string;
+}
+
+// A value that opens with `[` or `{` clearly means to be JSON. The plain-string
+// forms (a bare path, git URL, `agent`, `internet`) stay valid; only JSON that
+// fails to parse is an error — previously it was silently re-read as a plain
+// string, producing a nonsense repository or no flow at all.
+function jsonSyntaxIssue(entry: { name: string; value: string } | undefined): KnowledgeConfigIssue | undefined {
+  const trimmed = entry?.value.trim();
+  if (!entry || !trimmed || !/^[[{]/.test(trimmed)) {
+    return undefined;
+  }
+  try {
+    JSON.parse(trimmed);
+    return undefined;
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : "parse error";
+    return { variable: entry.name, message: `looks like JSON but does not parse (${reason})` };
+  }
+}
+
+// Startup validation of the knowledge and authorization config the API reads
+// from the environment (docs/configuration.md). Every issue fails boot:
+//   - KNOWLEDGE_ROLE_GRANTS that is not a strictly valid grants map (fails open
+//     otherwise — see parseRoleGrants);
+//   - a sources/destinations/flows/repositories value that is JSON-shaped but
+//     unparseable;
+//   - a configured flow entry missing its destination or sources, or naming a
+//     source/destination id that is not configured (previously such a flow was
+//     silently dropped, so asks to it 404ed with no hint why).
+export function knowledgeConfigIssues(env: EnvLike = process.env): KnowledgeConfigIssue[] {
+  const issues: KnowledgeConfigIssue[] = parseRoleGrants(env.KNOWLEDGE_ROLE_GRANTS).errors.map((message) => ({
+    variable: "KNOWLEDGE_ROLE_GRANTS",
+    message
+  }));
+
+  const flowsEntry = configuredValue(env, FLOW_ENV_NAMES);
+  const syntaxIssues = [
+    configuredValue(env, REPOSITORY_ENV_NAMES),
+    configuredValue(env, SOURCE_ENV_NAMES),
+    configuredValue(env, DESTINATION_ENV_NAMES),
+    flowsEntry
+  ]
+    .map(jsonSyntaxIssue)
+    .filter((issue): issue is KnowledgeConfigIssue => issue !== undefined);
+  issues.push(...syntaxIssues);
+  if (syntaxIssues.length > 0 || !flowsEntry?.value.trim()) {
+    // Reference checks need parseable lists; an unset flow list is inferred.
+    return issues;
+  }
+
+  const parsedFlows = parseJsonOrString(flowsEntry.value.trim());
+  const entries = Array.isArray(parsedFlows) ? parsedFlows : [parsedFlows];
+  const sourceIds = new Set(getConfiguredKnowledgeSources(env).map((source) => source.id));
+  const destinationIds = new Set(getConfiguredKnowledgeDestinations(env).map((destination) => destination.id));
+  entries.forEach((entry, index) => {
+    const flow = normalizeFlowEntry(entry);
+    if (!flow) {
+      issues.push({
+        variable: flowsEntry.name,
+        message: `entry ${index} must be an object naming a destinationId and at least one sourceId`
+      });
+      return;
+    }
+    const unknownSources = flow.sourceIds.filter((id) => !sourceIds.has(id));
+    if (unknownSources.length > 0) {
+      issues.push({
+        variable: flowsEntry.name,
+        message: `flow "${flow.id}" references unknown source id(s) ${unknownSources.map((id) => `"${id}"`).join(", ")}`
+      });
+    }
+    if (!destinationIds.has(flow.destinationId)) {
+      issues.push({
+        variable: flowsEntry.name,
+        message: `flow "${flow.id}" references unknown destination id "${flow.destinationId}"`
+      });
+    }
+  });
+  return issues;
+}
+
 export function getConfiguredKnowledgeRepositories(env: EnvLike = process.env): ConfiguredKnowledgeRepository[] {
-  const configured = parseRepositoryList(env.KNOWLEDGE_REPOSITORIES);
+  const configured = parseRepositoryList(configuredValue(env, REPOSITORY_ENV_NAMES)?.value);
   if (configured.length > 0) {
     return configured;
   }
@@ -132,12 +287,12 @@ export function getConfiguredKnowledgeRepositories(env: EnvLike = process.env): 
 }
 
 export function getConfiguredKnowledgeSources(env: EnvLike = process.env): ConfiguredKnowledgeRepository[] {
-  const sources = parseRepositoryList(env.KNOWLEDGE_SOURCES ?? env.KNOWLEDGE_SOURCE ?? env.SOURCE_DATA ?? env.SOURCE);
+  const sources = parseRepositoryList(configuredValue(env, SOURCE_ENV_NAMES)?.value);
   return sources.length > 0 ? sources : getConfiguredKnowledgeRepositories(env);
 }
 
 export function getConfiguredKnowledgeDestinations(env: EnvLike = process.env): ConfiguredKnowledgeRepository[] {
-  const destinations = parseRepositoryList(env.KNOWLEDGE_DESTINATIONS ?? env.KNOWLEDGE_DESTINATION ?? env.DESTINATION);
+  const destinations = parseRepositoryList(configuredValue(env, DESTINATION_ENV_NAMES)?.value);
   return destinations.length > 0 ? destinations : getConfiguredKnowledgeRepositories(env);
 }
 
@@ -146,7 +301,7 @@ export function getConfiguredKnowledgeFlows(
   sources = getConfiguredKnowledgeSources(env),
   destinations = getConfiguredKnowledgeDestinations(env)
 ): ConfiguredKnowledgeFlow[] {
-  const configured = parseFlowList(env.KNOWLEDGE_FLOWS ?? env.KNOWLEDGE_FLOW);
+  const configured = parseFlowList(configuredValue(env, FLOW_ENV_NAMES)?.value);
   if (configured.length > 0) {
     return configured.filter(
       (flow) =>

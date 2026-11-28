@@ -2173,6 +2173,83 @@ test("createSplitProposalFromCompletedJob rejects changes to unrelated existing 
   assert.equal(result, undefined);
 });
 
+test("createDedupeProposalFromCompletedJob rejects a changeset touching a path it was not offered", async () => {
+  const ctx = makeTestContext();
+  const job = await dedupeJob(ctx);
+  for (const strayPath of ["kb/invented.md", ".github/workflows/ci.yml", "package.json", "../outside.md"]) {
+    const result = await proposals.createDedupeProposalFromCompletedJob(ctx, job, {
+      duplicate: true,
+      rationale: "prompt-injected",
+      primaryPath: "kb/refunds.md",
+      changeset: [
+        { path: "kb/refunds.md", content: "# Refunds" },
+        { path: strayPath, content: "pwned" }
+      ]
+    });
+    assert.equal(result, undefined, `${strayPath} must be rejected`);
+  }
+  // Deletes are confined exactly like writes.
+  const deleted = await proposals.createDedupeProposalFromCompletedJob(ctx, job, {
+    duplicate: true,
+    rationale: "prompt-injected delete",
+    primaryPath: "kb/refunds.md",
+    changeset: [
+      { path: "kb/refunds.md", content: "# Refunds" },
+      { path: ".github/CODEOWNERS", delete: true }
+    ]
+  });
+  assert.equal(deleted, undefined);
+  assert.equal((await ctx.stores.proposals.list(100)).length, 0, "no proposal was created");
+});
+
+test("createDedupeProposalFromCompletedJob rejects an offered neighbour path that breaks the policy", async () => {
+  const ctx = makeTestContext();
+  // The indexer does index .github/*.md, so such a doc can be offered as a neighbour;
+  // the destination policy still refuses to write it.
+  const job = await ctx.jobs.create("dedupe_documents", {
+    path: "kb/refunds.md",
+    content: "# Refunds",
+    neighbours: [{ path: ".github/copilot-instructions.md", content: "# Instructions" }],
+    destinationId: "docs",
+    flowId: "billing",
+    provider: "codex"
+  });
+  const result = await proposals.createDedupeProposalFromCompletedJob(ctx, job, {
+    duplicate: true,
+    rationale: "reconciled",
+    primaryPath: "kb/refunds.md",
+    changeset: [
+      { path: "kb/refunds.md", content: "# Refunds" },
+      { path: ".github/copilot-instructions.md", content: "pwned" }
+    ]
+  });
+  assert.equal(result, undefined);
+});
+
+test("createSplitProposalFromCompletedJob rejects a new path outside the document-path policy", async () => {
+  const ctx = makeTestContext();
+  const job = await splitJob(ctx);
+  for (const newPath of [
+    ".github/workflows/x.yml",
+    "package.json",
+    "../../outside.md",
+    "kb/.hidden/x.md",
+    "kb/x.mdx"
+  ]) {
+    const result = await proposals.createSplitProposalFromCompletedJob(ctx, job, {
+      split: true,
+      rationale: "prompt-injected",
+      primaryPath: "kb/operations.md",
+      changeset: [
+        { path: "kb/operations.md", content: "# Operations" },
+        { path: newPath, content: "pwned" }
+      ]
+    });
+    assert.equal(result, undefined, `${newPath} must be rejected`);
+  }
+  assert.equal((await ctx.stores.proposals.list(100)).length, 0, "no proposal was created");
+});
+
 async function improveJob(ctx: ReturnType<typeof makeTestContext>, content = "# Refunds") {
   return ctx.jobs.create("improve_document", {
     path: "kb/refunds.md",

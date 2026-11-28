@@ -26,7 +26,8 @@ with Docker Compose they all share `.env.compose.example` + `.env.compose`, so t
 automatic; on separately deployed watchers it is not.
 
 **Blank means unset.** The API and watcher loaders treat `FOO=` exactly like an absent
-`FOO`. Integer knobs validated by those loaders fail startup on a non-numeric value;
+`FOO`. Integer knobs validated by those loaders fail startup on a non-numeric value, as
+do the knowledge/authorization JSON values described below;
 the float knobs and the knobs read outside the loaders fall back to their default on a
 bad value instead (noted per variable).
 
@@ -88,7 +89,7 @@ See [authorization.md](./authorization.md). Auth **fails closed**: it is on unle
 | `AUTH0_ISSUER_BASE_URL` | api, watcher, mcp | — | **essential** when auth is on (or `AUTH0_DOMAIN`) | Full issuer URL; takes precedence over `AUTH0_DOMAIN`. |
 | `AUTH0_JWKS_URI` | api, mcp | `<issuer>.well-known/jwks.json` | tuning | Override the JWKS endpoint. |
 | `AUTH_ROLES_CLAIM` | api, mcp | `https://magpie.wastedcake.com/roles` | common when flow-scoping is used | JWT claim carrying role names. |
-| `KNOWLEDGE_ROLE_GRANTS` | api | unset (flow-scoping inactive) | common | JSON: role → flow id (or `*`) → capabilities. |
+| `KNOWLEDGE_ROLE_GRANTS` | api | unset (flow-scoping inactive) | common; **essential** with `AUTH_PROVIDER=entra` and auth on | JSON: role → flow id (or `*`) → capabilities (`read`/`manage`/`ask` per flow; `admin`/`ops` on `*` only). On Entra the API refuses to start without it, and admin/ops routes are authorized from these role grants rather than from delegated scopes ([AZ27/AZ28](./authorization.md#privileged-actions-when-scopes-are-not-per-user)). |
 | `AUTH0_CLIENT_ID` | web (runtime) | empty | **essential** for the console when auth is on | SPA client id. |
 | `AUTH0_REDIRECT_URI` | web (runtime) | `http://localhost:3000` | **essential** for a deployed console | SPA redirect URI. |
 | `NEXT_PUBLIC_AUTH0_DOMAIN`, `NEXT_PUBLIC_AUTH0_CLIENT_ID`, `NEXT_PUBLIC_AUTH0_AUDIENCE`, `NEXT_PUBLIC_AUTH0_REDIRECT_URI` | web | empty | tuning | Optional overrides that take precedence over the `AUTH0_*` runtime values. Leave blank to keep one image configurable per deployment. |
@@ -98,7 +99,7 @@ See [authorization.md](./authorization.md). Auth **fails closed**: it is on unle
 | Variable | Read by | Default | Class | Notes |
 | --- | --- | --- | --- | --- |
 | `WATCHER_API_CLIENT_ID`, `WATCHER_API_CLIENT_SECRET` | watcher | — | **essential** when auth is on (or `API_TOKEN`) | Client-credentials pair; must be set together. Preferred — the token refreshes itself. |
-| `API_TOKEN` | watcher | — | common (legacy) | Static pre-minted token; used only when the pair is unset. Expires. |
+| `API_TOKEN` | watcher | — | common (legacy) | Static pre-minted token; used only when the pair is unset. Expires. Must be a client-credentials (service) token: the job claim/heartbeat/complete/fail endpoints reject user tokens ([AZ29](./authorization.md)). |
 | `MCP_API_CLIENT_ID`, `MCP_API_CLIENT_SECRET` | mcp (HTTP) | — | **essential** for HTTP MCP when auth is on (or `MCP_API_AUTH_TOKEN`) | The MCP server's own machine identity for calling the API. |
 | `MCP_API_AUTH_TOKEN` | mcp (HTTP) | — | common (legacy) | Static alternative to the pair. Expires. |
 | `MCP_AUTH_TOKEN` | mcp (stdio) | — | **essential** for stdio MCP when auth is on | Bearer token the stdio transport presents to the API. |
@@ -106,6 +107,14 @@ See [authorization.md](./authorization.md). Auth **fails closed**: it is on unle
 ## Knowledge sources, destinations and flows
 
 See [ingestion.md](./ingestion.md) and [flows-and-seeding.md](./flows-and-seeding.md).
+
+The API validates these at startup (`knowledgeConfigIssues`,
+`apps/api/src/stores/knowledge-repositories.ts`) and refuses to boot, naming the variable,
+when a sources/destinations/flows/repositories value starts with `[` or `{` but is not
+valid JSON, when a configured flow entry lacks a `destinationId` or any `sourceIds`, or
+when a flow references a source or destination id that is not configured. (Such values
+used to be silently re-read as a plain string or the flow silently dropped.) The
+plain-string forms — a bare path, a git URL, `agent`, `internet` — are unaffected.
 
 | Variable | Read by | Default | Class | Notes |
 | --- | --- | --- | --- | --- |

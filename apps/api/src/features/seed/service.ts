@@ -67,14 +67,12 @@ async function draftSeedItem(
 // Find an in-flight (non-terminal) outline job for this flow so a second
 // propose click / bootstrap tick reuses it instead of double-planning.
 async function findInFlightOutlineJob(ctx: AppContext, flowId: string): Promise<JobView | undefined> {
-  const { jobs } = await ctx.jobs.list({ type: "outline_flow_seed", limit: 200 });
-  return jobs.find((job) => {
-    if (!["created", "retry", "active", "blocked"].includes(job.state)) {
-      return false;
-    }
-    const input = job.input as Partial<OutlineFlowSeedJobInput>;
-    return input.flowId === flowId;
+  const [job] = await ctx.jobs.findMatchingJobs({
+    type: "outline_flow_seed",
+    inFlight: true,
+    input: { flowId } satisfies Partial<OutlineFlowSeedJobInput>
   });
+  return job;
 }
 
 // Propose a seed plan for a flow: enqueue the source-grounded outline_flow_seed

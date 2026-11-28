@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import type { AppContext } from "../../context.js";
 import { requireScopes } from "../../auth/middleware.js";
+import { requirePrivilege } from "../../auth/capabilities.js";
 import { rateLimit } from "../../http/rate-limit.js";
 import { parseLimit } from "../../platform/paths.js";
 import { HttpError } from "../../http/errors.js";
@@ -20,7 +21,7 @@ export function sourceSyncRoutes(ctx: AppContext): Hono {
   // the generative step is enqueued and its completion finishes the run. The
   // body is optional; an absent flowId watches every configured git source.
   // Same admin scope as /api/gaps/reconcile.
-  app.post("/run", requireScopes("manage:jobs"), rateLimit(ctx, "trigger"), async (c) => {
+  app.post("/run", requireScopes("manage:jobs"), requirePrivilege(ctx, "ops"), rateLimit(ctx, "trigger"), async (c) => {
     const payload = await readJsonBody<{ flowId?: string }>(c);
     const runs = await sourceSyncService.triggerSourceSyncRun(ctx, {
       flowId: payload.flowId?.trim() || undefined,

@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import type { EmbeddingProvider, GapCandidate, Proposal } from "@magpie/core";
 import { fetchPullRequestStatus as defaultFetchPullRequestStatus } from "@magpie/git";
 import { logger } from "../logger.js";
-import { reconcileGapClustersOutputSchema, type JobState, type JobView } from "@magpie/jobs";
+import { reconcileGapClustersOutputSchema, type JobView } from "@magpie/jobs";
 import { z } from "zod";
 import type { AppContext } from "../context.js";
 import { withFlowRunLock, withFlowRunLockWaiting } from "./run-lock.js";
@@ -966,23 +966,16 @@ async function draftProposalsForUncoveredClusters(
   return { drafted, deferred };
 }
 
-// The non-terminal job states in which a draft is still "in flight" and so counts
-// as covering its cluster. Matches the in-flight set the manual-run guard uses in
-// scheduled-tasks/service.ts.
-const IN_FLIGHT_DRAFT_STATES: ReadonlySet<JobState> = new Set<JobState>(["created", "active", "retry", "blocked"]);
-
-// Cluster ids that already have a queued/active draft_markdown_proposal job. Read
-// from the job store rather than the proposal store, so a cluster is treated as
-// covered during the window between enqueue and the job completing (when no
-// proposal row exists yet). Newest-first ordering keeps freshly enqueued in-flight
-// jobs within the scanned page even when many completed drafts are retained.
+// Cluster ids that already have an in-flight (created | retry | active, incl.
+// blocked) draft_markdown_proposal job. Read from the job store rather than the
+// proposal store, so a cluster is treated as covered during the window between
+// enqueue and the job completing (when no proposal row exists yet). The broker
+// returns EVERY in-flight draft — not a newest-N page — so retained completed
+// drafts can never push an in-flight one out of view.
 async function inFlightDraftClusterIds(ctx: AppContext): Promise<Set<string>> {
-  const { jobs } = await ctx.jobs.list({ type: "draft_markdown_proposal", limit: 200 });
+  const jobs = await ctx.jobs.findMatchingJobs({ type: "draft_markdown_proposal", inFlight: true });
   const clusterIds = new Set<string>();
   for (const job of jobs) {
-    if (!IN_FLIGHT_DRAFT_STATES.has(job.state)) {
-      continue;
-    }
     const clusterId = draftJobClusterId(job.input);
     if (clusterId) {
       clusterIds.add(clusterId);
@@ -1527,8 +1520,10 @@ async function requestReshape(
 // otherwise duplicate.
 async function findInFlightReshape(ctx: AppContext, input: unknown): Promise<JobView | undefined> {
   const key = reconcileGapClustersReuseKey(input);
-  const { jobs } = await ctx.jobs.list({ type: "reconcile_gap_clusters", limit: 200 });
-  return jobs.find((job) => IN_FLIGHT_JOB_STATES.has(job.state) && reconcileGapClustersReuseKey(job.input) === key);
+  // Every in-flight reshape (not a list() page); the flow/provider key is matched
+  // here because the default flow's input carries no flowId to contain on.
+  const jobs = await ctx.jobs.findMatchingJobs({ type: "reconcile_gap_clusters", inFlight: true });
+  return jobs.find((job) => reconcileGapClustersReuseKey(job.input) === key);
 }
 
 // Dedupe key (#162): a reshape already in flight for this flow (and routed to the

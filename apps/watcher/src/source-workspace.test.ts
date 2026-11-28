@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, it } from "node:test";
@@ -129,6 +129,72 @@ describe("prepareSourceWorkspaces", () => {
       prepareSourceWorkspaces([git()], { checkoutRoot: tmpdir(), checkout: failing }),
       /no source workspace could be prepared/i
     );
+  });
+
+  // Defence in depth behind the API's configured-sources rule (docs/ai-jobs.md J52):
+  // a descriptor's subpath must stay inside its source root.
+  describe("subpath confinement", () => {
+    function sourceTree(): { root: string; outside: string } {
+      const base = mkdtempSync(path.join(tmpdir(), "magpie-confine-"));
+      const root = path.join(base, "repo");
+      const outside = path.join(base, "outside");
+      mkdirSync(path.join(root, "docs", "nested"), { recursive: true });
+      mkdirSync(outside, { recursive: true });
+      writeFileSync(path.join(outside, "secret.txt"), "s3cret");
+      return { root, outside };
+    }
+
+    async function prepareLocal(root: string, subpath: string) {
+      return prepareSourceWorkspaces([{ id: "l1", name: "Notes", kind: "local", path: root, subpath }], {
+        checkoutRoot: root
+      });
+    }
+
+    for (const [label, subpath] of [
+      ["a parent-directory escape", "../outside"],
+      ["an escape hidden behind a real directory", "docs/../../outside"],
+      ["an absolute subpath", "/etc"]
+    ] as const) {
+      it(`rejects ${label}`, async () => {
+        const { root } = sourceTree();
+        await assert.rejects(prepareLocal(root, subpath), /no source workspace could be prepared/);
+      });
+    }
+
+    it("rejects a symlink inside the root that points outside it", async () => {
+      const { root, outside } = sourceTree();
+      symlinkSync(outside, path.join(root, "docs", "link"), "dir");
+      await assert.rejects(prepareLocal(root, "docs/link"), /no source workspace could be prepared/);
+    });
+
+    it("names the escaping source in its unavailable note when another source resolves", async () => {
+      const { root } = sourceTree();
+      const prepared = await prepareSourceWorkspaces(
+        [
+          { id: "bad", name: "Escapee", kind: "local", path: root, subpath: "../outside" },
+          { id: "ok", name: "Notes", kind: "local", path: root, subpath: "docs" }
+        ],
+        { checkoutRoot: root }
+      );
+      assert.deepEqual(
+        prepared.workspaces.map((ws) => ws.sourceId),
+        ["ok"]
+      );
+      assert.match(prepared.notes[0]!, /Escapee.*escapes the source root/);
+    });
+
+    it("accepts a nested subpath, including one with a harmless `..` segment", async () => {
+      const { root } = sourceTree();
+      const prepared = await prepareLocal(root, "docs/nested/../nested");
+      assert.equal(prepared.workspaces[0]?.rootDir, path.join(root, "docs", "nested"));
+    });
+
+    it("accepts a symlink that stays inside the root", async () => {
+      const { root } = sourceTree();
+      symlinkSync(path.join(root, "docs", "nested"), path.join(root, "inner"), "dir");
+      const prepared = await prepareLocal(root, "inner");
+      assert.equal(prepared.workspaces.length, 1);
+    });
   });
 
   it("hasFsSources is true only for git/local descriptors", () => {
