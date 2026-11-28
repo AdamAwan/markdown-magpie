@@ -1,5 +1,5 @@
-import { readdirSync, readFileSync, realpathSync, statSync, type Dirent } from "node:fs";
-import { readFile as fsReadFile } from "node:fs/promises";
+import { readdirSync, realpathSync, statSync, type Dirent } from "node:fs";
+import { readFile as fsReadFile, open, readdir, type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import type { SourceWorkspace } from "./source-workspace.js";
 
@@ -22,6 +22,11 @@ const READ_CAP_BYTES = 32_000;
 // grep for the relevant sections instead of paging through with offsets.
 const READ_MAX_FILE_BYTES = 5 * 1024 * 1024;
 const GREP_MAX_MATCHES = 50;
+// grep scan bounds (see grepWorkspaces): files examined, bytes read from any one
+// file, and bytes read across the whole search.
+const GREP_MAX_FILES = 5_000;
+const GREP_MAX_FILE_BYTES = 1024 * 1024;
+const GREP_MAX_TOTAL_BYTES = 64 * 1024 * 1024;
 const LIST_MAX_ENTRIES = 200;
 const IGNORED_DIRS = new Set([".git", "node_modules", "dist", "build", ".next", "coverage", "vendor", ".turbo"]);
 // The text-file gate (inherited from the corpus sampler this path replaced) —
@@ -166,48 +171,152 @@ export async function readFile(
 // regex hang cannot be aborted, whereas literal matching is linear-time by
 // construction. The glob filter uses the same principle: an iterative wildcard
 // matcher, never a RegExp compiled from model input.
-export async function grepWorkspaces(workspaces: SourceWorkspace[], query: string, glob?: string): Promise<string> {
+//
+// Bounded on every axis (TM32 in docs/threat-model.md, J87 in docs/ai-jobs.md): a checkout can be huge, so
+// the walk is async (it never blocks the event loop the heartbeat and abort run
+// on), stops after GREP_MAX_FILES files or GREP_MAX_TOTAL_BYTES scanned, reads
+// at most GREP_MAX_FILE_BYTES of any one file, skips binary content, honours the
+// abort signal between files, and charges the rendered result against the same
+// read budget read_file and fetch_url draw from.
+interface GrepLimits {
+  maxFiles: number;
+  maxBytesPerFile: number;
+  maxTotalBytes: number;
+  maxMatches: number;
+}
+
+const DEFAULT_GREP_LIMITS: GrepLimits = {
+  maxFiles: GREP_MAX_FILES,
+  maxBytesPerFile: GREP_MAX_FILE_BYTES,
+  maxTotalBytes: GREP_MAX_TOTAL_BYTES,
+  maxMatches: GREP_MAX_MATCHES
+};
+
+interface GrepOptions {
+  // The loop's shared read budget. The rendered result is charged against it and
+  // a grep is refused once it is exhausted, exactly like read_file.
+  budget?: ToolBudget;
+  signal?: AbortSignal;
+  // Test seam: tighter caps so the bounds are exercisable on a small fixture.
+  limits?: Partial<GrepLimits>;
+}
+
+export async function grepWorkspaces(
+  workspaces: SourceWorkspace[],
+  query: string,
+  glob?: string,
+  options: GrepOptions = {}
+): Promise<string> {
   if (query.trim() === "") {
     throw new SourceToolError("grep query must not be empty; pass the literal text to search for");
   }
+  const { budget, signal } = options;
+  if (budget && budget.remainingBytes <= 0) {
+    throw new SourceToolError("read budget exhausted; answer from what you have already read");
+  }
+  const limits: GrepLimits = { ...DEFAULT_GREP_LIMITS, ...options.limits };
   const needle = query.toLowerCase();
   const globTokens = glob === undefined ? undefined : tokenizeGlob(glob);
   const hits: string[] = [];
-  for (const workspace of workspaces) {
-    const keepWalking = walk(workspace.rootDir, (absolute) => {
-      const relative = `${workspace.sourceId}/${path.relative(workspace.rootDir, absolute).replaceAll("\\", "/")}`;
-      if (!TEXT_FILE.test(absolute) || (globTokens && !matchGlob(globTokens, relative))) {
-        return true;
-      }
-      let content: string;
-      try {
-        content = readFileSync(absolute, "utf8");
-      } catch {
-        return true;
-      }
-      for (const line of content.split("\n")) {
-        if (line.toLowerCase().includes(needle)) {
-          hits.push(`${relative}: ${line.trim().slice(0, 200)}`);
-          if (hits.length >= GREP_MAX_MATCHES) {
-            return false;
-          }
+  const scan = { files: 0, bytes: 0, skippedBinary: 0, truncatedFiles: 0 };
+  let stopReason: string | undefined;
+
+  const visit = async (workspace: SourceWorkspace, absolute: string): Promise<boolean> => {
+    signal?.throwIfAborted();
+    const relative = `${workspace.sourceId}/${path.relative(workspace.rootDir, absolute).replaceAll("\\", "/")}`;
+    if (!TEXT_FILE.test(absolute) || (globTokens && !matchGlob(globTokens, relative))) {
+      return true;
+    }
+    if (scan.files >= limits.maxFiles) {
+      stopReason = `scanned the ${limits.maxFiles}-file limit`;
+      return false;
+    }
+    const remainingTotal = limits.maxTotalBytes - scan.bytes;
+    if (remainingTotal <= 0) {
+      stopReason = `scanned the ${limits.maxTotalBytes}-byte limit`;
+      return false;
+    }
+    const head = await readHead(absolute, Math.min(limits.maxBytesPerFile, remainingTotal));
+    if (!head) {
+      return true; // unreadable (raced delete, permissions) — skip, keep walking
+    }
+    scan.files += 1;
+    scan.bytes += head.bytes.length;
+    if (head.truncated) {
+      scan.truncatedFiles += 1;
+    }
+    if (looksBinary(head.bytes)) {
+      scan.skippedBinary += 1;
+      return true;
+    }
+    for (const line of head.bytes.toString("utf8").split("\n")) {
+      if (line.toLowerCase().includes(needle)) {
+        hits.push(`${relative}: ${line.trim().slice(0, 200)}`);
+        if (hits.length >= limits.maxMatches) {
+          stopReason = `reached the ${limits.maxMatches}-match limit`;
+          return false;
         }
       }
-      return true;
-    });
-    if (!keepWalking) {
+    }
+    return true;
+  };
+
+  for (const workspace of workspaces) {
+    if (!(await walk(workspace.rootDir, (absolute) => visit(workspace, absolute), signal))) {
       break;
     }
   }
-  return hits.length > 0 ? hits.join("\n") : "(no matches)";
+
+  const notes: string[] = [];
+  if (stopReason) {
+    notes.push(`search stopped early: ${stopReason}; narrow the query or pass a glob to see more`);
+  }
+  if (scan.truncatedFiles > 0) {
+    notes.push(`only the first ${limits.maxBytesPerFile} bytes of ${scan.truncatedFiles} large file(s) were searched`);
+  }
+  const body = hits.length > 0 ? hits.join("\n") : "(no matches)";
+  const rendered = notes.length > 0 ? `${body}\n\n[${notes.join("; ")}]` : body;
+  if (budget) {
+    budget.remainingBytes -= Buffer.byteLength(rendered, "utf8");
+  }
+  return rendered;
 }
 
-// Depth-first walk; visit returns false to stop the whole traversal (so the grep
-// cap ends the walk instead of uselessly readdir-ing the rest of the tree).
-function walk(dir: string, visit: (file: string) => boolean): boolean {
+// Reads at most `cap` bytes from the start of a file. Undefined when the file
+// cannot be opened or read — a grep skips such files rather than failing.
+async function readHead(absolute: string, cap: number): Promise<{ bytes: Buffer; truncated: boolean } | undefined> {
+  let handle: FileHandle | undefined;
+  try {
+    handle = await open(absolute, "r");
+    const size = (await handle.stat()).size;
+    const length = Math.min(size, cap);
+    const buffer = Buffer.alloc(length);
+    const { bytesRead } = length > 0 ? await handle.read(buffer, 0, length, 0) : { bytesRead: 0 };
+    return { bytes: buffer.subarray(0, bytesRead), truncated: size > cap };
+  } catch {
+    return undefined;
+  } finally {
+    await handle?.close().catch(() => undefined);
+  }
+}
+
+// A NUL byte in the first 8 KB is the conventional (git/grep) binary heuristic: a
+// mislabelled or generated ".json"/".txt" blob is never useful match output.
+function looksBinary(bytes: Buffer): boolean {
+  return bytes.subarray(0, 8192).includes(0);
+}
+
+// Depth-first async walk; visit resolves false to stop the whole traversal (so a
+// grep cap ends the walk instead of uselessly readdir-ing the rest of the tree).
+async function walk(
+  dir: string,
+  visit: (file: string) => Promise<boolean>,
+  signal: AbortSignal | undefined
+): Promise<boolean> {
+  signal?.throwIfAborted();
   let entries: Dirent[];
   try {
-    entries = readdirSync(dir, { withFileTypes: true });
+    entries = await readdir(dir, { withFileTypes: true });
   } catch {
     return true; // unreadable subdirectory — skip it, keep walking elsewhere
   }
@@ -217,11 +326,11 @@ function walk(dir: string, visit: (file: string) => boolean): boolean {
     }
     const full = path.join(dir, entry.name);
     if (entry.isDirectory()) {
-      if (!walk(full, visit)) {
+      if (!(await walk(full, visit, signal))) {
         return false;
       }
     } else if (entry.isFile()) {
-      if (!visit(full)) {
+      if (!(await visit(full))) {
         return false;
       }
     }

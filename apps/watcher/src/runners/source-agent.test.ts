@@ -5,6 +5,7 @@ import path from "node:path";
 import { describe, it } from "node:test";
 import { MockLanguageModelV3 } from "ai/test";
 import type { JobView } from "@magpie/jobs";
+import { ProviderOutputTruncatedError } from "@magpie/retrieval";
 import { runSourceAgentJob } from "./source-agent.js";
 
 const OUTPUT = JSON.stringify({
@@ -203,5 +204,79 @@ describe("runSourceAgentJob", () => {
       (error: unknown) => error instanceof Error && "code" in error && error.code === "ENOENT"
     );
     assert.equal(model.doGenerateCalls.length, 1, "the model got no turn after the infrastructure fault");
+  });
+
+  // J83: a step cut off at the output-token limit is a prefix, not an answer —
+  // it fails as a truncation, and no forced closing turn is spent on it.
+  it("fails a length-truncated final step as truncation, without a forced closing turn", async () => {
+    const root = mkdtempSync(path.join(tmpdir(), "magpie-agent-"));
+    const model = new MockLanguageModelV3({
+      doGenerate: async () => ({
+        content: [{ type: "text" as const, text: '{"title": "Statements Mod' }],
+        finishReason: { unified: "length" as const, raw: "length" },
+        usage: {
+          inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
+          outputTokens: { total: 1, text: 1, reasoning: undefined }
+        },
+        warnings: []
+      })
+    });
+    await assert.rejects(
+      runSourceAgentJob({
+        job: seedJob(),
+        model,
+        workspaces: [{ sourceId: "s1", name: "Repo", rootDir: root }],
+        notes: [],
+        signal: new AbortController().signal
+      }),
+      (error: unknown) => error instanceof ProviderOutputTruncatedError
+    );
+    assert.equal(model.doGenerateCalls.length, 1);
+  });
+
+  // J84: the whole loop is bounded by one deadline, not just each call.
+  it("fails with a clear deadline error when the loop outlives its overall timeout", async () => {
+    const root = mkdtempSync(path.join(tmpdir(), "magpie-agent-"));
+    const model = new MockLanguageModelV3({
+      // A provider that never answers: only the deadline can end this call.
+      doGenerate: (options) =>
+        new Promise((_resolve, reject) => {
+          options.abortSignal?.addEventListener("abort", () => reject(options.abortSignal?.reason), { once: true });
+        })
+    });
+    await assert.rejects(
+      runSourceAgentJob({
+        job: seedJob(),
+        model,
+        workspaces: [{ sourceId: "s1", name: "Repo", rootDir: root }],
+        notes: [],
+        signal: new AbortController().signal,
+        timeoutMs: 50
+      }),
+      /source-agent loop exceeded its 50ms deadline \(MAGPIE_AGENTIC_TIMEOUT_MS\)/
+    );
+  });
+
+  it("reports a caller cancellation as itself, not as a deadline", async () => {
+    const root = mkdtempSync(path.join(tmpdir(), "magpie-agent-"));
+    const controller = new AbortController();
+    const model = new MockLanguageModelV3({
+      doGenerate: (options) =>
+        new Promise((_resolve, reject) => {
+          options.abortSignal?.addEventListener("abort", () => reject(options.abortSignal?.reason), { once: true });
+        })
+    });
+    setTimeout(() => controller.abort(new Error("job cancelled")), 20);
+    await assert.rejects(
+      runSourceAgentJob({
+        job: seedJob(),
+        model,
+        workspaces: [{ sourceId: "s1", name: "Repo", rootDir: root }],
+        notes: [],
+        signal: controller.signal,
+        timeoutMs: 60_000
+      }),
+      (error: unknown) => error instanceof Error && !/deadline/.test(error.message)
+    );
   });
 });

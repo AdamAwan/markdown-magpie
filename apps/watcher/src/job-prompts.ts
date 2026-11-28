@@ -172,11 +172,16 @@ export function buildSourceGroundedPrompt(
   const noteBlock = notes.length > 0 ? `\nSource notes:\n${notes.map((n) => `- ${n}`).join("\n")}\n` : "";
   // Navigation hints recorded by previous agents. Deliberately framed as
   // unverified: they are starting points for exploration, never facts to cite.
+  // Every field of a hint (topic, paths, description) was authored by an earlier
+  // model run that read untrusted sources, so the list is wrapped as untrusted
+  // material (TM31) — an injected "hint" must not read as an instruction.
   const mapBlock =
     mapEntries.length > 0
-      ? `\nSource map hints — notes from previous agents about where things live. These are unverified: use them as starting points and verify against the repository before relying on them.\n${mapEntries
-          .map((entry) => `- [${entry.sourceId}] ${entry.topic}: ${entry.paths.join(", ")} — ${entry.description}`)
-          .join("\n")}\n`
+      ? `\nSource map hints — notes from previous agents about where things live. These are unverified: use them as starting points and verify against the repository before relying on them.\n${wrapUntrusted(
+          mapEntries
+            .map((entry) => `- [${entry.sourceId}] ${entry.topic}: ${entry.paths.join(", ")} — ${entry.description}`)
+            .join("\n")
+        )}\n`
       : "";
   const input = omitInputKeys(job.input, ["sources"]);
   // The rendered input carries untrusted reference material (document content,

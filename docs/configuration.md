@@ -148,12 +148,14 @@ provider's capability only when that provider's required variables are all set.
 | `CLAUDE_CLI_PATH` | watcher | `claude` | **essential** for `claude` | Same rule as `CODEX_CLI_PATH`. |
 | `CODEX_CLI_ARGS` | watcher | `exec` | tuning | Base arguments. Isolation flags are appended in code and cannot be configured away. |
 | `CLAUDE_CLI_ARGS` | watcher | `-p` | tuning | As above. |
-| `CODEX_CLI_PROMPT_MODE`, `CLAUDE_CLI_PROMPT_MODE` | watcher | `arg` | common on Windows | `arg` \| `stdin`. Anything other than `stdin` means `arg`. Use `stdin` on Windows. |
+| `CODEX_CLI_PROMPT_MODE`, `CLAUDE_CLI_PROMPT_MODE` | watcher | `stdin` | tuning | `stdin` \| `arg`. Anything other than `arg` means `stdin`. `arg` fails to spawn once a prompt passes ~128 KB on Linux (`E2BIG`) or ~32 KB on Windows (`ENAMETOOLONG`); keep it only for a CLI build that cannot read stdin ([ai-jobs.md](./ai-jobs.md) J80). **Changed default** — was `arg`. |
+| `AGENT_CLI_MAX_OUTPUT_BYTES` | watcher | `8388608` (8 MiB) | tuning | Cap on a CLI run's captured stdout; exceeding it stops the run and fails the job (J85). |
 | `CODEX_CLI_MODEL`, `CLAUDE_CLI_MODEL` | watcher | CLI's own default | common | Appended as `--model <value>` when set. |
 | `CHAT_TEMPERATURE` | watcher | `0.2` is sent | common | A number overrides it; `default` omits the field — required for reasoning deployments that reject an explicit temperature. |
-| `AGENT_API_TIMEOUT_MS` | watcher (api reads it for config display only) | `120000` | tuning | Per-request timeout for hosted chat calls. |
+| `AGENT_API_TIMEOUT_MS` | watcher (api reads it for config display only) | `120000` | tuning | Per-attempt timeout for hosted chat calls. |
+| `AGENT_API_MAX_RETRIES` | watcher | `2` | tuning | In-process retries of a transient hosted-chat failure (408/429/5xx, timeout, dropped connection) with backoff honouring `Retry-After`; `0` disables, values outside 0–10 fall back to the default ([ai-jobs.md](./ai-jobs.md) J81). |
 | `AGENT_CLI_TIMEOUT_MS` | watcher | `120000` | tuning | Per-invocation timeout for one-shot CLI runs. |
-| `MAGPIE_AGENTIC_TIMEOUT_MS` | watcher | `600000` | tuning | Timeout for source-grounded agentic runs. Keep below the 900 s queue expiry of the draft jobs. |
+| `MAGPIE_AGENTIC_TIMEOUT_MS` | watcher | `600000` | tuning | Timeout for source-grounded agentic runs — the CLI run, or the whole HTTP-provider tool loop (every step and the forced closing turn, J84). Keep below the 900 s queue expiry of the draft jobs. |
 | `CLI_CANCEL_GRACE_MS` | watcher | `5000` | tuning | Grace period before a cancelled CLI run is killed. |
 | `MAGPIE_CLI_ENV_PASSTHROUGH` | watcher | empty | common for Bedrock/Vertex | Extra variable **names** (comma/space separated) forwarded to spawned CLIs. |
 | `AI_PRICING` | api | unset (no cost reporting) | common | JSON price table per (provider, model). A malformed value fails startup. |
@@ -195,7 +197,7 @@ from which variables are set; with none, retrieval is keyword-only.
 | `OPENAI_COMPATIBLE_EMBEDDING_DIMENSIONS` | api | not sent | tuning | Sent as `dimensions` only when set. Many servers reject the field. |
 | `AZURE_OPENAI_EMBEDDING_DEPLOYMENT` | api | — | **essential** for Azure embeddings | Enables Azure embeddings. |
 | `AZURE_OPENAI_EMBEDDING_DIMENSIONS` | api | not sent | **essential** for `text-embedding-3-large` on Azure | Must be `1536` for that model; leave blank for ada-002. |
-| `EMBEDDING_TIMEOUT_MS` | api | `60000` | tuning | Per-request timeout for embedding calls. |
+| `EMBEDDING_TIMEOUT_MS` | api | `60000` | tuning | Per-request timeout for **background** embedding calls (indexing, gap bucketing, questionnaire matching). Query-time retrieval and embedding routing use a separate 5 s timeout behind a circuit breaker that is not yet configurable ([ai-jobs.md](./ai-jobs.md) J86). |
 | `FLOW_ROUTER_MIN_SCORE` | api | `0.25` | tuning | Float in [0,1]. Bad values fall back. |
 | `FLOW_ROUTER_MIN_MARGIN` | api | `0.05` | tuning | Float in [0,1]. Bad values fall back. |
 | `GAP_CLUSTER_ASSIGN_THRESHOLD` | api | `0.84` | tuning | Float in (0,1]. Re-tune with `npm run eval:gap-threshold` after changing the embedding model. Bad values fall back. |

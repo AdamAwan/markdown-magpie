@@ -1,4 +1,5 @@
-import { generateText, stepCountIs, tool, type LanguageModel, type ModelMessage } from "ai";
+import { generateText, stepCountIs, tool, type FinishReason, type LanguageModel, type ModelMessage } from "ai";
+import { ProviderOutputTruncatedError } from "@magpie/retrieval";
 import { z } from "zod";
 import { aiUsageFromTokenCounts, type AiUsage, type SourceMapEntry } from "@magpie/core";
 import type { JobView, UndeclaredOutputFieldPolicy } from "@magpie/jobs";
@@ -11,13 +12,11 @@ import type { SourceWorkspace } from "../source-workspace.js";
 
 const MAX_STEPS = 24;
 const TOTAL_READ_BUDGET_BYTES = 400_000;
+// Mirrors the CLI runner's agentic default; production passes
+// MAGPIE_AGENTIC_TIMEOUT_MS through ChatRunnerOptions.agenticTimeoutMs.
+const DEFAULT_AGENTIC_TIMEOUT_MS = 600_000;
 
-// The HTTP-provider execution tier for source-grounded jobs: a bounded
-// generateText tool loop over the read-only source tools. The CLI tier does not
-// come through here — agent CLIs traverse the checkout natively (see cli.ts).
-// Tool misuse (SourceToolError) is returned to the model as an error string so
-// it can correct course; an infrastructure fault halts the loop and fails the job.
-export async function runSourceAgentJob(options: {
+interface SourceAgentOptions {
   job: JobView;
   model: LanguageModel;
   workspaces: SourceWorkspace[];
@@ -32,8 +31,58 @@ export async function runSourceAgentJob(options: {
   onUsage?: (usage: AiUsage) => void;
   // See ChatRunnerOptions.undeclaredOutputFields. Strict when omitted.
   undeclaredOutputFields?: UndeclaredOutputFieldPolicy;
-}): Promise<unknown> {
-  const { job, model, workspaces, notes, mapEntries = [], fetchable = [], signal, onUsage } = options;
+  // Overall wall-clock budget for the WHOLE loop — every step, every tool call
+  // and the forced closing turn — so the step cap cannot multiply a per-call
+  // timeout into an unbounded run (J84). MAGPIE_AGENTIC_TIMEOUT_MS in production.
+  timeoutMs?: number;
+}
+
+// The HTTP-provider execution tier for source-grounded jobs: a bounded
+// generateText tool loop over the read-only source tools. The CLI tier does not
+// come through here — agent CLIs traverse the checkout natively (see cli.ts).
+// Tool misuse (SourceToolError) is returned to the model as an error string so
+// it can correct course; an infrastructure fault halts the loop and fails the job.
+// Transient provider failures (429/5xx) are retried per step by the AI SDK
+// itself (maxRetries 2, honouring Retry-After), inside the overall deadline.
+export async function runSourceAgentJob(options: SourceAgentOptions): Promise<unknown> {
+  const { job, signal } = options;
+  const timeoutMs = options.timeoutMs ?? DEFAULT_AGENTIC_TIMEOUT_MS;
+  // A plain (ref'd) timer cleared on completion rather than AbortSignal.timeout,
+  // whose unref'd timer neither keeps a pending run alive nor gets cleaned up.
+  const deadline = new AbortController();
+  const timer = setTimeout(
+    () => deadline.abort(new DOMException(`source-agent deadline of ${timeoutMs}ms reached`, "TimeoutError")),
+    timeoutMs
+  );
+  const runSignal = AbortSignal.any([signal, deadline.signal]);
+  try {
+    return await runLoop(options, runSignal);
+  } catch (error) {
+    // The deadline, not the caller, ended the run: say so plainly rather than
+    // surfacing a bare AbortError / TimeoutError from wherever it landed.
+    if (deadline.signal.aborted && !signal.aborted) {
+      throw new Error(
+        `${job.type}[${job.id}]: source-agent loop exceeded its ${timeoutMs}ms deadline (MAGPIE_AGENTIC_TIMEOUT_MS)`,
+        { cause: error }
+      );
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// A step that stopped at the provider's output-token limit produced a prefix,
+// not an answer (J83) — fail it distinctly instead of parsing it (or forcing a
+// closing turn that would be cut off the same way).
+function assertNotTruncated(finishReason: FinishReason): void {
+  if (finishReason === "length") {
+    throw new ProviderOutputTruncatedError("Source-agent model", 'finishReason "length"');
+  }
+}
+
+async function runLoop(options: SourceAgentOptions, runSignal: AbortSignal): Promise<unknown> {
+  const { job, model, workspaces, notes, mapEntries = [], fetchable = [], onUsage } = options;
   const undeclaredOutputFields = options.undeclaredOutputFields ?? DEFAULT_UNDECLARED_OUTPUT_FIELDS;
   // The AI SDK types every totalUsage field as possibly-undefined (NaN shows up
   // for providers that don't report); the shared core sanitizer validates and
@@ -77,7 +126,7 @@ export async function runSourceAgentJob(options: {
   // Filesystem tools only when there is a workspace to explore, fetch_url only
   // when the operator allowlisted an internet source (#242) — a job grounded in
   // internet sources alone gets a fetch-only toolset rather than dead fs tools.
-  const fetcher = fetchable.length > 0 ? new UrlFetcher(fetchable, budget, { signal }) : undefined;
+  const fetcher = fetchable.length > 0 ? new UrlFetcher(fetchable, budget, { signal: runSignal }) : undefined;
   const fsTools = {
     list_dir: tool({
       description: 'List a directory. Path is "<sourceId>/<relative path>"; pass "" to list the available sources.',
@@ -94,7 +143,8 @@ export async function runSourceAgentJob(options: {
       description:
         'Search file contents across all sources for a literal, case-insensitive text string (not a regular expression). Optional glob filters paths (e.g. "s1/docs/**").',
       inputSchema: z.object({ query: z.string(), glob: z.string().optional() }),
-      execute: ({ query, glob }) => asContent(() => grepWorkspaces(workspaces, query, glob))
+      execute: ({ query, glob }) =>
+        asContent(() => grepWorkspaces(workspaces, query, glob, { budget, signal: runSignal }))
     })
   };
   const tools = {
@@ -118,7 +168,7 @@ export async function runSourceAgentJob(options: {
     prompt,
     tools,
     stopWhen: [stepCountIs(MAX_STEPS), () => infraError !== undefined],
-    abortSignal: signal
+    abortSignal: runSignal
   });
   // Report usage before the infra-fault check so the reading isn't skipped on
   // the throw below. NOTE: usage only reaches the API on a COMPLETED job (the
@@ -131,6 +181,7 @@ export async function runSourceAgentJob(options: {
     // produced is ungrounded. Fail the job — never parse or force an answer.
     throw infraError;
   }
+  assertNotTruncated(result.finishReason);
   logger.debug(
     { jobId: job.id, steps: result.steps.length, budgetLeft: budget.remainingBytes },
     `${job.type}[${job.id}]: source-agent loop finished in ${result.steps.length} step(s)`
@@ -156,8 +207,14 @@ export async function runSourceAgentJob(options: {
           "You have gathered enough. Produce the FINAL JSON output now, exactly matching the required shape. JSON only — no prose, no further exploration."
       }
     ];
-    const forced = await generateText({ model, system: JOB_RUNNER_SYSTEM.instructions, messages, abortSignal: signal });
+    const forced = await generateText({
+      model,
+      system: JOB_RUNNER_SYSTEM.instructions,
+      messages,
+      abortSignal: runSignal
+    });
     reportUsage(forced.totalUsage);
+    assertNotTruncated(forced.finishReason);
     return parseJobOutput(job, forced.text, undeclaredOutputFields);
   }
 }

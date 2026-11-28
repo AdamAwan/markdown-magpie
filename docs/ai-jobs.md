@@ -515,15 +515,96 @@ paid-for generation away and force pg-boss to redo the whole job; both are close
   structured JSON contract (plain prose) is always grounding-verified despite its low
   confidence and **fails closed** — if the verifier cannot vouch for the prose, the safe
   fallback answer ships instead of the raw text.
-- **J39** — **Prompt mode.** `*_CLI_PROMPT_MODE` is `arg` (append the prompt as the final
-  process argument) or `stdin` (send it on standard input). The agent MUST return JSON
-  matching the job's output schema; the watcher extracts and validates JSON before completing.
+- **J39** — **Prompt mode.** `*_CLI_PROMPT_MODE` is `stdin` (send the prompt on standard
+  input — the default, J80) or `arg` (append it as the final process argument, after a `--`
+  terminator). The agent MUST return JSON matching the job's output schema; the watcher
+  extracts and validates JSON before completing.
 - **J40** — **Provider adapters (`AgentRunner`).** Provider support stays behind adapters
   that normalise every provider to the same internal job contract, keep prompts and output
   schemas provider-neutral, validate provider output before completing, prefer OpenAI-compatible
   `/chat/completions` for broad coverage, keep credentials in env (never in job payloads),
   bound external calls with timeouts, and fail with readable errors. One conformance smoke
-  test per provider shape (answer, gap summary, proposal).
+  test per provider shape (answer, gap summary, proposal). The concrete bounds — retry,
+  truncation, error redaction, deadlines, output caps — are J80–J87 below.
+
+## Provider & CLI robustness
+
+Every AI call the watcher makes, and the request-path embedding calls the API makes, is
+bounded in time and size, retries only what is transient, and fails with an error that is
+specific but never leaks the provider's response body.
+
+- **J80** — **CLI prompts go over stdin by default.** A prompt passed as one argv element
+  cannot be spawned above the OS limit — `E2BIG` above ~128 KB for a single argument on Linux
+  (`MAX_ARG_STRLEN`), `ENAMETOOLONG` above ~32 KB of command line on Windows — and
+  retrieval-augmented and source-grounded prompts routinely exceed both. So `*_CLI_PROMPT_MODE`
+  MUST default to `stdin`; only an explicit `arg` keeps argv delivery
+  (`normalizePromptMode`, `runners/index.ts`). Both CLIs read a prompt from stdin when no
+  positional prompt is given: `claude -p` (verified live on claude 2.1.332 with a 240 KB
+  prompt through the generative isolation args) and `codex exec` (documented by
+  `codex exec --help` on codex-cli 0.172.0: "If not provided as an argument (or if `-` is
+  used), instructions are read from stdin"). The in-code isolation and read-only args (J37)
+  are identical in both modes; the system prompt stays on `--system-prompt` for claude.
+- **J81** — **Bounded retry of transient HTTP provider failures.** The hosted chat providers
+  (`openai-compatible`, `azure-openai`) MUST retry a transient failure — HTTP 408, 429 or
+  5xx, a per-attempt timeout, or a dropped connection — at most `AGENT_API_MAX_RETRIES`
+  times (default 2; `0` disables), waiting with equal-jitter exponential backoff (1 s base,
+  30 s cap) or the provider's `Retry-After` / `retry-after-ms`, whichever is longer. A
+  `Retry-After` beyond the 30 s cap is not waited out: the error propagates (carrying it) to
+  the job-level retry. The caller's abort signal ends both an in-flight attempt and a wait.
+  Any other 4xx, a parse failure, or a truncation (J83) is never retried in-process. The
+  source-agent tool loop gets the same per-step behaviour from the AI SDK's own retry
+  (`maxRetries` 2, honouring retry headers). Each retry logs a warning.
+- **J82** — **Provider errors are typed and non-leaky.** A provider failure surfaces as
+  `ProviderRequestError` (`packages/retrieval/src/http.ts`) with `kind`
+  (`http_status` / `timeout` / `network` / `circuit_open`), `status`, `retryAfterMs` and a
+  `retryable` verdict, so callers (the API's background embedder included) can distinguish
+  429/5xx from configuration errors without parsing text. Its message carries only the
+  provider's own `error.message` (or the body text), whitespace-collapsed, with
+  credential-shaped tokens redacted and capped at 300 characters — never the whole body,
+  which can echo the prompt or retrieved content into job errors, logs and the console. A CLI
+  failure message likewise carries only the last 2 000 characters of stderr.
+- **J83** — **Truncated output is its own failure.** A reply that stopped at the model's
+  output-token limit (`finish_reason: "length"`, AI SDK `finishReason: "length"`) is a prefix
+  of an answer and MUST fail as `ProviderOutputTruncatedError` before anything parses it —
+  never be reported as schema-invalid output (it would otherwise reach the #288d repair path
+  and spend a paid reshape on half an answer, or ship `answer_question`'s unparseable-answer
+  fallback). The source-agent loop applies the same check to its last step and to its forced
+  closing turn, and does not spend a forced turn on a truncated step. Truncation fails the
+  watcher run like any runner error (the job-level retry applies; it is not terminal-failed).
+- **J84** — **The tool loop runs under one overall deadline.** A source-agent run (HTTP
+  providers) MUST finish — every step, every tool call, and the forced closing turn — within
+  `MAGPIE_AGENTIC_TIMEOUT_MS` (default 600 000 ms), the same budget CLI source-grounded runs
+  get. On expiry the run fails with a message naming the deadline; a caller cancellation is
+  reported as itself, not as a deadline.
+- **J85** — **CLI runs are bounded in output and killed as a tree.** Captured stdout is capped
+  at `AGENT_CLI_MAX_OUTPUT_BYTES` (default 8 MiB) — crossing it stops the run and fails it
+  with a message naming the cap; stderr keeps only its last 64 KiB. On POSIX each CLI is
+  spawned as its own process-group leader and a timeout, cancellation or overflow signals the
+  whole group: `SIGTERM`, then `SIGKILL` after `CLI_CANCEL_GRACE_MS`, and the escalation still
+  fires if the leader exited first (a helper that ignores `SIGTERM` can outlive it). Groups
+  still alive when the watcher process exits are `SIGKILL`ed. On Windows (no process groups or
+  signals) the tree is terminated with `taskkill /T /F`.
+- **J86** — **Request-path embeddings fail fast.** The API holds two embedding provider
+  instances (`apps/api/src/platform/providers.ts`): the background one (indexing, gap-cluster
+  bucketing, questionnaire matching; `EMBEDDING_TIMEOUT_MS`, default 60 s) and a request-path
+  one for query-time retrieval and embedding flow routing — both of which already degrade
+  without a vector (keyword-only retrieval, [retrieval.md](./retrieval.md); routing abstains to
+  the chat router). The request-path instance MUST use a short per-call timeout
+  (`DEFAULT_QUERY_EMBEDDING_TIMEOUT_MS` = 5 000 ms) behind a circuit breaker
+  (`EmbeddingCircuitBreaker`, `packages/retrieval/src/query-embedding.ts`): 3 consecutive
+  failures open it for 30 s, during which every call fails at once with a
+  `circuit_open` `ProviderRequestError`; the next call after the cooldown is a single trial
+  that closes it on success or re-opens it on failure. A request-specific 4xx (400/413/422)
+  does not count toward opening. Open/close transitions are logged.
+  > ⚠️ The 5 s request-path timeout is not yet operator-configurable: the env var would be
+  > parsed in `apps/api/src/platform/config.ts`, which was outside this change's scope.
+- **J87** — **`grep` is bounded and shares the read budget.** The tool loop's `grep`
+  (`apps/watcher/src/source-tools.ts`) walks asynchronously, stops after 5 000 files or
+  64 MiB scanned, searches at most the first 1 MiB of any one file, skips files whose first
+  8 KB contain a NUL byte, returns at most 50 matches, checks the abort signal between files,
+  and charges its rendered result against the loop's 400 KB read budget (refusing once it is
+  spent, like `read_file`). When a cap stops the scan the result says so, so the model can
+  narrow the query.
 
 ## Source-grounded jobs & their I/O
 
@@ -645,6 +726,11 @@ paid-for generation away and force pg-boss to redo the whole job; both are close
 | --- | --- | --- |
 | `MAGPIE_AGENTIC_TIMEOUT_MS` | 600 000 ms (10 min) | `apps/watcher/src/runners/index.ts` |
 | `AGENT_API_TIMEOUT_MS` / `AGENT_CLI_TIMEOUT_MS` | 120 000 ms | `apps/watcher/src/runners/index.ts` |
+| `AGENT_API_MAX_RETRIES` (J81) | 2 (backoff 1 s base, 30 s cap) | `apps/watcher/src/runners/index.ts`, `packages/retrieval/src/http.ts` |
+| `*_CLI_PROMPT_MODE` (J80) | `stdin` | `apps/watcher/src/runners/index.ts` |
+| `AGENT_CLI_MAX_OUTPUT_BYTES` (J85) | 8 MiB | `apps/watcher/src/runners/cli.ts` |
+| request-path embedding timeout / breaker (J86) | 5 000 ms; opens after 3 failures for 30 s | `packages/retrieval/src/query-embedding.ts` |
+| `grep` caps (J87) | 5 000 files, 1 MiB/file, 64 MiB total, 50 matches | `apps/watcher/src/source-tools.ts` |
 | default heartbeat interval | 30 000 ms (a quarter of the 120 s policy) | `apps/watcher/src/worker-loop.ts` |
 | heartbeat request timeout | 10 000 ms | `apps/watcher/src/http-client.ts` (`HEARTBEAT_TIMEOUT_MS`) |
 | queue `heartbeatSeconds` | 120 | `packages/jobs/src/catalog.ts` (`BASE_POLICY`) |
@@ -670,6 +756,9 @@ paid-for generation away and force pg-boss to redo the whole job; both are close
 | Worker loop (claim/execute/heartbeat/usage) | `apps/watcher/src/worker-loop.ts`, `apps/watcher/src/usage.ts` |
 | Runner factory + capability gates | `apps/watcher/src/runners/index.ts`, `apps/watcher/src/capabilities.ts` |
 | Chat / CLI runners + isolation | `apps/watcher/src/runners/{chat,cli}.ts` |
+| CLI process-tree kill + output bounds (J85) | `apps/watcher/src/runners/cli-process.ts` |
+| Provider HTTP errors, retry, truncation (J81–J83) | `packages/retrieval/src/{http,chat-providers,embeddings}.ts` |
+| Request-path embedding breaker (J86) | `packages/retrieval/src/query-embedding.ts`, `apps/api/src/platform/providers.ts`, `apps/api/src/context.ts` |
 | Generative loop, repair reshape | `apps/watcher/src/runners/{generative,repair}.ts`, `apps/watcher/src/job-prompts.ts` |
 | Source-grounded agent + workspaces + fetch | `apps/watcher/src/runners/source-agent.ts`, `apps/watcher/src/{source-workspace,source-tools,fetch-url}.ts` |
 | Maintenance / publication / refresh runners | `apps/watcher/src/runners/{maintenance,publication,refresh-flow-snapshot}.ts` |
@@ -684,7 +773,8 @@ paid-for generation away and force pg-boss to redo the whole job; both are close
 `apps/api/src/jobs/pg-boss-broker.integration.test.ts` "fences, salvages and settles lost
 work" (J60–J64, J66 against real pg-boss),
 `apps/watcher/src/{worker-loop,capabilities,config,http-client,usage,job-prompts,output-contract,source-tools,source-workspace,fetch-url,health-server}.test.ts`,
-`apps/watcher/src/runners/{chat,cli,generative,maintenance,publication,publication-comment,publication-crosslink,refresh-flow-snapshot,repair,source-agent}.test.ts`,
+`apps/watcher/src/runners/{chat,cli,cli-process,generative,maintenance,publication,publication-comment,publication-crosslink,refresh-flow-snapshot,repair,source-agent}.test.ts`,
+`packages/retrieval/src/{http,query-embedding}.test.ts` (J81–J83, J86),
 `apps/api/src/features/source-map/routes.test.ts`,
 `apps/api/src/stores/{source-map-store,postgres-source-map-store,orchestration-followup-store}.test.ts`,
 `apps/api/src/scheduling/run-lock.test.ts`.

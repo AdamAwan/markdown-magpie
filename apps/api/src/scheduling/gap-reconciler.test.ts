@@ -1153,6 +1153,7 @@ describe("reconcileGaps embedding-based assignment", () => {
   it("collapses paraphrase gaps into one cluster and keeps distinct gaps separate", async () => {
     const ctx = makeTestContext({
       providers: {
+        queryEmbedding: undefined,
         embedding: fakeEmbeddingProvider({
           "TLS versions for data in transit": EAST,
           "encryption protocols protecting data in transit": NEAR_EAST,
@@ -1183,6 +1184,7 @@ describe("reconcileGaps embedding-based assignment", () => {
       // flight skips clustering altogether.
       jobs: new ReshapingJobBroker(NO_VERDICTS),
       providers: {
+        queryEmbedding: undefined,
         embedding: fakeEmbeddingProvider({
           "TLS versions for data in transit": EAST,
           "encryption protocols protecting data in transit": NEAR_EAST
@@ -1206,6 +1208,7 @@ describe("reconcileGaps embedding-based assignment", () => {
     const ctx = makeTestContext({
       jobs: new ReshapingJobBroker(NO_VERDICTS),
       providers: {
+        queryEmbedding: undefined,
         embedding: fakeEmbeddingProvider({
           "TLS versions for data in transit": EAST,
           "encryption protocols protecting data in transit": NEAR_EAST
@@ -1228,6 +1231,7 @@ describe("reconcileGaps embedding-based assignment", () => {
   it("fails the run (recorded failed) when the configured provider's embed call throws", async () => {
     const ctx = makeTestContext({
       providers: {
+        queryEmbedding: undefined,
         embedding: {
           async embed(): Promise<number[][]> {
             throw new Error("embedding endpoint down");
@@ -1261,6 +1265,7 @@ describe("reconcileGaps embedding-based assignment", () => {
     const ctx = makeTestContext({
       jobs,
       providers: {
+        queryEmbedding: undefined,
         embedding: fakeEmbeddingProvider({
           "TLS versions for data in transit": EAST,
           "backup retention period": NORTH

@@ -1,11 +1,12 @@
 import { createAzure } from "@ai-sdk/azure";
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import { undeclaredOutputFieldPolicyFromEnv } from "@magpie/jobs";
-import { createChatProvider } from "@magpie/retrieval";
+import { createChatProvider, DEFAULT_CHAT_RETRY_POLICY, type ChatProviderConfig } from "@magpie/retrieval";
 import { CAPABILITY_GATES, DEFAULT_CAPABILITY_RUNTIME, type CapabilityRuntime } from "../capabilities.js";
 import type { WatcherApi } from "../http-client.js";
+import { logger } from "../logger.js";
 import { ChatRunner } from "./chat.js";
-import { CliRunner, type PromptMode } from "./cli.js";
+import { CliRunner, DEFAULT_CLI_MAX_OUTPUT_BYTES, type PromptMode } from "./cli.js";
 import { MaintenanceRunner } from "./maintenance.js";
 import { createGitPublicationDeps, PublicationRunner } from "./publication.js";
 import { RefreshFlowSnapshotRunner } from "./refresh-flow-snapshot.js";
@@ -33,6 +34,10 @@ export function createConfiguredRunners(
   const agenticTimeoutMs = positiveInt(env.MAGPIE_AGENTIC_TIMEOUT_MS, 600_000);
   // Shared by both hosted chat providers — see chatTemperature below.
   const temperature = chatTemperature(env.CHAT_TEMPERATURE);
+  // Bounded in-process retry of a transient provider failure (429/408/5xx,
+  // timeout, dropped connection), honouring Retry-After (J81). Shared by both
+  // hosted chat providers; AGENT_API_MAX_RETRIES=0 disables it.
+  const chatRetry = chatRetryConfig(env);
   // Production is lenient about an undeclared field in a model's output (strip +
   // warn); MAGPIE_JOB_OUTPUT_STRICT=true — set by the e2e/eval harnesses — makes
   // it a hard failure. Named explicitly on every AI runner because the runners
@@ -57,10 +62,16 @@ export function createConfiguredRunners(
           baseUrl: env.OPENAI_COMPATIBLE_BASE_URL,
           model: env.OPENAI_COMPATIBLE_MODEL,
           timeoutMs,
-          ...temperature
+          ...temperature,
+          ...chatRetry
         }),
         api,
-        { agentModel: openaiAgentModel, undeclaredOutputFields, ...optionalModel(env.OPENAI_COMPATIBLE_MODEL) }
+        {
+          agentModel: openaiAgentModel,
+          agenticTimeoutMs,
+          undeclaredOutputFields,
+          ...optionalModel(env.OPENAI_COMPATIBLE_MODEL)
+        }
       )
     );
   }
@@ -95,12 +106,18 @@ export function createConfiguredRunners(
           azureDeployment: env.AZURE_OPENAI_CHAT_DEPLOYMENT,
           ...(env.AZURE_OPENAI_API_VERSION ? { azureApiVersion: env.AZURE_OPENAI_API_VERSION } : {}),
           timeoutMs,
-          ...temperature
+          ...temperature,
+          ...chatRetry
         }),
         api,
         // Azure's "model" for pricing purposes is the deployment name — the
         // operator prices whatever the deployment serves.
-        { agentModel: azureAgentModel, undeclaredOutputFields, ...optionalModel(env.AZURE_OPENAI_CHAT_DEPLOYMENT) }
+        {
+          agentModel: azureAgentModel,
+          agenticTimeoutMs,
+          undeclaredOutputFields,
+          ...optionalModel(env.AZURE_OPENAI_CHAT_DEPLOYMENT)
+        }
       )
     );
   }
@@ -117,6 +134,7 @@ export function createConfiguredRunners(
         timeoutMs: positiveInt(env.AGENT_CLI_TIMEOUT_MS, DEFAULT_CHAT_TIMEOUT_MS),
         agenticTimeoutMs,
         undeclaredOutputFields,
+        maxOutputBytes: positiveInt(env.AGENT_CLI_MAX_OUTPUT_BYTES, DEFAULT_CLI_MAX_OUTPUT_BYTES),
         ...(env.CLI_CANCEL_GRACE_MS ? { cancelGraceMs: positiveInt(env.CLI_CANCEL_GRACE_MS, 5_000) } : {})
       })
     );
@@ -134,6 +152,7 @@ export function createConfiguredRunners(
         timeoutMs: positiveInt(env.AGENT_CLI_TIMEOUT_MS, DEFAULT_CHAT_TIMEOUT_MS),
         agenticTimeoutMs,
         undeclaredOutputFields,
+        maxOutputBytes: positiveInt(env.AGENT_CLI_MAX_OUTPUT_BYTES, DEFAULT_CLI_MAX_OUTPUT_BYTES),
         ...(env.CLI_CANCEL_GRACE_MS ? { cancelGraceMs: positiveInt(env.CLI_CANCEL_GRACE_MS, 5_000) } : {})
       })
     );
@@ -170,8 +189,10 @@ function splitArgs(value: string): string[] {
     .filter(Boolean);
 }
 
-function normalizePromptMode(value: string | undefined): PromptMode {
-  return value === "stdin" ? "stdin" : "arg";
+// stdin unless the operator explicitly asks for `arg` (J80): an argv prompt
+// fails to spawn above the OS argument limit, which real prompts exceed.
+export function normalizePromptMode(value: string | undefined): PromptMode {
+  return value?.trim().toLowerCase() === "arg" ? "arg" : "stdin";
 }
 
 // Only pass `model` when a non-blank value is configured: for CLI runners an
@@ -213,4 +234,24 @@ function positiveInt(value: string | undefined, fallback: number): number {
   }
   const parsed = Number.parseInt(value, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+// AGENT_API_MAX_RETRIES (default DEFAULT_CHAT_RETRY_POLICY.maxRetries = 2; 0
+// disables) plus a warn line per retry, so a throttled provider is visible in
+// the watcher log rather than only as slower jobs.
+function chatRetryConfig(env: NodeJS.ProcessEnv): Pick<ChatProviderConfig, "retry" | "retryHooks"> {
+  const raw = env.AGENT_API_MAX_RETRIES?.trim();
+  const parsed = raw ? Number.parseInt(raw, 10) : Number.NaN;
+  const maxRetries =
+    Number.isInteger(parsed) && parsed >= 0 && parsed <= 10 ? parsed : DEFAULT_CHAT_RETRY_POLICY.maxRetries;
+  return {
+    retry: { maxRetries },
+    retryHooks: {
+      onRetry: ({ attempt, delayMs, error }) =>
+        logger.warn(
+          { attempt, delayMs, status: error.status, kind: error.kind, err: error.message },
+          `chat provider request failed transiently; retry ${attempt}/${maxRetries} in ${delayMs}ms`
+        )
+    }
+  };
 }

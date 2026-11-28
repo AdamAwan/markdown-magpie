@@ -92,7 +92,8 @@ export function makeTestContext(overrides: Partial<AppContext> = {}): AppContext
     jobs: new FakeJobBroker(),
     pool: undefined,
     providers: {
-      embedding: undefined
+      embedding: undefined,
+      queryEmbedding: undefined
     },
     settings,
     config: new RuntimeConfigHolder({ aiProvider: "codex" }),

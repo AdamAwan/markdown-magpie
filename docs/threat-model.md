@@ -83,11 +83,12 @@ without realising it was load-bearing.
   still be steered. **Invariants to preserve:** new places that inline
   source/fetched/retrieved content MUST wrap it with `wrapUntrusted` and carry the
   contract; the CLI tier reads files natively, so its only defence is the prompt framing —
-  keep the contract in the source-grounded prompt text.
+  keep the contract in the source-grounded prompt text. The delimiters themselves are
+  unforgeable (TM31).
 - **TM4** — **Argv-only CLI invocation** (mitigates T3). The agent-CLI runner spawns the
   provider with `spawn(command, args)` and an argv array — never a shell string
-  (`apps/watcher/src/runners/cli.ts`, `spawnCli`). The prompt is passed as a single argv
-  element or over stdin (`promptMode`), so there is no shell to interpret injected
+  (`apps/watcher/src/runners/cli.ts`, `spawnCli`). The prompt is passed over stdin (the
+  default) or as a single argv element (`promptMode`), so there is no shell to interpret injected
   metacharacters. There MUST be no `shell: true`, `exec`, or string interpolation into a
   command line. **Invariant to preserve:** never route agent invocation through a shell.
 - **TM5** — **Writes and deletes confined to Markdown documents under the destination
@@ -167,6 +168,36 @@ without realising it was load-bearing.
   clone/fetch path. `http://` and `file://` remain usable, so their SSRF/local-disclosure
   surface is a residual risk bounded by the operator's own source/destination config, not
   by an attacker-supplied URL.
+- **TM31** — **The untrusted-content delimiters cannot be forged** (hardens TM3). With fixed
+  markers, a source file or KB section could contain the close marker followed by "SYSTEM:
+  …" and so place its own text *outside* the data region. Therefore:
+  1. Every `wrapUntrusted` block carries a fresh 128-bit random id from the platform CSPRNG
+     on both markers (`<<<UNTRUSTED_REFERENCE_MATERIAL id=…>>>` …
+     `<<<END_UNTRUSTED_REFERENCE_MATERIAL id=…>>>`), and `UNTRUSTED_CONTENT_CONTRACT` tells
+     the model a block ends only at the close marker whose id matches its open marker.
+  2. Before wrapping, any marker-shaped text in the material (either prefix, any case,
+     optional whitespace) is rewritten to the visible `[removed untrusted-content delimiter]`
+     (`neutraliseUntrustedMarkers`), so even a correctly guessed id cannot close the block.
+     A side effect: a document that legitimately quotes the marker text is shown to the
+     model with it replaced.
+  3. The id is injectable (`wrapUntrusted(content, { nonce })`) for deterministic tests and
+     MUST be alphanumeric.
+  4. Model-authored or user-derived text that earlier runs produced is untrusted too and is
+     wrapped: source-map hints in the source-grounded prompt
+     (`apps/watcher/src/job-prompts.ts`), the drafted answer under grounding review, prior
+     conversation turns in follow-up condensation, and the gap-cluster lines/rationales fed
+     to the gap-reconcile propose and critic prompts (`apps/watcher/src/runners/generative.ts`);
+     those three prompts now carry the contract. Operator configuration (workspace names,
+     personas, allowlists) and the requester's own directives (the question, a questionnaire
+     direction, a `revise_seed_plan` instruction) are deliberately not wrapped.
+- **TM32** — **Agent tools and CLIs are resource-bounded** (limits a steered or
+  pathological run's blast radius on the watcher host). The tool loop's `grep` is async and
+  capped on files, bytes per file, total bytes and matches, skips binary content, honours
+  cancellation and draws on the shared read budget ([ai-jobs.md](./ai-jobs.md) J87); the
+  whole loop runs under one deadline (J84). Agent CLIs have capped stdout and are killed as
+  a process tree on timeout/cancellation, so an injected "spawn a background process"
+  cannot outlive the job (J85). **Invariant to preserve:** no tool may read the checkout
+  unbounded or synchronously, and no CLI spawn may drop the process-group kill.
 
 - **TM36** — **Git credentials are never stored with a remote.** An operator MAY configure
   a credential-embedded remote (`https://user:token@host/…`), but the URL git is given —
@@ -303,6 +334,8 @@ The non-negotiable is TM9: the human-review gate stays mandatory and enforced.
 | Review gate: PR-only publish, no auto-merge (TM9–TM12) | `apps/api/src/features/proposals/{routes,service}.ts`, `packages/git/src/index.ts` (`LocalGitProposalPublisher`, `applyPullRequestTransition`) |
 | Scope enforcement, fail-closed (TM11) | `apps/api/src/auth/middleware.ts` (`requireScopes`), `apps/api/src/features/proposals/routes.ts` (`manage:knowledge`) |
 | Per-flow knowledge role grants & admin gate (TM15) | `packages/auth`, `apps/api/src/auth` (`KNOWLEDGE_ROLE_GRANTS`) — see [authorization.md](./authorization.md) |
+| Unforgeable delimiters (TM31) | `packages/prompts/src/catalog.ts` (`wrapUntrusted`, `createUntrustedNonce`, `neutraliseUntrustedMarkers`); wrapping in `apps/watcher/src/job-prompts.ts`, `apps/watcher/src/runners/generative.ts` |
+| Bounded agent tools & CLI process trees (TM32) | `apps/watcher/src/source-tools.ts` (`grepWorkspaces`), `apps/watcher/src/runners/source-agent.ts`, `apps/watcher/src/runners/{cli,cli-process}.ts` |
 
 ## Tests (behavioural contract)
 
@@ -316,6 +349,11 @@ The non-negotiable is TM9: the human-review gate stays mandatory and enforced.
   (dedupe/split), `apps/api/src/scheduling/fold.test.ts` (changeset fold),
   `apps/api/src/features/source-sync/service.test.ts` (`constrainToCandidates`).
 - Bounded, allowlisted web fetch (TM7): `apps/watcher/src/fetch-url.test.ts`.
+- Unforgeable delimiters (TM31): `packages/prompts/src/catalog.test.ts` (fresh id per wrap,
+  forged-marker neutralisation, nonce validation), `apps/watcher/src/job-prompts.test.ts`
+  (forged source-map hint), `apps/watcher/src/runners/generative.test.ts` (answer under review).
+- Bounded agent tools & CLI process trees (TM32): `apps/watcher/src/source-tools.test.ts`,
+  `apps/watcher/src/runners/source-agent.test.ts`, `apps/watcher/src/runners/cli-process.test.ts`.
 - Git-transport allowlist (TM8): `packages/git/src/checkout-url-guard.test.ts`.
 - Credential hygiene (TM36–TM38): `packages/git/src/{credentials,run-git,auth-env,ensure-checkout}.test.ts`,
   `apps/api/src/features/knowledge/repositories-credentials.test.ts`,
