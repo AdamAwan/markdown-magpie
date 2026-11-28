@@ -181,3 +181,18 @@ test("API31: lifecycle routes answer 404 only for an unknown job, 500 for a real
   assert.equal((await post(`/api/jobs/${created.id}/heartbeat`, {})).status, 500);
   assert.equal((await post(`/api/jobs/${created.id}/fail`, { error: providerError })).status, 500);
 });
+
+test("J60: a lapsed attempt's invalid output neither enqueues a repair nor fails the live attempt", async () => {
+  const ctx = makeTestContext();
+  const created = await ctx.jobs.create("answer_question", answerInput());
+  const first = await claimJob(ctx, "w1", ["codex"]);
+  await ctx.jobs.fail(created.id, providerError);
+  await claimJob(ctx, "w2", ["codex"]);
+
+  const outcome = await completeJob(ctx, created.id, { answer: 42 }, "w1", undefined, undefined, {
+    attempt: first!.retryCount
+  });
+  assert.deepEqual(outcome, { ok: false, code: "invalid_output" });
+  assert.equal((await ctx.jobs.get(created.id))?.state, "active", "the live attempt is untouched");
+  assert.equal(await ctx.stores.jobRepairContexts.get(created.id), undefined, "no repair context left behind");
+});

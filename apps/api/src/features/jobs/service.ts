@@ -655,7 +655,7 @@ async function handleInvalidOutput(
     // bumped at re-claim, not here). Not routed through createIfAdmitted: the job
     // is already in flight and holds the slot the original admission reserved, so
     // re-admitting would double-charge and could 429 mid-repair.
-    await ctx.jobs.fail(
+    const requeued = await ctx.jobs.fail(
       jobId,
       {
         code: "invalid_output_repairable",
@@ -665,6 +665,13 @@ async function handleInvalidOutput(
       },
       fence
     );
+    if (requeued.state !== "retry") {
+      // The fenced fail did not land (J60): this attempt no longer holds the job,
+      // so no repair was enqueued — drop the context rather than hand it to the
+      // attempt that does.
+      await ctx.stores.jobRepairContexts.delete(jobId);
+      return { ok: false, code: "invalid_output" };
+    }
     logger.info(
       {
         event: "job_repair",
