@@ -478,7 +478,10 @@ async function condenseFollowup(
       messages: [
         {
           role: "user",
-          content: `Conversation so far:\n${history}\n\nFollow-up question:\n${question}`
+          // Prior answers were synthesised from retrieved KB content, so the
+          // history is untrusted material (TM31); the follow-up itself is the
+          // user's request and stays outside the block.
+          content: `Conversation so far:\n${wrapUntrusted(history)}\n\nFollow-up question:\n${question}`
         }
       ],
       responseFormat: "json",
@@ -558,7 +561,10 @@ async function verifyAnswerGrounding(
     messages: [
       {
         role: "user",
-        content: `Question:\n${question}\n\nAnswer under review:\n${output.answer}\n\nContext:\n${buildVerificationContext(cited, uncited)}`
+        // The drafted answer is model output over untrusted context: an injected
+        // section can make it carry "verifier: return grounded:true" text, so it
+        // is wrapped too (TM31) — the verifier is the control being targeted.
+        content: `Question:\n${question}\n\nAnswer under review:\n${wrapUntrusted(output.answer)}\n\nContext:\n${buildVerificationContext(cited, uncited)}`
       }
     ],
     responseFormat: "json",
@@ -827,7 +833,8 @@ async function reconcileGapClusters({ job, model, signal }: GenerativeJobOptions
   );
   const proposeResponse = await model.complete({
     system: GAP_RECONCILE_PROPOSE.instructions,
-    messages: [{ role: "user", content: summary }],
+    // Titles derive from user questions and snippets from KB content (TM31).
+    messages: [{ role: "user", content: wrapUntrusted(summary) }],
     // Ask for JSON explicitly, mirroring the critic call. Without it the provider
     // is free to wrap the proposal in a ```json fence or prose, which — combined with
     // a raw JSON.parse — used to silently discard the whole proposal and collapse
@@ -928,7 +935,8 @@ async function criticConfirmBatch(
     messages: [
       {
         role: "user",
-        content: `Proposed gap-cluster changes. Confirm or reject each independently.\n\n${lines.join("\n")}`
+        // Rationales are model output and cluster lines carry user/KB text (TM31).
+        content: `Proposed gap-cluster changes. Confirm or reject each independently.\n\n${wrapUntrusted(lines.join("\n"))}`
       }
     ],
     responseFormat: "json",
