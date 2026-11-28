@@ -23,6 +23,7 @@
     "preeval:golden": "npm run build:libs",
     "eval:golden": "node scripts/test-db.mjs node --import tsx scripts/eval-golden.ts",
     "e2e:jobs": "node --import tsx scripts/e2e-jobs.ts",
+    "pree2e:jobs:local": "npm run build:libs",
     "e2e:jobs:local": "node scripts/test-db.mjs node --import tsx scripts/e2e-jobs-local.ts",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
