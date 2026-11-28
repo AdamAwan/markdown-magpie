@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
-import { ensureGitCheckout } from "@magpie/git";
+import { ensureGitCheckout, stripUrlCredentials } from "@magpie/git";
 import { logger } from "../logger.js";
 import type { RepositoryRef } from "@magpie/core";
 import {
@@ -176,7 +176,31 @@ export function destinationSubpath(deps: RepositoryDeps, destinationId: string |
   return deps.knowledgeConfig.destinations.find((destination) => destination.id === destinationId)?.subpath;
 }
 
+// A RepositoryRef with any credential removed from its remote URLs (TM36/TM37).
+// The indexer reads `remoteUrl` from the checkout's `.git/config`, which for a
+// checkout cloned by an older version — or a `local` repository the operator set
+// up by hand — can still embed a token; the DB-persisted copy can too. Every
+// repository the API hands out (the repositories listing, the watcher's
+// execution context) goes through this, so the secret never leaves the process.
+export function withoutRemoteCredentials(repository: RepositoryRef): RepositoryRef {
+  const remoteUrl = repository.remoteUrl ? stripUrlCredentials(repository.remoteUrl) : undefined;
+  const gitRemoteUrl = repository.git?.remoteUrl ? stripUrlCredentials(repository.git.remoteUrl) : undefined;
+  return {
+    ...repository,
+    ...(remoteUrl ? { remoteUrl } : {}),
+    ...(repository.git ? { git: { ...repository.git, ...(gitRemoteUrl ? { remoteUrl: gitRemoteUrl } : {}) } } : {})
+  };
+}
+
 export async function findRepositoryForProposal(
+  deps: RepositoryDeps,
+  proposal: { targetPath?: string; destinationId?: string }
+): Promise<RepositoryRef | undefined> {
+  const repository = await findIndexedRepositoryForProposal(deps, proposal);
+  return repository ? withoutRemoteCredentials(repository) : undefined;
+}
+
+async function findIndexedRepositoryForProposal(
   deps: RepositoryDeps,
   proposal: { targetPath?: string; destinationId?: string }
 ): Promise<RepositoryRef | undefined> {

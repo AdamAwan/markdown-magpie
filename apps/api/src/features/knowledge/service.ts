@@ -1,6 +1,6 @@
 import type { DocumentSection, KnowledgeChange } from "@magpie/core";
 import type { AppContext } from "../../context.js";
-import { resolveIndexSelection } from "../../platform/repositories.js";
+import { resolveIndexSelection, withoutRemoteCredentials } from "../../platform/repositories.js";
 import { buildCitationUsageReport, type CitationUsageOptions, type CitationUsageReport } from "./citation-usage.js";
 import type { KnowledgeChangesReport, KnowledgeChangeView, ParsedChangeQuery } from "./changes.js";
 import type { KnowledgeChangeFilters } from "../../stores/knowledge-change-store.js";
@@ -61,7 +61,7 @@ export async function indexSelection(
     name: selection.name
   });
   void ctx.embedder.trigger();
-  return summary;
+  return { ...summary, repository: withoutRemoteCredentials(summary.repository) };
 }
 
 export async function search(
@@ -88,7 +88,8 @@ export function listRepositories(
   pagination: PaginationOptions
 ): { repositories: ReturnType<AppContext["stores"]["knowledgeIndex"]["listRepositories"]>; total: number } {
   return {
-    repositories: ctx.stores.knowledgeIndex.listRepositories(pagination),
+    // Remote URLs are served credential-free (TM37): a stored remote may embed one.
+    repositories: ctx.stores.knowledgeIndex.listRepositories(pagination).map(withoutRemoteCredentials),
     total: ctx.stores.knowledgeIndex.countRepositories()
   };
 }
