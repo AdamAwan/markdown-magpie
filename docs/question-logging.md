@@ -338,36 +338,45 @@ guard mutates:
   including rows orphaned before this backstop existed. `runMergeCascade` is idempotent, so
   a proposal is swept at most once.
 
-### Operational requirement: run at least two watchers
+### Verification is non-blocking: one watcher is enough
 
-Gap-closure verification is a *maintenance orchestrator*: the watcher that claims the
-`verify_gap_closure` job blocks inside the `POST /api/proposals/:id/verify-closure`
-callback while the API re-asks the triggering questions as ordinary `answer_question`
-jobs. Because a watcher runs **one job at a time**, those re-asks can only be answered by
-a *second* watcher. On a single-watcher deployment the lone watcher is busy in the
-callback and can never claim its own re-asks, so they time out.
+Gap-closure verification is a *maintenance orchestrator*, but the watcher that claims the
+`verify_gap_closure` job does not wait for the work it starts. The
+`POST /api/proposals/:id/verify-closure` callback **enqueues** a re-ask of each triggering
+question as an ordinary `answer_question` job, records which proposal and question each
+re-ask belongs to (`orchestration_followups`), and returns `closureStatus: "pending"`. The
+watcher is free again immediately — the same watcher can go on to answer the re-asks.
 
-An infrastructure timeout is **not** a content verdict. A re-ask that never returns an
-answer is treated as an *incomplete* verification (not `still_open`): `verifyGapClosure`
-throws, the endpoint returns `503`, and the `verify_gap_closure` job simply retries
-rather than the API recording a false `still_open` that would wrongly reopen — and
-eventually park (`needs_attention`) — a correctly-merged doc. The proposal reads honestly
-as *unverified* (no `closure_status`) until a re-ask actually completes. So **run at least
-two watchers** for verification to make progress; the console shows a warning when only
-one is connected. (The scheduled patrols and the gap reconciler share this
-orchestrator shape and the same two-watcher requirement.)
+Each re-ask's completion resumes the verification from the job-completion dispatcher. While
+any triggering question is still unanswered nothing is recorded; the completion that finds
+every question answered commits all the verdicts together.
 
-When the callback POST does exceed the watcher's `maintenanceTimeoutMs`, the watcher
-aborts the request and pg-boss retries the `verify_gap_closure` job. To keep the retry
-from overlapping the original run — two concurrent runs would enqueue duplicate re-asks
-and write duplicate `gap_closure_verification` audit rows — the API threads the request's
-`AbortSignal` into `verifyGapClosure`. The abort cancels the in-flight re-ask bounded
-waits, and the run checks the signal **before committing any verdict**, so an aborted run
-unwinds (throwing `VerificationAbortedError`, mapped to `503`) having written nothing. The
-retry is then the only run that records a verdict. This is distinct from the internal
-`closure_status` entry guard, which only prevents a *sequential* re-run after the first
-has finished — it cannot see an overlap while the first run is still mid-flight (its
-`closure_status` is not yet set) (#195).
+An unanswered re-ask is **not** a content verdict. A verdict is only ever derived from a
+re-ask job that reached `completed`. One that is still queued (no watcher free yet, a queue
+backlog), still running, failed, or cancelled is *pending* and records nothing — so the API
+can never write a false `still_open` that would wrongly reopen, and eventually park
+(`needs_attention`), a correctly-merged doc (#150). The proposal reads honestly as
+*unverified* (no `closure_status`) until every re-ask has actually completed.
+
+What happens to a re-ask that does not complete:
+
+- **Nobody is free to run it** — it waits in the queue and the verification finishes when a
+  watcher picks it up. There is no deadline to miss.
+- **It fails terminally** (its own pg-boss retry budget is spent) — the proposal stays
+  unverified and the API logs an error naming it. Retrying the failed job from the Jobs
+  console, or re-running `verify_gap_closure` for the proposal, resumes the verification:
+  the orchestrator is re-entrant and replaces only the re-asks that failed, reusing those
+  already in flight or answered.
+
+The whole evaluation runs under a per-proposal lock, and the `closure_status` entry guard is
+re-read under it, so two re-asks completing at the same instant on two watchers — or two
+`verify_gap_closure` jobs for one proposal — cannot both commit and double-count a
+`still_open` against the retry cap. A replayed completion (the watcher retrying a lost
+response) finds the verdict already recorded and does nothing.
+
+(The scheduled patrols and the gap reconciler follow the same enqueue-and-continue shape —
+see [gaps-and-maintenance.md](./gaps-and-maintenance.md) G17a/G24a and
+[ai-jobs.md](./ai-jobs.md) J22a.)
 
 ## Parked questions
 

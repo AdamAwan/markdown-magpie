@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import pg from "pg";
 import type { MaintenanceRun, MaintenanceTaskType, NewMaintenanceRun } from "@magpie/core";
-import type { MaintenanceRunStore } from "./maintenance-run-store.js";
+import type { MaintenanceRunStore, MaintenanceRunUpdate } from "./maintenance-run-store.js";
 
 // maintenance_runs.flow_id is nullable (the default flow stores NULL).
 function runFlowId(flowId: string | undefined): string | null {
@@ -46,6 +46,22 @@ export class PostgresMaintenanceRunStore implements MaintenanceRunStore {
           ]
     );
     return mapRow(result.rows[0]);
+  }
+
+  async update(id: string, update: MaintenanceRunUpdate): Promise<MaintenanceRun | undefined> {
+    const result = await this.pool.query<MaintenanceRunRow>(
+      `
+        UPDATE maintenance_runs
+           SET status = $2::text,
+               summary = $3,
+               details = $4,
+               completed_at = CASE WHEN $2::text = 'running' THEN NULL ELSE now() END
+         WHERE id = $1
+        RETURNING *
+      `,
+      [id, update.status, update.summary, JSON.stringify(update.details ?? {})]
+    );
+    return result.rows[0] ? mapRow(result.rows[0]) : undefined;
   }
 
   async list(filters: { taskType?: MaintenanceTaskType; flowId?: string; limit: number }): Promise<MaintenanceRun[]> {

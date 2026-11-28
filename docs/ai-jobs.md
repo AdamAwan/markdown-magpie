@@ -103,8 +103,8 @@ spec owns the **contract** they all share.
   controls can count in-flight AI work without re-deriving the list.
 - **J10** — **Interactive class.** `INTERACTIVE_AI_JOB_TYPES = {answer_question,
   outline_flow_seed}` names the AI jobs a live caller is waiting on right now (a `/api/ask`
-  answer — including a `verify_gap_closure` re-ask a blocked orchestrator bounded-waits on —
-  and a console flow outline). `answer_question_batch` (questionnaire drip) shares the answer
+  answer and a console flow outline). A `verify_gap_closure` re-ask is an `answer_question`
+  job too and so rides the same lane, although nothing waits on it any more (J22a). `answer_question_batch` (questionnaire drip) shares the answer
   contract but is **deliberately not interactive**, so a bulk questionnaire can never erode
   the interactive reserve protecting `/api/ask`. This split drives the claim-side lane order
   (J17) and the AI capacity gate's interactive reserve (see
@@ -199,11 +199,30 @@ paid-for generation away and force pg-boss to redo the whole job; both are close
   completed row, so the output survives and a later manual re-POST of `/complete` can still
   replay the bookkeeping.
 - **J22** — **Reading a completed job's output back (#184).** Because the persisted output is
-  the `{result, executor, usage?, provider?, model?}` envelope, any API-side consumer of
-  `runJobToCompletion` MUST parse it through `parseCompletedJobOutput(schema, job.output)`,
+  the `{result, executor, usage?, provider?, model?}` envelope, any API-side code that reads
+  a result off the job row MUST parse it through `parseCompletedJobOutput(schema, job.output)`,
   never run the raw output schema against `JobView.output` directly — the raw parse only
   succeeds against envelope-less test fakes and silently discards real watcher results. Gap
-  reshape, the patrol verify lens, and gap-closure re-asks all read through this helper.
+  reshape, the patrol verify, and gap-closure re-asks all read through this helper when a
+  tick picks up a completion nobody applied (J22a).
+- **J22a** — **Orchestrators never wait on a job; completions continue them.** The API has
+  no "create a job and wait for it" path. A maintenance orchestrator that needs an AI step
+  (`verify_gap_closure` → `answer_question` re-asks; `process_gaps_to_pull_requests` →
+  `reconcile_gap_clusters`; `correctness_patrol` → `verify_document`) **enqueues** it,
+  records an `orchestration_followups` row keyed by the follow-up job's id (migration 0070:
+  which orchestration, which scope, and what it was in the middle of), and **returns** — so
+  the watcher that claimed the orchestrator is free at once and the same watcher can run the
+  follow-up. The orchestration resumes as one more side effect in the completion dispatcher
+  (J18–J19), inheriting its replay contract: a continuation that fails returns `500`, the
+  watcher re-POSTs, and the replay re-runs the continuation — never the generation. Three
+  properties hold for every continuation: it is **serialised** under an advisory lock
+  against whatever it could race (`withFlowRunLockWaiting` — it waits rather than skips, so
+  an outcome is never dropped); it is **idempotent** (a settled row is a no-op, and paid
+  enqueues precede the settle); and it is **self-healing** — the broker stays the source of
+  truth for job state, so the orchestrator's next tick applies any `completed` follow-up
+  whose continuation never ran and writes off any that failed. A job with no row is not an
+  orchestrated follow-up and every continuation ignores it. **One watcher is enough.**
+  (Design: `superpowers/specs/2026-11-27-non-blocking-orchestrators-design.md`.)
 
 ## Token usage, execution identity & cost (#241)
 
@@ -500,6 +519,7 @@ paid-for generation away and force pg-boss to redo the whole job; both are close
 | pg-boss broker (enqueue, claim, complete/fail, dead-letter, admission) | `apps/api/src/jobs/{broker,pg-boss-broker}.ts`, fake: `apps/api/src/jobs/fake-broker.ts` |
 | Schedule reconciliation | `apps/api/src/jobs/schedule-reconciler.ts` |
 | Jobs feature (routes, persist-first complete, replay, repair, `parseCompletedJobOutput`) | `apps/api/src/features/jobs/{routes,service,schema}.ts` |
+| Orchestrator continuations (J22a) | state: `apps/api/src/stores/{orchestration-followup-store,postgres-orchestration-followup-store}.ts`; lock: `apps/api/src/scheduling/run-lock.ts`; resumed from `completeJob` into `features/proposals/service.ts`, `scheduling/gap-reconciler.ts`, `features/patrol/service.ts` |
 | AI capacity gate (interactive reserve) | `apps/api/src/platform/ai-capacity.ts` (see [rate-limiting.md](./rate-limiting.md)) |
 | Cost pricing (read-time) | `apps/api/src/platform/ai-pricing.ts` |
 | Worker loop (claim/execute/heartbeat/usage) | `apps/watcher/src/worker-loop.ts`, `apps/watcher/src/usage.ts` |
@@ -519,7 +539,8 @@ paid-for generation away and force pg-boss to redo the whole job; both are close
 `apps/watcher/src/{worker-loop,capabilities,config,http-client,usage,job-prompts,output-contract,source-tools,source-workspace,fetch-url,health-server}.test.ts`,
 `apps/watcher/src/runners/{chat,cli,generative,maintenance,publication,publication-comment,publication-crosslink,refresh-flow-snapshot,repair,source-agent}.test.ts`,
 `apps/api/src/features/source-map/routes.test.ts`,
-`apps/api/src/stores/{source-map-store,postgres-source-map-store}.test.ts`.
+`apps/api/src/stores/{source-map-store,postgres-source-map-store,orchestration-followup-store}.test.ts`,
+`apps/api/src/scheduling/run-lock.test.ts`.
 
 ## Provenance (design history)
 
@@ -536,7 +557,9 @@ publish capability, `publish_proposal` fan-out, and coverage banner),
 `2026-07-06-source-agentic-grounding-design.md` (source-grounded workspaces, the tool loop,
 `mapUpdates`, and `#242` internet fetching),
 `2026-07-15-ai-cost-chart-redesign-design.md` (`#241` usage/identity envelope and read-time
-pricing). The completion re-billing fix (`#161`/`#184`/`#241`), the interactive claim lane
+pricing), `2026-11-27-non-blocking-orchestrators-design.md` (J22a — orchestrators enqueue
+and continue from the follow-up's completion; removes the bounded wait and with it the
+two-watcher requirement). The completion re-billing fix (`#161`/`#184`/`#241`), the interactive claim lane
 (`#240`), and the informed-repair contract (`#288d`) are as-built in code (J18–J32) ahead of
 a dedicated design record; the earlier "repair reprompt is out of scope" note is superseded
 (see the J32 drift marker).

@@ -65,3 +65,36 @@ test("limit caps the list", async () => {
   }
   assert.equal((await store.list({ limit: 3 })).length, 3);
 });
+
+test("update rewrites a running run's outcome and stamps completedAt when it leaves running", async () => {
+  const store = new InMemoryMaintenanceRunStore();
+  const run = await store.record({
+    taskType: "correctness_patrol",
+    flowId: "f1",
+    trigger: "scheduled",
+    status: "running",
+    summary: "2 verifies in progress",
+    details: { pendingVerifies: 2 }
+  });
+  assert.equal(run.completedAt, undefined);
+
+  const stillRunning = await store.update(run.id, {
+    status: "running",
+    summary: "1 verify in progress",
+    details: { pendingVerifies: 1 }
+  });
+  assert.equal(stillRunning?.completedAt, undefined);
+  assert.equal(stillRunning?.summary, "1 verify in progress");
+
+  const done = await store.update(run.id, {
+    status: "completed",
+    summary: "checked 2",
+    details: { pendingVerifies: 0 }
+  });
+  assert.equal(done?.status, "completed");
+  assert.ok(done?.completedAt);
+  assert.equal(done?.flowId, "f1", "identity fields are untouched");
+  assert.deepEqual((await store.get(run.id))?.details, { pendingVerifies: 0 });
+
+  assert.equal(await store.update("missing", { status: "completed", summary: "x", details: {} }), undefined);
+});

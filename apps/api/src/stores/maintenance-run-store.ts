@@ -1,12 +1,22 @@
 import { randomUUID } from "node:crypto";
 import type { MaintenanceRun, MaintenanceTaskType, NewMaintenanceRun } from "@magpie/core";
 
+// What a `running` run's later progress may change: its outcome, never its
+// identity (task, flow, trigger, start).
+export type MaintenanceRunUpdate = Pick<MaintenanceRun, "status" | "summary" | "details">;
+
 // One durable record per scheduled-task execution (see core MaintenanceRun). The
-// store is deliberately thin: tasks `record()` a terminal run, and the console
-// `list()`s them newest-first. A `running` lifecycle (start/complete) is added when
-// an async task needs it (source-sync, project B); project A writers are atomic.
+// store is deliberately thin: tasks `record()` a run, and the console `list()`s
+// them newest-first. Most writers are atomic (one terminal record). A task whose
+// work finishes after the tick returns — the correctness patrol, whose verifies
+// complete asynchronously — records the run `running` and `update()`s it as its
+// follow-up jobs settle.
 export interface MaintenanceRunStore {
   record(input: NewMaintenanceRun): Promise<MaintenanceRun>;
+  // Rewrites a run's outcome. completedAt follows the status: stamped when the
+  // run leaves `running`, cleared if it is `running` again. Returns undefined for
+  // an unknown id.
+  update(id: string, update: MaintenanceRunUpdate): Promise<MaintenanceRun | undefined>;
   list(filters: { taskType?: MaintenanceTaskType; flowId?: string; limit: number }): Promise<MaintenanceRun[]>;
   get(id: string): Promise<MaintenanceRun | undefined>;
   reset(): Promise<void>;
@@ -27,6 +37,21 @@ export class InMemoryMaintenanceRunStore implements MaintenanceRunStore {
     };
     this.runs.push(run);
     return run;
+  }
+
+  async update(id: string, update: MaintenanceRunUpdate): Promise<MaintenanceRun | undefined> {
+    const index = this.runs.findIndex((run) => run.id === id);
+    const existing = this.runs[index];
+    if (!existing) {
+      return undefined;
+    }
+    const updated: MaintenanceRun = {
+      ...existing,
+      ...update,
+      completedAt: update.status === "running" ? undefined : new Date().toISOString()
+    };
+    this.runs[index] = updated;
+    return updated;
   }
 
   async list(filters: { taskType?: MaintenanceTaskType; flowId?: string; limit: number }): Promise<MaintenanceRun[]> {

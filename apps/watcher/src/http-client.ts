@@ -80,27 +80,31 @@ export interface WatcherApi extends WatcherApiClient {
   // must never fail the ask.
   routeByEmbedding(question: string, flows: RoutableFlow[], signal?: AbortSignal): Promise<EmbeddingRoute>;
   proposalExecutionContext(proposalId: string): Promise<ProposalExecutionContext>;
-  // Drives a flow's gap→PR reconciliation in the API (clustering, the reshape AI
-  // job the API bounded-waits on, drafting and publication enqueue). An absent
-  // flowId reconciles the default flow.
+  // Drives a flow's gap→PR reconciliation in the API (clustering, then either
+  // drafting + publication enqueue, or — when the cluster set needs re-judging —
+  // enqueueing the reshape AI job, whose completion drafts). The API returns
+  // without waiting on any job. An absent flowId reconciles the default flow.
   reconcileGaps(flowId: string | undefined, signal?: AbortSignal): Promise<{ ok: true }>;
-  // Drives post-merge gap-closure verification in the API for a merged proposal:
-  // re-asks the triggering questions (enqueued answer_question jobs the API
-  // bounded-waits on), runs the deterministic closure test, and resolves or
-  // reopens the gaps. Returns the API's closure result; the runner passes it
-  // through unchanged (schema-validated).
+  // Starts (or resumes) post-merge gap-closure verification in the API for a
+  // merged proposal: the API enqueues an answer_question re-ask per triggering
+  // question and returns at once (`closureStatus: "pending"`); each re-ask's
+  // completion resumes the verification, which runs the deterministic closure
+  // test and resolves or reopens the gaps. Returns the API's result; the runner
+  // passes it through unchanged (schema-validated).
   verifyClosure(proposalId: string, signal?: AbortSignal): Promise<unknown>;
-  // Drives source-change sync in the API (checkout/diff/candidate gather + the
-  // generative plan job the API bounded-waits on + publication enqueue), returning
-  // the run ids created. An absent flowId watches every configured git source.
+  // Drives source-change sync in the API (checkout/diff/candidate gather + an
+  // enqueue of the generative plan job, whose completion finishes the run),
+  // returning the run ids created. An absent flowId watches every configured git source.
   runSourceSync(flowId: string | undefined, signal?: AbortSignal): Promise<{ runIds: string[] }>;
-  // Drives a fix-patrol tick in the API (select the next batch of documents to
-  // check + advance the cursor), returning the run id and how many were checked.
+  // Drives a fix-patrol tick in the API (select the next batch of documents,
+  // enqueue a verify_document check for each, advance the cursor), returning the
+  // run id, how many were selected, and how many verifies are still to answer.
+  // The API returns at once — each verify's completion applies its own verdict.
   // An absent flowId patrols the default flow.
   runFixPatrol(
     flowId: string | undefined,
     signal?: AbortSignal
-  ): Promise<{ runId: string; selectedCount: number; findingCount: number }>;
+  ): Promise<{ runId: string; selectedCount: number; findingCount: number; pendingVerifyCount?: number }>;
   // Drives an improve-patrol tick in the API (select the next batch on the improve
   // cursor + enqueue one improve_document scan per selected document + advance the
   // cursor), returning the run id, how many were selected, and how many scans were
@@ -111,7 +115,7 @@ export interface WatcherApi extends WatcherApiClient {
   ): Promise<{ runId: string; selectedCount: number; enqueuedCount: number }>;
   // Drives a sparse-flow seed-bootstrap tick in the API: guard checks + (when
   // they pass) an enqueue of an auto-origin outline_flow_seed job. The API
-  // returns immediately — it never bounded-waits on the planning job.
+  // returns immediately — like every orchestration call, it never waits on the job.
   runSeedBootstrap(
     flowId: string,
     signal?: AbortSignal
@@ -138,10 +142,10 @@ export interface HttpClientOptions {
   requestTimeoutMs?: number;
   // Per-request abort deadline for the maintenance *orchestration* calls
   // (reconcileGaps/runSourceSync/runFixPatrol/runImprovePatrol). Those endpoints
-  // bounded-wait inside the API on a batch of AI jobs and legitimately run for
-  // minutes — the maintenance job that drives them has a 1-hour budget and is
-  // heartbeated throughout — so they need a far longer deadline than the hot-path
-  // default (a 30s cap here silently aborts the call and fails the patrol tick).
+  // never wait on the AI jobs they enqueue, but they do real work inline (git
+  // checkouts and diffs, embedding/retrieval, PR status polls) that can outlast
+  // the hot-path default on a large flow — a 30s cap here would silently abort
+  // the call and fail the tick.
   maintenanceTimeoutMs?: number;
   // Logs retried complete() attempts (see COMPLETE_RETRY_ATTEMPTS below).
   // Defaults to a no-op so tests and callers that don't care can omit it.
@@ -324,8 +328,8 @@ export class HttpWatcherApi implements WatcherApi {
   async runFixPatrol(
     flowId: string | undefined,
     signal?: AbortSignal
-  ): Promise<{ runId: string; selectedCount: number; findingCount: number }> {
-    return this.post<{ runId: string; selectedCount: number; findingCount: number }>(
+  ): Promise<{ runId: string; selectedCount: number; findingCount: number; pendingVerifyCount?: number }> {
+    return this.post<{ runId: string; selectedCount: number; findingCount: number; pendingVerifyCount?: number }>(
       "/api/fix-patrol/run",
       { ...(flowId ? { flowId } : {}) },
       signal,

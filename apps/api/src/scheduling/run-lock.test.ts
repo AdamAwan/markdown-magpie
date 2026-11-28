@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import { describe, it, test } from "node:test";
-import { withFlowRunLock, type RunLockClient, type RunLockPool } from "./run-lock.js";
+import {
+  RunLockTimeoutError,
+  withFlowRunLock,
+  withFlowRunLockWaiting,
+  type RunLockClient,
+  type RunLockPool
+} from "./run-lock.js";
 
 // A fake pool/client that simulates pg_try_advisory_lock: the first live holder of
 // a key succeeds, and any concurrent acquire of the same key fails until the holder
@@ -140,6 +146,85 @@ describe("withFlowRunLock", () => {
     });
     assert.deepEqual(result, { acquired: true, value: 7 });
     assert.equal(ran, 1);
+  });
+});
+
+describe("withFlowRunLockWaiting", () => {
+  it("waits for a held lock instead of skipping, then runs", async () => {
+    const pool = new FakeAdvisoryPool();
+    let releaseFirst!: () => void;
+    const finishFirst = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let firstStarted!: () => void;
+    const firstRunning = new Promise<void>((resolve) => {
+      firstStarted = resolve;
+    });
+    const order: string[] = [];
+    const first = withFlowRunLock(pool, "verify_gap_closure", "proposal-1", async () => {
+      firstStarted();
+      await finishFirst;
+      order.push("first");
+    });
+    await firstRunning;
+
+    const waiting = withFlowRunLockWaiting(
+      pool,
+      "verify_gap_closure",
+      "proposal-1",
+      async () => {
+        order.push("second");
+        return "continued";
+      },
+      { pollMs: 1 }
+    );
+    // Give the waiter a few refused attempts before the holder lets go.
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.deepEqual(order, [], "the waiter has not run while the lock is held");
+    releaseFirst();
+    await first;
+    assert.equal(await waiting, "continued");
+    assert.deepEqual(order, ["first", "second"], "the continuation ran after the holder, never alongside it");
+    assert.equal(pool.held.size, 0);
+  });
+
+  it("throws (never silently skips) when the lock stays held past the deadline", async () => {
+    const pool = new FakeAdvisoryPool();
+    let releaseFirst!: () => void;
+    const finishFirst = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let firstStarted!: () => void;
+    const firstRunning = new Promise<void>((resolve) => {
+      firstStarted = resolve;
+    });
+    const first = withFlowRunLock(pool, "verify_gap_closure", "proposal-1", async () => {
+      firstStarted();
+      await finishFirst;
+    });
+    await firstRunning;
+
+    let ran = 0;
+    await assert.rejects(
+      () =>
+        withFlowRunLockWaiting(
+          pool,
+          "verify_gap_closure",
+          "proposal-1",
+          async () => {
+            ran += 1;
+          },
+          { timeoutMs: 5, pollMs: 1 }
+        ),
+      (error: unknown) => error instanceof RunLockTimeoutError
+    );
+    assert.equal(ran, 0);
+    releaseFirst();
+    await first;
+  });
+
+  it("runs unlocked when there is no pool", async () => {
+    assert.equal(await withFlowRunLockWaiting(undefined, "verify_gap_closure", "p", async () => 3), 3);
   });
 });
 

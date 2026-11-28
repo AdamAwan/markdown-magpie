@@ -71,3 +71,55 @@ export async function withFlowRunLock<T>(
     client.release();
   }
 }
+
+// Thrown by withFlowRunLockWaiting when the lock stayed held past the deadline.
+// Deliberately an error, not a skip: the caller is a CONTINUATION whose work
+// would otherwise be silently dropped. From a job-completion handler it surfaces
+// as side_effects_failed → HTTP 500 → the watcher re-POSTs the completion and the
+// replay retries the continuation (see completeJob).
+export class RunLockTimeoutError extends Error {
+  constructor(taskType: string, flowId: string | undefined) {
+    super(`timed out waiting for the ${taskType} run lock (${flowId ?? "default"})`);
+    this.name = "RunLockTimeoutError";
+  }
+}
+
+// Like withFlowRunLock, but for a caller that must not skip: it retries the
+// try-lock until it is acquired (or `timeoutMs` elapses, which throws). Used by
+// the completion-side continuations of the non-blocking orchestrators, which
+// serialise against the orchestrator's own tick and against each other —
+// skipping would lose the follow-up job's outcome.
+//
+// It polls pg_try_advisory_lock rather than blocking on pg_advisory_lock on
+// purpose: a blocked waiter would pin a pooled connection for the whole wait, and
+// the lock HOLDER needs pool connections to do its work — enough simultaneous
+// waiters (many re-asks of one proposal completing at once) would starve the
+// holder and deadlock the pool. Polling holds a connection only for the instant
+// of each attempt.
+//
+// The default deadline sits BELOW the watcher's 30s request timeout on purpose:
+// a continuation that cannot get the lock should answer the completion POST with
+// a clean 500 (which the watcher retries) rather than be abandoned mid-wait by a
+// client-side abort.
+const DEFAULT_LOCK_WAIT_MS = 20_000;
+
+export async function withFlowRunLockWaiting<T>(
+  pool: RunLockPool | undefined,
+  taskType: string,
+  flowId: string | undefined,
+  run: () => Promise<T>,
+  options: { timeoutMs?: number; pollMs?: number } = {}
+): Promise<T> {
+  const deadline = Date.now() + (options.timeoutMs ?? DEFAULT_LOCK_WAIT_MS);
+  const pollMs = options.pollMs ?? 100;
+  while (true) {
+    const result = await withFlowRunLock(pool, taskType, flowId, run);
+    if (result.acquired) {
+      return result.value;
+    }
+    if (Date.now() >= deadline) {
+      throw new RunLockTimeoutError(taskType, flowId);
+    }
+    await new Promise((resolve) => setTimeout(resolve, pollMs));
+  }
+}

@@ -23,9 +23,10 @@ const MAINTENANCE_JOB_TYPES: ReadonlySet<JobType> = new Set([
 ]);
 
 // Runs the scheduled maintenance jobs by POSTing a thin API endpoint, keeping the
-// heavy reconciler orchestration (and its store access) inside the API. The
-// reshape's only generative step is itself an enqueued AI job the API
-// bounded-waits on, so this runner needs no model provider.
+// heavy orchestration (and its store access) inside the API. Every generative
+// step is an AI job the API ENQUEUES and does not wait for, so this runner needs
+// no model provider and each call returns promptly — which is what lets the
+// watcher that ran the orchestrator go on to run the jobs it enqueued.
 export class MaintenanceRunner {
   readonly capability: JobCapability = "maintenance";
 
@@ -83,9 +84,13 @@ export class MaintenanceRunner {
     // here so a contract drift surfaces as a job failure rather than a silent
     // pass-through of the wrong payload.
     const output = verifyGapClosureOutputSchema.parse(result);
+    // `pending` is the normal first outcome: the API enqueued the re-asks and
+    // returned; their completions record the verdict. This job is done either way.
     logger.info(
       { jobId: job.id, proposalId, closureStatus: output.closureStatus, questions: output.perQuestion.length },
-      `verify_gap_closure[${job.id}]: ${output.closureStatus} (${output.perQuestion.length} question(s))`
+      output.closureStatus === "pending"
+        ? `verify_gap_closure[${job.id}]: re-asks enqueued; the verdict is recorded when they complete`
+        : `verify_gap_closure[${job.id}]: ${output.closureStatus} (${output.perQuestion.length} question(s))`
     );
     return output;
   }
@@ -129,12 +134,19 @@ export class MaintenanceRunner {
       { jobId: job.id, flowId: flowId ?? null },
       `correctness_patrol[${job.id}]: patrolling flow ${flowId ?? "(default)"}`
     );
-    const { runId, selectedCount, findingCount } = await this.api.runFixPatrol(flowId, signal);
+    const { runId, selectedCount, findingCount, pendingVerifyCount } = await this.api.runFixPatrol(flowId, signal);
+    // The API enqueued the verifies and returned; their findings land on the run
+    // as each completes, so `findingCount` here is normally 0.
     logger.info(
-      { jobId: job.id, runId, selectedCount, findingCount },
-      `correctness_patrol[${job.id}]: checked ${selectedCount} document(s), ${findingCount} finding(s) (run ${runId})`
+      { jobId: job.id, runId, selectedCount, findingCount, pendingVerifyCount: pendingVerifyCount ?? 0 },
+      `correctness_patrol[${job.id}]: selected ${selectedCount} document(s), ${pendingVerifyCount ?? 0} verify check(s) enqueued (run ${runId})`
     );
-    return buildJobOutput(correctnessPatrolOutputSchema, { runId, selectedCount, findingCount });
+    return buildJobOutput(correctnessPatrolOutputSchema, {
+      runId,
+      selectedCount,
+      findingCount,
+      ...(pendingVerifyCount !== undefined ? { pendingVerifyCount } : {})
+    });
   }
 
   private async runImprovePatrol(job: JobView, signal: AbortSignal): Promise<unknown> {

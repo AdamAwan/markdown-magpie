@@ -359,7 +359,7 @@ function reconcile(): FlowGraph {
 function gappr(): FlowGraph {
   return {
     direction: "LR",
-    groups: [{ id: "reshape", label: "if ≥2 active clusters (bounded wait)" }],
+    groups: [{ id: "reshape", label: "if ≥2 active clusters (enqueued; completion drafts)" }],
     nodes: [
       {
         id: "scheduler",

@@ -4,12 +4,14 @@ import type {
   DedupeDocumentsJobInput,
   ImproveDocumentJobInput,
   MaintenanceRun,
+  SourceDescriptor,
   SplitDocumentJobInput,
   VerifyDocumentJobInput,
   VerifyFinding,
   ChangeIntentTrace
 } from "@magpie/core";
-import { verifyDocumentInputSchema, verifyDocumentOutputSchema } from "@magpie/jobs";
+import { verifyDocumentInputSchema, verifyDocumentOutputSchema, type JobView } from "@magpie/jobs";
+import { z } from "zod";
 import { selectFlow } from "../../platform/repositories.js";
 import { selectPatrolBatch } from "../../scheduling/patrol-cursor.js";
 import { hashDocumentContent, hashProvenanceClaims, hashSourceDescriptors } from "../../scheduling/patrol-hash.js";
@@ -17,10 +19,19 @@ import { foldProvenanceEvents } from "../proposals/provenance.js";
 import { projectSourceDescriptors } from "../../platform/source-descriptors.js";
 import type { PatrolStamp } from "../../stores/patrol-store.js";
 import { flowCoveredPaths } from "../../scheduling/flow.js";
-import { runVerifyLens, type VerifyDocumentFn } from "../../scheduling/verify-lens.js";
+import {
+  emptyVerifyLensResult,
+  foldVerdict,
+  runVerifyLens,
+  verifyLensOpenPullRequests,
+  type VerifyDocumentFn,
+  type VerifyLensResult
+} from "../../scheduling/verify-lens.js";
+import { withFlowRunLockWaiting } from "../../scheduling/run-lock.js";
+import type { OrchestrationFollowup } from "../../stores/orchestration-followup-store.js";
 import { runDedupeLens, type DedupeDocumentFn } from "../../scheduling/dedupe-lens.js";
 import { runSplitLens, type SplitDocumentFn } from "../../scheduling/split-lens.js";
-import { parseCompletedJobOutput, runJobToCompletion } from "../jobs/service.js";
+import { IN_FLIGHT_JOB_STATES, parseCompletedJobOutput } from "../jobs/service.js";
 import { type AiProviderName } from "../../platform/providers.js";
 import { createFanoutBudget, type FanoutBudget } from "../../platform/maintenance-fanout.js";
 import { annotateConflict, repairResolvedConflict } from "./conflict-annotation.js";
@@ -41,9 +52,15 @@ export type FixPatrolOutcome =
       universeCount: number;
       selectedCount: number;
       selected: string[];
+      // Findings, conflicts and resolutions from verdicts that were available
+      // within the tick. With the default (enqueued) verify these are empty at
+      // return: each verify_document job's completion applies its own verdict and
+      // adds it to the run (see continueFixPatrolFromCompletedVerify).
       findings: VerifyFinding[];
       conflictCount: number;
       resolvedConflictCount: number;
+      // Verifies enqueued this tick that had not answered when it returned.
+      pendingVerifyCount: number;
     }
   | { ok: false; code: "unknown_flow" };
 export type ImprovePatrolOutcome =
@@ -75,11 +92,10 @@ function resolveScope(
   };
 }
 
-// Dedupe key for reuseKey (#162): a verify already in flight for this document —
-// routed to the same provider AND grounded in the same source configuration AND
-// told about the same folded citedClaims — is the same piece of work a
-// concurrent patrol tick would otherwise duplicate, so wait on it instead of
-// enqueueing another. The descriptor hash matters: the change gate is
+// Dedupe key (#162): a verify already in flight for this document — routed to the
+// same provider AND grounded in the same source configuration AND told about the
+// same folded citedClaims — is the same piece of work a concurrent patrol tick
+// would otherwise duplicate, so it is reused instead of enqueueing another. The descriptor hash matters: the change gate is
 // config-keyed now, so a verdict reused across a config change would stamp a
 // sourcesHash no verify ever explored and gate the doc on it. The claims hash
 // (#214 phase 2) matters the same way: a merge can change a document's folded
@@ -101,19 +117,6 @@ function verifyDocumentReuseKey(input: unknown): string {
   return `${parsed.data.provider}:${parsed.data.path}:${hashSourceDescriptors(parsed.data.sources)}:${hashProvenanceClaims(parsed.data.citedClaims ?? [])}:${conflictIds}`;
 }
 
-// Default verify: enqueue a verify_document AI job and bounded-wait for the watcher
-// to complete it (mirrors gap-reconciler's reshape job). Returns undefined on any
-// non-completion so the lens skips that document rather than failing the tick.
-
-// Cap on the bounded wait for one verify job. The queue expiry is 15 min (agentic
-// headroom), but the patrol tick runs inside the watcher's 15-minute maintenance
-// POST envelope — letting the wait follow the expiry would hand the whole
-// envelope to one hung verify, so it is capped at the 10-minute agentic timeout
-// the job itself runs under. A CAP, not an override: a tighter configured global
-// bound (JOB_RUN_TO_COMPLETION_TIMEOUT_MS — the test harness relies on it to keep
-// bounded waits at 100ms) still wins below.
-const VERIFY_WAIT_BUDGET_MS = 10 * 60_000;
-
 // Cap on how many merged-proposal provenance events the fold reads per document.
 // A cap, not pagination: the query returns the OLDEST events first, so hitting
 // it means every merge after the fiftieth was ignored — which must be visible
@@ -121,9 +124,11 @@ const VERIFY_WAIT_BUDGET_MS = 10 * 60_000;
 const PROVENANCE_EVENT_CAP = 50;
 
 // Default verify: enqueue a verify_document AI job THROUGH the fan-out budget and
-// bounded-wait for it. A shed (budget/capacity) makes runJobToCompletion throw
-// MaintenanceShedError, which runVerifyLens catches like any other verify failure
-// — so the doc is simply not in `checkedPaths` and stays re-checkable next tick.
+// return at once — the tick never waits for it. The verdict is applied when the
+// job completes (continueFixPatrolFromCompletedVerify). A verify already in
+// flight for the same work is reused, spending no budget. A shed (budget/
+// capacity) or an enqueue failure returns undefined, so the doc is simply not
+// checked this tick and stays re-checkable on the next.
 function makeDefaultVerifyDocument(budget: FanoutBudget): VerifyDocumentFn {
   return async (ctx, { path, content, sources, flowId, knownConflicts }) => {
     // #214 phase 2: fold the document's provenance event stream (its merged
@@ -152,25 +157,27 @@ function makeDefaultVerifyDocument(budget: FanoutBudget): VerifyDocumentFn {
       ...(flowId !== undefined ? { flowId } : {}),
       provider: ctx.config.get().aiProvider
     } satisfies VerifyDocumentJobInput & { provider: AiProviderName };
-    let terminal;
     try {
-      terminal = await runJobToCompletion(ctx, "verify_document", input, {
-        reuseKey: verifyDocumentReuseKey,
-        deadlineMs: Math.min(
-          VERIFY_WAIT_BUDGET_MS,
-          ctx.settings.jobs.runToCompletionTimeoutMs ?? VERIFY_WAIT_BUDGET_MS
-        ),
-        admission: { budget }
-      });
+      const reuseKey = verifyDocumentReuseKey(input);
+      const { jobs } = await ctx.jobs.list({ type: "verify_document", limit: 200 });
+      const inFlight = jobs.find(
+        (job) => IN_FLIGHT_JOB_STATES.has(job.state) && verifyDocumentReuseKey(job.input) === reuseKey
+      );
+      if (inFlight) {
+        // Reuse spends NO budget/capacity: an in-flight job already holds its slot.
+        return { pendingJobId: inFlight.id };
+      }
+      const admission = await budget.admit("verify_document", input);
+      if (!admission.ok) {
+        logger.warn({ path, reason: admission.reason }, "verify lens: verify_document shed by the fan-out budget");
+        return undefined;
+      }
+      return { pendingJobId: admission.job.id };
     } catch (error) {
       const message = error instanceof Error ? error.message : "verify job failed";
-      logger.warn({ path, err: message }, "verify lens: verify_document could not run");
+      logger.warn({ path, err: message }, "verify lens: verify_document could not be enqueued");
       return undefined;
     }
-    if (terminal.state !== "completed") {
-      return undefined;
-    }
-    return parseCompletedJobOutput(verifyDocumentOutputSchema, terminal.output);
   };
 }
 
@@ -334,6 +341,12 @@ export async function runFixPatrol(
     return scope;
   }
 
+  // Before selecting anything, settle what earlier ticks of this flow left
+  // behind: a verify whose completion-side continuation never ran is applied
+  // here, and one whose job died is written off, so no run stays `running`
+  // forever and the cursor below reflects every verdict that has arrived.
+  await settleStaleFixPatrolRuns(ctx, options.flowId);
+
   const documents = ctx.stores.knowledgeIndex
     .listDocuments()
     .filter((doc) => !scope.repositoryIds || scope.repositoryIds.includes(doc.repositoryId));
@@ -394,81 +407,28 @@ export async function runFixPatrol(
   });
   const gated = actionableDocuments.length - toCheck.length;
 
-  // Run the verify lens over the documents that actually need checking this tick.
+  // Start the verify lens over the documents that actually need checking this
+  // tick. With the default verify this ENQUEUES one verify_document job per
+  // document and comes back with them `pending`; nothing here waits on a watcher.
   const selectedSet = new Set(toCheck.map((doc) => doc.path));
   const selectedDocuments = toCheck.map((doc) => ({ path: doc.path, content: doc.content }));
-  const { findings, checkedPaths, conflicts, resolved } = await runVerifyLens(ctx, {
+  const lens = await runVerifyLens(ctx, {
     flowId: options.flowId,
     documents: selectedDocuments,
     sources,
     verifyDocument
   });
+  const { findings, checkedPaths, conflicts } = lens;
 
-  // Source conflicts: record each one and, when it is new, annotate the document
-  // so it stops silently asserting a disputed value. These never become
-  // corrective proposals — no correction can settle a disagreement between two
-  // sources without Magpie choosing a winner.
-  for (const conflict of conflicts) {
-    const document = documents.find((doc) => doc.path === conflict.path);
-    if (!document) {
-      continue;
-    }
-    try {
-      await annotateConflict(ctx, {
-        flowId: options.flowId,
-        conflict,
-        content: document.content,
-        destinationId: document.repositoryId
-      });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "annotation failed";
-      logger.warn({ path: conflict.path, err: message }, "fix-patrol: conflict annotation failed");
-    }
-  }
-
-  // Conflicts the agent reported the sources now agree on: close the register
-  // entry and repair the document through the ordinary corrective path.
-  let repairedCount = 0;
-  for (const entry of resolved) {
-    const document = documents.find((doc) => doc.path === entry.path);
-    if (!document) {
-      continue;
-    }
-    try {
-      const repaired = await repairResolvedConflict(ctx, {
-        flowId: options.flowId,
-        resolved: entry,
-        content: document.content,
-        destinationId: document.repositoryId,
-        sources,
-        correctDocument
-      });
-      if (repaired) {
-        repairedCount += 1;
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "repair failed";
-      logger.warn({ path: entry.path, err: message }, "fix-patrol: conflict repair failed");
-    }
-  }
-
-  // Each unprovable finding becomes a corrective proposal: enqueue a correct_document
-  // job grounded in the same source material the verify lens saw. Enqueue-only — the
-  // proposal is drafted and gated later, on job completion.
-  for (const finding of findings) {
-    const document = documents.find((doc) => doc.path === finding.path);
-    if (!document) {
-      continue;
-    }
-    await correctDocument(ctx, {
-      path: finding.path,
-      content: document.content,
-      claims: finding.claims,
-      sources,
-      destinationId: document.repositoryId,
-      flowId: options.flowId
-    });
-  }
+  // Act on the verdicts already in hand (none, with the default verify — each
+  // pending job's completion runs this same routine for its own document).
+  const repairedCount = await applyVerifyResults(ctx, {
+    flowId: options.flowId,
+    documents,
+    sources,
+    lens,
+    correctDocument
+  });
 
   // Run the dedupe lens over the same batch: for each selected document, find its
   // nearest neighbours and enqueue a dedupe_documents scan when any are close enough.
@@ -513,37 +473,62 @@ export async function runFixPatrol(
   budget.finish();
   const fanout = budget.snapshot();
 
+  const tick: FixPatrolTickDetails = {
+    universeCount: universe.length,
+    selectedCount: selected.length,
+    selected,
+    skipped,
+    gated,
+    fanout
+  };
+  const inTick: VerifyOutcomeTotals = {
+    checked: checkedPaths.length,
+    findings,
+    conflicts,
+    resolvedConflicts: repairedCount
+  };
+  // Recorded `running` while verifies are outstanding: its findings are not known
+  // yet. finalizeFixPatrolRun rewrites it as each one settles and completes it
+  // after the last. With nothing pending this is the terminal record, as before.
   const run = await ctx.stores.maintenanceRuns.record({
     taskType: "correctness_patrol",
     flowId: options.flowId,
     trigger: options.trigger,
-    status: "completed",
-    summary:
-      `checked ${checkedPaths.length}/${universe.length} doc${checkedPaths.length === 1 ? "" : "s"} · ` +
-      `${findings.length} finding${findings.length === 1 ? "" : "s"}` +
-      (conflicts.length > 0 ? ` · ${conflicts.length} source conflict${conflicts.length === 1 ? "" : "s"}` : "") +
-      (repairedCount > 0 ? ` · ${repairedCount} conflict${repairedCount === 1 ? "" : "s"} resolved` : "") +
-      (gated > 0 ? ` · ${gated} unchanged` : "") +
-      (skipped > 0 ? ` · ${skipped} covered by open PRs` : ""),
-    details: {
-      universeCount: universe.length,
-      selectedCount: selected.length,
-      selected,
-      skipped,
-      gated,
-      findings,
-      conflicts,
-      resolvedConflicts: repairedCount,
-      intentTraces: verifyFindingIntentTraces(findings, options.flowId),
-      fanout
-    }
+    status: lens.pending.length > 0 ? "running" : "completed",
+    summary: fixPatrolSummary(tick, inTick, lens.pending.length),
+    details: fixPatrolDetails(tick, inTick, options.flowId, lens.pending.length)
   });
+
+  if (lens.pending.length > 0) {
+    // Tie each pending verify to this run so its completion can find its way back.
+    // A doc whose dedupe/split enqueue was shed this tick must stay re-checkable,
+    // so its verify is told not to record a verified hash (stampHash: false).
+    for (const pending of lens.pending) {
+      await ctx.stores.orchestrationFollowups.register({
+        jobId: pending.jobId,
+        orchestrator: "correctness_patrol",
+        scopeKey: run.id,
+        context: {
+          ...(options.flowId ? { flowId: options.flowId } : {}),
+          path: pending.path,
+          stampHash: !deferredPaths.has(pending.path)
+        }
+      });
+    }
+    // A verify can complete before its row exists (the rows are written after the
+    // lens returns): its completion then finds no row and does nothing. This pass
+    // closes that window — any verify of this run that is already complete is
+    // applied now — and is the same routine a later tick uses to self-heal.
+    await settleFixPatrolRun(ctx, run.id);
+  }
+
   logger.info(
     {
       trigger: options.trigger,
       flowId: options.flowId ?? "(default)",
       selected: selected.length,
       checked: checkedPaths.length,
+      pendingVerifies: lens.pending.length,
       gated,
       universe: universe.length,
       findings: findings.length,
@@ -554,7 +539,7 @@ export async function runFixPatrol(
       skipped,
       runId: run.id
     },
-    "fix-patrol completed"
+    lens.pending.length > 0 ? "fix-patrol enqueued verifies" : "fix-patrol completed"
   );
   return {
     ok: true,
@@ -564,8 +549,440 @@ export async function runFixPatrol(
     selected,
     findings,
     conflictCount: conflicts.length,
-    resolvedConflictCount: repairedCount
+    resolvedConflictCount: repairedCount,
+    pendingVerifyCount: lens.pending.length
   };
+}
+
+// Acts on a set of verify verdicts: annotate source conflicts, repair resolved
+// ones, and enqueue a corrective job per unprovable finding. Shared by the tick
+// (verdicts available in-tick) and the continuation (one document's verdict,
+// arriving with its completed verify_document job), so both do exactly the same
+// thing with a verdict. Returns how many resolved conflicts were repaired.
+async function applyVerifyResults(
+  ctx: AppContext,
+  args: {
+    flowId: string | undefined;
+    documents: ReadonlyArray<{ path: string; content: string; repositoryId: string }>;
+    sources: SourceDescriptor[];
+    lens: Pick<VerifyLensResult, "findings" | "conflicts" | "resolved">;
+    correctDocument: CorrectDocumentFn;
+  }
+): Promise<number> {
+  const { flowId, documents, sources, lens, correctDocument } = args;
+
+  // Source conflicts: record each one and, when it is new, annotate the document
+  // so it stops silently asserting a disputed value. These never become
+  // corrective proposals — no correction can settle a disagreement between two
+  // sources without Magpie choosing a winner.
+  for (const conflict of lens.conflicts) {
+    const document = documents.find((doc) => doc.path === conflict.path);
+    if (!document) {
+      continue;
+    }
+    try {
+      await annotateConflict(ctx, {
+        flowId,
+        conflict,
+        content: document.content,
+        destinationId: document.repositoryId
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "annotation failed";
+      logger.warn({ path: conflict.path, err: message }, "fix-patrol: conflict annotation failed");
+    }
+  }
+
+  // Conflicts the agent reported the sources now agree on: close the register
+  // entry and repair the document through the ordinary corrective path.
+  let repairedCount = 0;
+  for (const entry of lens.resolved) {
+    const document = documents.find((doc) => doc.path === entry.path);
+    if (!document) {
+      continue;
+    }
+    try {
+      const repaired = await repairResolvedConflict(ctx, {
+        flowId,
+        resolved: entry,
+        content: document.content,
+        destinationId: document.repositoryId,
+        sources,
+        correctDocument
+      });
+      if (repaired) {
+        repairedCount += 1;
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "repair failed";
+      logger.warn({ path: entry.path, err: message }, "fix-patrol: conflict repair failed");
+    }
+  }
+
+  // Each unprovable finding becomes a corrective proposal: enqueue a correct_document
+  // job grounded in the same source material the verify lens saw. Enqueue-only — the
+  // proposal is drafted and gated later, on job completion.
+  for (const finding of lens.findings) {
+    const document = documents.find((doc) => doc.path === finding.path);
+    if (!document) {
+      continue;
+    }
+    await correctDocument(ctx, {
+      path: finding.path,
+      content: document.content,
+      claims: finding.claims,
+      sources,
+      destinationId: document.repositoryId,
+      flowId
+    });
+  }
+  return repairedCount;
+}
+
+// --- The run record ---------------------------------------------------------
+// A correctness-patrol run's details are the tick's fixed facts plus the verify
+// outcomes, which arrive over time. They are always recomputed from those two
+// parts (never patched in place), so finalising a run twice is harmless.
+
+// What the tick knew when it returned. Stored verbatim on the run.
+const fixPatrolTickDetailsSchema = z.object({
+  universeCount: z.number(),
+  selectedCount: z.number(),
+  selected: z.array(z.string()),
+  skipped: z.number(),
+  gated: z.number(),
+  // The tick's fan-out budget summary (FanoutBudgetCounts).
+  fanout: z.object({
+    taskType: z.string(),
+    flowId: z.string(),
+    attempted: z.number(),
+    enqueued: z.number(),
+    deferredByBudget: z.number(),
+    rejectedByCapacity: z.number(),
+    budget: z.number(),
+    runaway: z.boolean()
+  })
+});
+type FixPatrolTickDetails = z.infer<typeof fixPatrolTickDetailsSchema>;
+
+const verifyFindingSchema = z.object({
+  path: z.string(),
+  claims: verifyDocumentOutputSchema.shape.claims,
+  decision: z.enum(["open-new", "fold", "defer"]),
+  intoProposalId: z.string().optional()
+});
+const verifyConflictSchema = verifyDocumentOutputSchema.shape.conflicts.unwrap().element.extend({ path: z.string() });
+
+// Verify outcomes, summed: from the tick, from one settled follow-up, or both.
+const verifyOutcomeTotalsSchema = z.object({
+  checked: z.number(),
+  findings: z.array(verifyFindingSchema),
+  conflicts: z.array(verifyConflictSchema),
+  resolvedConflicts: z.number()
+});
+type VerifyOutcomeTotals = z.infer<typeof verifyOutcomeTotalsSchema>;
+
+function fixPatrolSummary(tick: FixPatrolTickDetails, totals: VerifyOutcomeTotals, pending: number): string {
+  return (
+    `checked ${totals.checked}/${tick.universeCount} doc${totals.checked === 1 ? "" : "s"} · ` +
+    `${totals.findings.length} finding${totals.findings.length === 1 ? "" : "s"}` +
+    (totals.conflicts.length > 0
+      ? ` · ${totals.conflicts.length} source conflict${totals.conflicts.length === 1 ? "" : "s"}`
+      : "") +
+    (totals.resolvedConflicts > 0
+      ? ` · ${totals.resolvedConflicts} conflict${totals.resolvedConflicts === 1 ? "" : "s"} resolved`
+      : "") +
+    (pending > 0 ? ` · ${pending} verif${pending === 1 ? "y" : "ies"} in progress` : "") +
+    (tick.gated > 0 ? ` · ${tick.gated} unchanged` : "") +
+    (tick.skipped > 0 ? ` · ${tick.skipped} covered by open PRs` : "")
+  );
+}
+
+// `inTick` (the outcomes the tick itself produced) and `pendingVerifies` are
+// present only on a run that had verifies outstanding — they are what
+// finalizeFixPatrolRun recomputes from. A run that never waited on anything
+// keeps exactly the details it always had.
+function fixPatrolDetails(
+  tick: FixPatrolTickDetails,
+  totals: VerifyOutcomeTotals,
+  flowId: string | undefined,
+  pending: number,
+  asynchronous?: { inTick: VerifyOutcomeTotals }
+): Record<string, unknown> {
+  return {
+    ...tick,
+    findings: totals.findings,
+    conflicts: totals.conflicts,
+    resolvedConflicts: totals.resolvedConflicts,
+    intentTraces: verifyFindingIntentTraces(totals.findings, flowId),
+    ...(pending > 0 || asynchronous
+      ? { pendingVerifies: pending, checkedCount: totals.checked, inTick: asynchronous?.inTick ?? totals }
+      : {})
+  };
+}
+
+// --- The continuation --------------------------------------------------------
+
+// What a correctness_patrol follow-up row carries (see
+// stores/orchestration-followup-store.ts): the flow and document the
+// verify_document job checks, and whether its verdict may record a verified hash
+// on the patrol cursor (false when the tick shed that doc's dedupe/split
+// enqueue, so the doc stays re-checkable).
+const verifyFollowupContextSchema = z.object({
+  flowId: z.string().optional(),
+  path: z.string(),
+  stampHash: z.boolean()
+});
+
+// The outcome of one verify, as settled on its follow-up row. `checked: false`
+// covers every way a verify yields no verdict to act on (the job failed or was
+// cancelled, its output was malformed, the document changed or vanished while
+// it ran). `stamp` is the cursor stamp to (re-)apply.
+const verifyFollowupResultSchema = verifyOutcomeTotalsSchema.extend({
+  stamp: z.object({ docPath: z.string(), contentHash: z.string(), sourcesHash: z.string() }).optional()
+});
+type VerifyFollowupResult = z.infer<typeof verifyFollowupResultSchema>;
+
+const UNCHECKED: VerifyFollowupResult = { checked: 0, findings: [], conflicts: [], resolvedConflicts: 0 };
+
+// THE CONTINUATION. A completed verify_document job that a patrol tick enqueued
+// resumes that tick's work for its one document: act on the verdict, stamp the
+// cursor, and fold the outcome into the tick's run. Called from the completion
+// dispatcher (completeJob) for every completed verify job; one with no follow-up
+// row (created by hand) is a no-op.
+export async function continueFixPatrolFromCompletedVerify(
+  ctx: AppContext,
+  job: JobView | undefined,
+  output: unknown
+): Promise<void> {
+  if (!job || job.type !== "verify_document") {
+    return;
+  }
+  const followup = await ctx.stores.orchestrationFollowups.get(job.id);
+  if (!followup || followup.orchestrator !== "correctness_patrol") {
+    return;
+  }
+  await settleVerifyFollowup(ctx, followup, { kind: "completed", input: job.input, output });
+  await finalizeFixPatrolRun(ctx, followup.scopeKey);
+}
+
+// A verify_document job a patrol tick enqueued will never produce a verdict (it
+// failed terminally or was cancelled). Its document is simply not checked — left
+// unstamped, so the next rotation re-verifies it — and the run stops waiting.
+export async function abandonFixPatrolVerify(ctx: AppContext, job: JobView | undefined): Promise<void> {
+  if (!job || job.type !== "verify_document") {
+    return;
+  }
+  const followup = await ctx.stores.orchestrationFollowups.get(job.id);
+  if (!followup || followup.orchestrator !== "correctness_patrol") {
+    return;
+  }
+  await settleVerifyFollowup(ctx, followup, { kind: "abandoned" });
+  await finalizeFixPatrolRun(ctx, followup.scopeKey);
+}
+
+// Settles one verify follow-up, exactly once. Serialised per job: the completion
+// handler, its replay, and a tick's self-heal pass can all reach the same row, and
+// two of them acting on one verdict would enqueue two corrective jobs. The row is
+// re-read under the lock, so whoever arrives second finds it settled.
+//
+// The paid step (enqueueing correct_document) happens BEFORE the row settles, and
+// the cursor stamp AFTER, read back from the settled row — so a failure anywhere
+// replays into "already settled → just re-stamp", never into a second enqueue.
+async function settleVerifyFollowup(
+  ctx: AppContext,
+  followup: OrchestrationFollowup,
+  outcome: { kind: "completed"; input: unknown; output: unknown } | { kind: "abandoned" }
+): Promise<void> {
+  await withFlowRunLockWaiting(ctx.pool, "correctness_patrol_verify", followup.jobId, async () => {
+    const current = await ctx.stores.orchestrationFollowups.get(followup.jobId);
+    if (!current) {
+      return;
+    }
+    if (current.status === "pending") {
+      const result =
+        outcome.kind === "completed"
+          ? await applyVerifyVerdict(ctx, current, outcome.input, outcome.output)
+          : UNCHECKED;
+      await ctx.stores.orchestrationFollowups.settle(current.jobId, result);
+    }
+    const settled = await ctx.stores.orchestrationFollowups.get(followup.jobId);
+    const context = verifyFollowupContextSchema.safeParse(settled?.context);
+    const result = verifyFollowupResultSchema.safeParse(settled?.result);
+    if (context.success && result.success && result.data.stamp) {
+      await ctx.stores.patrol.stampChecked(context.data.flowId, [result.data.stamp]);
+    }
+  });
+}
+
+// Acts on one completed verify's verdict and reports what it did. Anything that
+// leaves no trustworthy verdict returns UNCHECKED, which records no verified
+// hash — the document stays re-checkable rather than gated on a state nobody
+// verified (#163).
+async function applyVerifyVerdict(
+  ctx: AppContext,
+  followup: OrchestrationFollowup,
+  jobInput: unknown,
+  jobOutput: unknown
+): Promise<VerifyFollowupResult> {
+  const context = verifyFollowupContextSchema.safeParse(followup.context);
+  const input = verifyDocumentInputSchema.safeParse(jobInput);
+  const verdict = parseCompletedJobOutput(verifyDocumentOutputSchema, jobOutput);
+  if (!context.success || !input.success || !verdict) {
+    logger.warn({ jobId: followup.jobId }, "fix-patrol: verify_document completion could not be read; doc not checked");
+    return UNCHECKED;
+  }
+  const { flowId, path, stampHash } = context.data;
+  const scope = resolveScope(ctx, flowId);
+  if (!scope.ok) {
+    return UNCHECKED;
+  }
+  const document = ctx.stores.knowledgeIndex
+    .listDocuments()
+    .find((doc) => doc.path === path && (!scope.repositoryIds || scope.repositoryIds.includes(doc.repositoryId)));
+  const contentHash = hashDocumentContent(input.data.content);
+  if (!document || hashDocumentContent(document.content) !== contentHash) {
+    // The document was re-indexed (or removed) while the verify ran. The verdict
+    // describes content that is no longer there: acting on it could annotate or
+    // "correct" the wrong text, and stamping it would gate the new content on a
+    // check it never had. Drop it; the next rotation verifies the current doc.
+    logger.info({ path, jobId: followup.jobId }, "fix-patrol: document changed while its verify ran; verdict dropped");
+    return UNCHECKED;
+  }
+
+  const lens = emptyVerifyLensResult();
+  foldVerdict(lens, flowId, path, verdict, await verifyLensOpenPullRequests(ctx, flowId));
+
+  // The tick that enqueued this verify is long gone, and its budget with it, so
+  // the corrective enqueue admits through a budget of its own. The global
+  // non-interactive ceiling still bounds it.
+  const budget = createFanoutBudget(ctx, "correctness_patrol", flowId);
+  const deferredPaths = new Set<string>();
+  const resolvedConflicts = await applyVerifyResults(ctx, {
+    flowId,
+    documents: [document],
+    sources: input.data.sources,
+    lens,
+    correctDocument: makeDefaultCorrectDocument(budget, deferredPaths)
+  });
+  budget.finish();
+
+  // Record the verified hash only when the tick allowed it AND the corrective
+  // work this verdict called for was actually enqueued — a shed leaves the doc
+  // unstamped so the next tick retries it.
+  const stamp =
+    stampHash && !deferredPaths.has(path)
+      ? { docPath: path, contentHash, sourcesHash: hashSourceDescriptors(input.data.sources) }
+      : undefined;
+  return {
+    checked: 1,
+    findings: lens.findings,
+    conflicts: lens.conflicts,
+    resolvedConflicts,
+    ...(stamp ? { stamp } : {})
+  };
+}
+
+// Recomputes a run's status, summary and details from the tick's facts plus
+// every verify outcome settled so far, and completes it once none are pending.
+// Idempotent and safe to race: each caller settles its own row first and then
+// recomputes from what is stored, so whoever runs last writes the full picture.
+async function finalizeFixPatrolRun(ctx: AppContext, runId: string): Promise<void> {
+  const run = await ctx.stores.maintenanceRuns.get(runId);
+  if (!run || run.taskType !== "correctness_patrol") {
+    return;
+  }
+  const tick = fixPatrolTickDetailsSchema.safeParse(run.details);
+  const inTick = verifyOutcomeTotalsSchema.safeParse(run.details.inTick);
+  if (!tick.success || !inTick.success) {
+    return;
+  }
+  const rows = await ctx.stores.orchestrationFollowups.listByScope("correctness_patrol", runId);
+  const totals: VerifyOutcomeTotals = {
+    checked: inTick.data.checked,
+    findings: [...inTick.data.findings],
+    conflicts: [...inTick.data.conflicts],
+    resolvedConflicts: inTick.data.resolvedConflicts
+  };
+  let pending = 0;
+  for (const row of rows) {
+    if (row.status === "pending") {
+      pending += 1;
+      continue;
+    }
+    const result = verifyFollowupResultSchema.safeParse(row.result);
+    if (!result.success) {
+      continue;
+    }
+    totals.checked += result.data.checked;
+    totals.findings.push(...result.data.findings);
+    totals.conflicts.push(...result.data.conflicts);
+    totals.resolvedConflicts += result.data.resolvedConflicts;
+  }
+  await ctx.stores.maintenanceRuns.update(runId, {
+    status: pending > 0 ? "running" : "completed",
+    summary: fixPatrolSummary(tick.data, totals, pending),
+    details: fixPatrolDetails(tick.data, totals, run.flowId, pending, { inTick: inTick.data })
+  });
+}
+
+// Settles every verify of one run whose JOB has reached a terminal state but
+// whose row is still pending — an outcome nobody applied. A completed job is
+// applied through the same routine its completion handler uses; a failed,
+// cancelled or vanished one is abandoned. Verifies still queued or running are
+// left alone. Then the run is recomputed.
+async function settleFixPatrolRun(ctx: AppContext, runId: string): Promise<void> {
+  for (const row of await ctx.stores.orchestrationFollowups.listByScope("correctness_patrol", runId)) {
+    if (row.status !== "pending") {
+      continue;
+    }
+    let job: JobView | undefined;
+    try {
+      job = await ctx.jobs.get(row.jobId);
+    } catch (error) {
+      // The broker could not say. Leave the row pending; a later tick asks again.
+      const message = error instanceof Error ? error.message : String(error);
+      logger.warn({ jobId: row.jobId, err: message }, "fix-patrol: could not read verify job state");
+      continue;
+    }
+    if (job && IN_FLIGHT_JOB_STATES.has(job.state)) {
+      continue;
+    }
+    await settleVerifyFollowup(
+      ctx,
+      row,
+      job?.state === "completed" ? { kind: "completed", input: job.input, output: job.output } : { kind: "abandoned" }
+    );
+  }
+  await finalizeFixPatrolRun(ctx, runId);
+}
+
+// How many of a flow's recent runs a tick re-examines for unsettled verifies.
+// Runs settle within minutes; this only has to reach back past a few ticks.
+const STALE_RUN_SCAN_LIMIT = 50;
+// Settled follow-up rows are kept this long (they back a run's details until it
+// completes, and are useful for audit shortly after), then pruned.
+const FOLLOWUP_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+
+// Self-healing, run at the start of every tick: finish any earlier run of this
+// flow still marked `running`. Covers the cases no completion handler will — the
+// watcher gave up re-POSTing a completion, the API restarted mid-continuation, a
+// job expired inside the queue without anyone calling failJob.
+async function settleStaleFixPatrolRuns(ctx: AppContext, flowId: string | undefined): Promise<void> {
+  const recent = await ctx.stores.maintenanceRuns.list({
+    taskType: "correctness_patrol",
+    ...(flowId !== undefined ? { flowId } : {}),
+    limit: STALE_RUN_SCAN_LIMIT
+  });
+  for (const run of recent) {
+    // list() treats an absent flowId as "any flow", so match the flow explicitly.
+    if (run.status === "running" && run.flowId === flowId) {
+      await settleFixPatrolRun(ctx, run.id);
+    }
+  }
+  await ctx.stores.orchestrationFollowups.pruneSettledBefore(
+    new Date(Date.now() - FOLLOWUP_RETENTION_MS).toISOString()
+  );
 }
 
 export async function runImprovePatrol(

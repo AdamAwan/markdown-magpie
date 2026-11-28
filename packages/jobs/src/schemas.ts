@@ -946,11 +946,16 @@ export const sourceChangeSyncOutputSchema = z.object({
 
 export const correctnessPatrolInputSchema = z.object({ flowId: z.string().optional() });
 // Per tick the patrol records exactly one run; the output reports its id and how
-// many documents it checked (0 when the flow has no indexed documents yet).
+// many documents it selected (0 when the flow has no indexed documents yet). The
+// tick ENQUEUES its verify_document checks and returns without waiting, so
+// `findingCount` counts only verdicts already in hand at return (normally 0) and
+// `pendingVerifyCount` the verifies still to answer — their findings land on the
+// run as each completes.
 export const correctnessPatrolOutputSchema = z.object({
   runId: z.string(),
   selectedCount: z.number().int(),
-  findingCount: z.number().int()
+  findingCount: z.number().int(),
+  pendingVerifyCount: z.number().int().optional()
 });
 
 export const editorialPatrolInputSchema = z.object({ flowId: z.string().optional() });
@@ -972,9 +977,13 @@ export const seedBootstrapOutputSchema = z.object({
 });
 
 export const verifyGapClosureInputSchema = z.object({ proposalId: z.string() });
+// `pending` is the orchestrator's normal first answer: it enqueued the re-asks and
+// returned without waiting for them. No verdict exists yet — the re-asks'
+// completions resume the verification and record one (so `perQuestion` is empty).
+// The three settled values are the verdicts persisted on proposals.closure_status.
 export const verifyGapClosureOutputSchema = z.object({
   proposalId: z.string(),
-  closureStatus: z.enum(["verified_closed", "reopened", "needs_attention"]),
+  closureStatus: z.enum(["verified_closed", "reopened", "needs_attention", "pending"]),
   perQuestion: z.array(
     z.object({
       questionId: z.string(),
