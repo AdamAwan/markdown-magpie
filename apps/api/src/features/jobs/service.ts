@@ -163,23 +163,50 @@ export async function acceptFailedJob(ctx: AppContext, id: string): Promise<JobV
   return { ...projectJob(job), acceptedAt };
 }
 
+// Long-polls a job until it is terminal or the wait times out. `signal` is the
+// HTTP request's abort signal: when the client disconnects the poll stops at
+// once (rejecting with the signal's reason) instead of querying the broker every
+// pollMs for the rest of waitTimeoutMs on behalf of nobody (docs/api.md API28).
 export async function waitForJob(
   ctx: AppContext,
   id: string,
-  options: { timeoutMs?: number; pollMs?: number } = {}
+  options: { timeoutMs?: number; pollMs?: number; signal?: AbortSignal } = {}
 ): Promise<{ terminal: boolean; job: JobView }> {
   const timeoutMs = options.timeoutMs ?? ctx.settings.jobs.waitTimeoutMs;
   const pollMs = options.pollMs ?? ctx.settings.jobs.waitPollMs;
+  const { signal } = options;
   const deadline = Date.now() + timeoutMs;
   while (true) {
+    signal?.throwIfAborted();
     const job = await ctx.jobs.get(id);
     if (!job) throw new Error(`Job not found: ${id}`);
     const terminal = isTerminal(job.state);
     if (terminal || Date.now() >= deadline) {
       return { terminal, job: (await decorateJobs(ctx, [job]))[0] };
     }
-    await new Promise((resolve) => setTimeout(resolve, pollMs));
+    await sleepUnlessAborted(pollMs, signal);
   }
+}
+
+// Resolves after `ms`, or as soon as `signal` aborts (the caller's next
+// throwIfAborted then ends the wait). The timer is cleared on abort so a
+// disconnected wait leaves nothing scheduled behind it.
+function sleepUnlessAborted(ms: number, signal: AbortSignal | undefined): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal?.aborted) {
+      resolve();
+      return;
+    }
+    const onAbort = () => {
+      clearTimeout(timer);
+      resolve();
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
 }
 
 // Job states that are not yet terminal — a job in one of these is either still
