@@ -10,29 +10,40 @@ import {
   type RepositoryRef,
   type ReviewDecision
 } from "@magpie/core";
-import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import { lstat, mkdir, mkdtemp, realpath, rm, unlink, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readdir, realpath, rename, rm, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { promisify } from "node:util";
 import { withCheckoutLock } from "./checkout-lock.js";
+import {
+  clearStaleGitLocks,
+  cloneStagingPrefix,
+  releaseStaleBranchWorktrees,
+  removeStaleCloneStaging
+} from "./checkout-repair.js";
+import {
+  embeddedHttpsCredentials,
+  hasEmbeddedHttpCredentials,
+  redactCredentials,
+  stripUrlCredentials
+} from "./credentials.js";
 import { checkDocumentPath, findUnsafeChangesetPath } from "./document-path.js";
-import { withGitRetry } from "./git-retry.js";
 import { resolvePrimaryBranch } from "./primary-branch.js";
+import {
+  GIT_CLONE_TIMEOUT_MS,
+  GitCommandError,
+  git,
+  positiveIntFromEnv,
+  tryGit,
+  type GitRunOptions
+} from "./run-git.js";
 
 export { resolvePrimaryBranch };
 export { checkDocumentPath, findUnsafeChangesetPath, type DocumentPathCheck } from "./document-path.js";
 export { hydrateGithubTokenFromGhCli, type GithubTokenSource } from "./gh-cli-token.js";
+export { redactCredentials, stripUrlCredentials } from "./credentials.js";
+export { GitCommandError } from "./run-git.js";
 
-const execFileAsync = promisify(execFile);
-
-// A hung git subprocess (e.g. a credential prompt on a misconfigured remote) or
-// a stalled GitHub connection would otherwise block indexing and the PR poller
-// indefinitely; large diffs/clones could also blow past execFile's 1 MB default
-// stdout buffer. These bounds are configurable for unusually large repos.
-const GIT_SUBPROCESS_TIMEOUT_MS = positiveIntFromEnv("GIT_TIMEOUT_MS", 120_000);
-const GIT_SUBPROCESS_MAX_BUFFER = positiveIntFromEnv("GIT_MAX_BUFFER_BYTES", 64 * 1024 * 1024);
 const GITHUB_API_TIMEOUT_MS = positiveIntFromEnv("GITHUB_API_TIMEOUT_MS", 30_000);
 
 // Clone source/destination checkouts as BLOBLESS PARTIAL CLONES (--filter=blob:none):
@@ -49,15 +60,6 @@ const GITHUB_API_TIMEOUT_MS = positiveIntFromEnv("GITHUB_API_TIMEOUT_MS", 30_000
 // Read per call (not memoized) so the toggle takes effect without a restart.
 function partialCloneEnabled(): boolean {
   return boolFromEnv("GIT_PARTIAL_CLONE", true);
-}
-
-function positiveIntFromEnv(name: string, fallback: number): number {
-  const raw = process.env[name];
-  if (!raw) {
-    return fallback;
-  }
-  const parsed = Number.parseInt(raw, 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
 function boolFromEnv(name: string, fallback: boolean): boolean {
@@ -94,6 +96,10 @@ export interface GitCheckoutRequest {
   // current process env; absent means "use the host default" (GITHUB_TOKEN /
   // AZURE_DEVOPS_PAT).
   tokenEnv?: string;
+  // The calling job's abort signal. Aborting kills an in-flight fetch/checkout/
+  // reset and makes the call reject promptly; a first clone keeps running in the
+  // background (bounded by GIT_CLONE_TIMEOUT_MS) so a retry can reuse it.
+  signal?: AbortSignal;
 }
 
 export interface GitCheckoutResult {
@@ -120,36 +126,82 @@ export class LocalRepositorySyncProvider implements RepositorySyncProvider {
 export function assertAllowedGitUrl(url: string): void {
   if (!isAllowedGitCloneUrl(url)) {
     throw new Error(
-      `Refusing git checkout url with a disallowed transport or leading "-": ${JSON.stringify(url)}. ` +
+      `Refusing git checkout url with a disallowed transport or leading "-": ${JSON.stringify(redactCredentials(url))}. ` +
         `Allowed transports: ${GIT_ALLOW_PROTOCOL_VALUE.replaceAll(":", ", ")}, scp-like ssh, or a local path.`
+    );
+  }
+  // Credentials are only ever sent over https (TM38). A plain-http URL that embeds
+  // one would put the secret on the wire in clear text, so it is refused outright
+  // rather than silently stripped into an unauthenticated clone.
+  if (hasEmbeddedHttpCredentials(url) && !embeddedHttpsCredentials(url)) {
+    throw new Error(
+      `Refusing git checkout url ${JSON.stringify(redactCredentials(url))}: it embeds credentials but uses plain http. ` +
+        "Use https, or drop the credentials from the URL and configure a token (GITHUB_TOKEN / tokenEnv)."
     );
   }
 }
 
+// Same remote, ignoring any credential either form carries and URL-serialisation
+// differences (host case, default port). Used to recognise a checkout cloned by an
+// older version, whose stored origin still embeds the credential, as the SAME
+// checkout — so it is scrubbed (TM36) instead of rejected as a foreign remote.
+function sameRemote(left: string, right: string): boolean {
+  const normalise = (value: string): string => {
+    const stripped = stripUrlCredentials(value.trim());
+    try {
+      return new URL(stripped).toString();
+    } catch {
+      return stripped;
+    }
+  };
+  return normalise(left) === normalise(right);
+}
+
 export async function ensureGitCheckout(request: GitCheckoutRequest): Promise<GitCheckoutResult> {
   assertAllowedGitUrl(request.url);
-  const localPath = path.join(request.checkoutRoot, safeCheckoutName(request.id));
+  // The URL git is given — and so stores as origin in .git/config — never carries
+  // a credential (TM36). An embedded https credential still authenticates: it is
+  // moved into the child's environment as an http.extraheader by buildGitAuthEnv.
+  const remoteUrl = stripUrlCredentials(request.url);
+  const checkoutName = safeCheckoutName(request.id);
+  const localPath = path.join(request.checkoutRoot, checkoutName);
   await mkdir(request.checkoutRoot, { recursive: true });
   const authEnv = buildGitAuthEnv(request.url, request.tokenEnv);
+  const { signal } = request;
+  throwIfAborted(signal);
 
   // Serialize all mutating git against this checkout: the api and the watcher both
   // clone/fetch/reset the same working trees, and the api fires this from several
   // concurrent async paths (reconcile, execution-context, snapshot, source-sync,
   // indexing). Concurrent git on one `.git` races on FETCH_HEAD/index.lock/refs.
-  await withCheckoutLock(localPath, async () => {
+  const work = withCheckoutLock(localPath, async () => {
+    throwIfAborted(signal);
     if (!existsSync(path.join(localPath, ".git"))) {
-      await cloneCheckout(request, localPath, authEnv);
+      // A first clone deliberately does NOT take the job's abort signal: it is the
+      // one long operation, and killing it on abort would throw away the progress
+      // a retry needs (IN43). It is bounded by GIT_CLONE_TIMEOUT_MS instead, the
+      // caller stops waiting on abort (below), and a retry waits on this lock and
+      // finds the finished clone.
+      await cloneCheckout(request, remoteUrl, localPath, checkoutName, authEnv);
       return;
     }
 
-    const currentRemote = await tryGit(localPath, ["remote", "get-url", "origin"]);
-    if (currentRemote.trim() && currentRemote.trim() !== request.url) {
-      throw new Error(`Configured checkout ${localPath} already points at ${currentRemote.trim()}`);
+    // A git killed part-way on this checkout (crash, OOM, container stop) may have
+    // left a lock file that would fail every later operation (IN42).
+    await clearStaleGitLocks(localPath);
+
+    const currentRemote = (await tryGit(localPath, ["remote", "get-url", "origin"], { signal })).trim();
+    if (currentRemote && !sameRemote(currentRemote, remoteUrl)) {
+      throw new Error(`Configured checkout ${localPath} already points at ${stripUrlCredentials(currentRemote)}`);
     }
-    if (!currentRemote.trim()) {
-      await git(localPath, ["remote", "add", "origin", request.url]);
+    if (!currentRemote) {
+      await git(localPath, ["remote", "add", "origin", remoteUrl], { signal });
+    } else if (currentRemote !== remoteUrl) {
+      // Same remote, but stored with a credential by an older version (or in a
+      // different serialisation): rewrite it so the secret leaves .git/config.
+      await git(localPath, ["remote", "set-url", "origin", remoteUrl], { signal });
     }
-    await git(localPath, ["fetch", "--prune", "origin"], authEnv);
+    await git(localPath, ["fetch", "--prune", "origin"], { env: authEnv, signal });
 
     // Bring the working tree to the remote tip with `reset --hard origin/<branch>`
     // rather than `pull --ff-only`. These checkouts are bot-owned and never hold
@@ -157,32 +209,87 @@ export async function ensureGitCheckout(request: GitCheckoutRequest): Promise<Gi
     // the pull's FETCH_HEAD merge resolution, which (after `fetch --prune` populates
     // every remote branch) aborts with "Cannot fast-forward to multiple branches"
     // under concurrency. A reset can't fast-forward-fail or hit a merge ambiguity.
-    const branch = request.branch?.trim() || (await tryGit(localPath, ["branch", "--show-current"])).trim();
-    if (branch && (await remoteBranchExists(localPath, branch, authEnv))) {
+    const branch = request.branch?.trim() || (await tryGit(localPath, ["branch", "--show-current"], { signal })).trim();
+    if (branch && (await remoteBranchExists(localPath, branch, { env: authEnv, signal }))) {
       if (request.branch?.trim()) {
         // checkout materializes the work tree; on a blobless clone this may lazily
         // fetch blobs, so it needs the same auth as the clone/fetch.
-        await git(localPath, ["checkout", branch], authEnv);
+        await git(localPath, ["checkout", branch], { env: authEnv, signal });
       }
-      await git(localPath, ["reset", "--hard", `origin/${branch}`], authEnv);
+      await git(localPath, ["reset", "--hard", `origin/${branch}`], { env: authEnv, signal });
     }
   });
 
+  await untilAborted(work, signal);
+
   return {
     localPath,
-    remoteUrl: request.url
+    remoteUrl
   };
+}
+
+function throwIfAborted(signal: AbortSignal | undefined): void {
+  if (signal?.aborted) {
+    const reason: unknown = signal.reason;
+    throw new GitCommandError(`git operation aborted: ${reason instanceof Error ? reason.message : "aborted"}`, {
+      aborted: true
+    });
+  }
+}
+
+// Settles with `work`, or rejects as soon as `signal` aborts — whichever comes
+// first. `work` keeps running after an abort (it holds the checkout lock and
+// releases it on its own); its eventual rejection is observed so it never surfaces
+// as an unhandled rejection.
+async function untilAborted<T>(work: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
+  if (!signal) {
+    return work;
+  }
+  work.catch(() => undefined);
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = (): void => {
+      try {
+        throwIfAborted(signal);
+      } catch (error) {
+        reject(error instanceof Error ? error : new Error("aborted"));
+      }
+    };
+    if (signal.aborted) {
+      onAbort();
+      return;
+    }
+    signal.addEventListener("abort", onAbort, { once: true });
+    work.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (error: unknown) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(error instanceof Error ? error : new Error(String(error)));
+      }
+    );
+  });
 }
 
 // Clones a fresh checkout, preferring a blobless partial clone (gated by
 // partialCloneEnabled / GIT_PARTIAL_CLONE). Adds `--no-tags` so the (potentially large) tag
 // namespace isn't fetched — source-sync and publishing resolve branches/commits,
 // never tags. If the remote rejects `--filter` (older/self-hosted Git without
-// partial-clone support), the partial directory is cleaned up and a plain clone is
-// retried, so a non-supporting remote still ends up with a working checkout.
+// partial-clone support), a plain clone is retried, so a non-supporting remote still
+// ends up with a working checkout.
+//
+// The clone is STAGED (IN43): git writes into a hidden sibling directory of the
+// final checkout, renamed into place only once the clone succeeded. A clone that
+// times out, fails, or whose process is killed therefore never leaves a half-written
+// `.git` at the checkout path — which every later call would otherwise mistake for a
+// usable checkout. Staging left by a killed process is swept on the next attempt
+// once it is older than any live clone could be.
 async function cloneCheckout(
   request: GitCheckoutRequest,
+  remoteUrl: string,
   localPath: string,
+  checkoutName: string,
   authEnv: Partial<NodeJS.ProcessEnv>
 ): Promise<void> {
   const baseArgs: string[] = [];
@@ -191,24 +298,19 @@ async function cloneCheckout(
   }
   baseArgs.push("--no-tags");
 
+  await removeStaleCloneStaging(request.checkoutRoot, checkoutName);
+  const target = { checkoutRoot: request.checkoutRoot, localPath, checkoutName, remoteUrl, authEnv };
+
   if (partialCloneEnabled()) {
     try {
-      await git(
-        request.checkoutRoot,
-        // `--` terminates option parsing so a `-`-prefixed url can never be read as
-        // a git option (belt-and-braces alongside assertAllowedGitUrl above).
-        ["clone", "--filter=blob:none", ...baseArgs, "--", request.url, localPath],
-        authEnv
-      );
+      await stagedClone(target, ["--filter=blob:none", ...baseArgs]);
       return;
     } catch (error) {
       const message = error instanceof Error ? error.message : "partial clone failed";
       // A partial clone failed. The likeliest recoverable cause is a remote that
-      // doesn't support the blob:none filter; anything else (bad URL, auth, network)
-      // is a genuine failure that must surface rather than masquerade as "no partial
-      // clone support". Either way a half-written checkout may be left behind, so
-      // remove it before deciding so a fallback retry starts from a clean directory.
-      await rm(localPath, { force: true, recursive: true }).catch(() => undefined);
+      // doesn't support the blob:none filter; anything else (bad URL, auth, network,
+      // timeout) is a genuine failure that must surface rather than masquerade as
+      // "no partial clone support".
       if (!isPartialCloneUnsupported(message)) {
         throw error instanceof Error ? error : new Error(message);
       }
@@ -216,7 +318,57 @@ async function cloneCheckout(
     }
   }
 
-  await git(request.checkoutRoot, ["clone", ...baseArgs, "--", request.url, localPath], authEnv);
+  await stagedClone(target, baseArgs);
+}
+
+interface CloneTarget {
+  checkoutRoot: string;
+  localPath: string;
+  checkoutName: string;
+  remoteUrl: string;
+  authEnv: Partial<NodeJS.ProcessEnv>;
+}
+
+async function stagedClone(target: CloneTarget, cloneArgs: string[]): Promise<void> {
+  const staging = await mkdtemp(path.join(target.checkoutRoot, cloneStagingPrefix(target.checkoutName)));
+  try {
+    // `--` terminates option parsing so a `-`-prefixed url can never be read as a
+    // git option (belt-and-braces alongside assertAllowedGitUrl).
+    await git(target.checkoutRoot, ["clone", ...cloneArgs, "--", target.remoteUrl, staging], {
+      env: target.authEnv,
+      timeoutMs: GIT_CLONE_TIMEOUT_MS
+    });
+    await moveCloneIntoPlace(staging, target.localPath);
+  } finally {
+    await rm(staging, { recursive: true, force: true }).catch(() => undefined);
+  }
+}
+
+// Renames a finished staged clone onto the checkout path. An existing EMPTY
+// directory there is replaced. If a checkout appeared meanwhile — another process on
+// a shared volume finished its own clone first — that one is kept and ours is
+// discarded with the staging directory.
+async function moveCloneIntoPlace(staging: string, localPath: string): Promise<void> {
+  if (existsSync(path.join(localPath, ".git"))) {
+    return;
+  }
+  if (existsSync(localPath)) {
+    if ((await readdir(localPath)).length > 0) {
+      throw new Error(
+        `Cannot place the clone at ${localPath}: the directory exists, is not a git checkout and is not empty. ` +
+          "Move it aside so the checkout can be created."
+      );
+    }
+    await rm(localPath, { recursive: true, force: true });
+  }
+  try {
+    await rename(staging, localPath);
+  } catch (error) {
+    if (existsSync(path.join(localPath, ".git"))) {
+      return;
+    }
+    throw error;
+  }
 }
 
 // True when a `--filter=blob:none` clone failed because the remote/host doesn't
@@ -288,12 +440,12 @@ export async function diffChangedFiles(
 ): Promise<DiffChangedFilesResult> {
   const maxDiffChars = options.maxDiffChars ?? 8_000;
   const subpathArgs = options.subpath?.trim() ? ["--", options.subpath.trim()] : [];
-  const authEnv = options.authEnv;
+  const runOptions: GitRunOptions = options.authEnv ? { env: options.authEnv } : {};
 
   const nameStatus = await git(
     localPath,
     ["diff", "--name-status", "-M", `${fromSha}..${toSha}`, ...subpathArgs],
-    authEnv
+    runOptions
   );
   const allEntries = parseNameStatus(nameStatus);
   const totalCount = allEntries.length;
@@ -319,7 +471,7 @@ export async function diffChangedFiles(
         )
       ]
     : subpathArgs;
-  const fullDiff = await git(localPath, ["diff", "-M", `${fromSha}..${toSha}`, ...patchPathspec], authEnv);
+  const fullDiff = await git(localPath, ["diff", "-M", `${fromSha}..${toSha}`, ...patchPathspec], runOptions);
 
   const diffByPath = splitUnifiedDiffByFile(fullDiff);
   const changes: SourceFileChange[] = [];
@@ -492,11 +644,7 @@ export async function listChangedMarkdown(
 // (bad/missing ref), so an undecidable check fails closed to a full reindex.
 export async function isAncestor(localPath: string, ancestorSha: string, descendantSha: string): Promise<boolean> {
   try {
-    await execFileAsync("git", ["merge-base", "--is-ancestor", ancestorSha, descendantSha], {
-      cwd: localPath,
-      timeout: GIT_SUBPROCESS_TIMEOUT_MS,
-      maxBuffer: GIT_SUBPROCESS_MAX_BUFFER
-    });
+    await git(localPath, ["merge-base", "--is-ancestor", ancestorSha, descendantSha]);
     return true;
   } catch {
     return false;
@@ -523,6 +671,8 @@ export interface RaisePullRequestRequest {
   // Name of an env var holding a per-repository PAT that overrides GITHUB_TOKEN
   // for this PR's creation. Absent means "use GITHUB_TOKEN".
   tokenEnv?: string;
+  // The calling job's abort signal; aborting cancels the in-flight GitHub request.
+  signal?: AbortSignal;
 }
 
 export interface RaisedPullRequest {
@@ -530,10 +680,16 @@ export interface RaisedPullRequest {
   number: number;
 }
 
-// Opens a pull request for an already-pushed branch. Returns undefined when the
-// remote host is unsupported or no token is configured, so callers can degrade
-// to a branch-only publish. Throws only when a supported host's API rejects the
-// request, so genuine failures surface rather than being silently swallowed.
+// Opens a pull request for an already-pushed branch — idempotently (P26). Returns
+// undefined when the remote host is unsupported or no token is configured, so
+// callers can degrade to a branch-only publish. Throws when a supported host's API
+// fails, so the publish job fails and the queue retries it.
+//
+// A retry must never open a second PR for the same branch, and must recover the PR
+// when an earlier attempt created it but lost the response (timeout, crash). So an
+// OPEN PR for the head branch is looked up first and reused; only when none exists
+// is one created, and a create that races another (422 "already exists") adopts the
+// PR that won.
 export async function raisePullRequest(request: RaisePullRequestRequest): Promise<RaisedPullRequest | undefined> {
   const slug = parseGitHubSlug(request.remoteUrl);
   if (!slug) {
@@ -545,36 +701,45 @@ export async function raisePullRequest(request: RaisePullRequestRequest): Promis
     return undefined;
   }
 
-  const response = await githubFetch(`https://api.github.com/repos/${slug.owner}/${slug.repo}/pulls`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      Accept: "application/vnd.github+json",
-      "X-GitHub-Api-Version": "2022-11-28",
-      "Content-Type": "application/json",
-      "User-Agent": "markdown-magpie"
+  const existing = await findOpenPullRequest(slug, token, request.headBranch, request.signal);
+  if (existing) {
+    return existing;
+  }
+
+  const response = await githubFetch(
+    `https://api.github.com/repos/${slug.owner}/${slug.repo}/pulls`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "Content-Type": "application/json",
+        "User-Agent": "markdown-magpie"
+      },
+      body: JSON.stringify({
+        title: request.title,
+        head: request.headBranch,
+        base: request.baseBranch,
+        body: request.body
+      })
     },
-    body: JSON.stringify({
-      title: request.title,
-      head: request.headBranch,
-      base: request.baseBranch,
-      body: request.body
-    })
-  });
+    request.signal
+  );
 
   if (!response.ok) {
     const detail = await response.text().catch(() => "");
-    // A branch that already has an open PR returns 422. That's not a failure for
-    // us — the desired end state (an open PR for this branch) already holds — so
-    // adopt the existing one and return it instead of throwing and forcing the
-    // publication outbox to retry a request that can never succeed.
+    // A branch that already has an open PR returns 422 — a concurrent attempt won
+    // the race since the lookup above. The desired end state holds: adopt it.
     if (response.status === 422 && /already exists/i.test(detail)) {
-      const existing = await findOpenPullRequest(slug, token, request.headBranch);
-      if (existing) {
-        return existing;
+      const adopted = await findOpenPullRequest(slug, token, request.headBranch, request.signal);
+      if (adopted) {
+        return adopted;
       }
     }
-    throw new Error(`GitHub pull request creation failed (${response.status}): ${detail.slice(0, 500)}`);
+    throw new Error(
+      `GitHub pull request creation failed (${response.status}): ${redactCredentials(detail.slice(0, 500))}`
+    );
   }
 
   const data = (await response.json()) as { html_url?: string; number?: number };
@@ -585,35 +750,55 @@ export async function raisePullRequest(request: RaisePullRequestRequest): Promis
   return { url: data.html_url, number: data.number };
 }
 
-// Looks up the open pull request already raised for a branch, so a duplicate
-// create attempt (422) can resolve to the live PR. Returns undefined when none
-// is found or the lookup fails — the caller then surfaces the original error.
+// Looks up the open pull request already raised for a branch. Returns undefined
+// when there is none. A failed lookup THROWS: reporting "no PR" on an outage would
+// make the caller create a duplicate, and failing the job is what gets it retried.
 async function findOpenPullRequest(
   slug: { owner: string; repo: string },
   token: string,
-  headBranch: string
+  headBranch: string,
+  signal?: AbortSignal
 ): Promise<RaisedPullRequest | undefined> {
   const head = `${slug.owner}:${headBranch}`;
   const url = `https://api.github.com/repos/${slug.owner}/${slug.repo}/pulls?state=open&head=${encodeURIComponent(head)}`;
-  let response: Response;
-  try {
-    response = await githubFetch(url, {
+  const response = await githubFetch(
+    url,
+    {
       headers: {
         Authorization: `Bearer ${token}`,
         Accept: "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
         "User-Agent": "markdown-magpie"
       }
-    });
-  } catch {
-    return undefined;
-  }
+    },
+    signal
+  );
   if (!response.ok) {
+    const detail = await response.text().catch(() => "");
+    throw new Error(
+      `GitHub pull request lookup failed (${response.status}): ${redactCredentials(detail.slice(0, 500))}`
+    );
+  }
+  const list: unknown = await response.json();
+  if (!Array.isArray(list)) {
+    throw new Error("GitHub pull request lookup returned an unexpected response");
+  }
+  for (const entry of list) {
+    const pr = toRaisedPullRequest(entry);
+    if (pr) {
+      return pr;
+    }
+  }
+  return undefined;
+}
+
+function toRaisedPullRequest(value: unknown): RaisedPullRequest | undefined {
+  if (typeof value !== "object" || value === null) {
     return undefined;
   }
-  const list = (await response.json().catch(() => [])) as Array<{ html_url?: string; number?: number }>;
-  const match = list.find((pr) => pr.html_url && typeof pr.number === "number");
-  return match ? { url: match.html_url as string, number: match.number as number } : undefined;
+  const htmlUrl = "html_url" in value ? value.html_url : undefined;
+  const number = "number" in value ? value.number : undefined;
+  return typeof htmlUrl === "string" && htmlUrl && typeof number === "number" ? { url: htmlUrl, number } : undefined;
 }
 
 // Whether an open PR still merges cleanly into its base. GitHub computes this
@@ -917,46 +1102,101 @@ function parseGitHubSlug(remoteUrl: string | undefined): { owner: string; repo: 
   return { owner: segments[0], repo: segments[1].replace(/\.git$/, "") };
 }
 
+export interface PublishOptions {
+  // The publish job's abort signal. Aborting kills the in-flight git child and
+  // rejects the publish; the temporary worktree is still cleaned up.
+  signal?: AbortSignal;
+}
+
+// Everything a publish needs once it holds the checkout lock: the root has been
+// repaired after any killed earlier publish, the remote branch state is known, and
+// the push credential resolved.
+interface PreparedPublish {
+  root: string;
+  authEnv: Partial<NodeJS.ProcessEnv>;
+  branchExists: boolean;
+  signal: AbortSignal | undefined;
+}
+
+// Repairs what a publish killed mid-way leaves behind (P22–P23) and reads the
+// remote branch state. MUST run under the checkout lock.
+async function preparePublish(
+  root: string,
+  repository: RepositoryRef,
+  branchName: string,
+  signal: AbortSignal | undefined
+): Promise<PreparedPublish> {
+  throwIfAborted(signal);
+  await clearStaleGitLocks(root);
+  await releaseStaleBranchWorktrees(root, branchName, { signal });
+  const remoteUrl = await ensureRemote(root, signal);
+  const authEnv = buildGitAuthEnv(remoteUrl, repository.tokenEnv);
+  // `git`, not `tryGit`: an unreachable remote must fail the publish (and so be
+  // retried) rather than read as "branch absent" and take the create path.
+  const remoteBranch = await git(root, ["ls-remote", "--heads", "origin", branchName], { env: authEnv, signal });
+  return { root, authEnv, branchExists: Boolean(remoteBranch.trim()), signal };
+}
+
+// Adds the temporary worktree for `branchName`: on the existing remote branch tip
+// when `fromRemoteBranch`, else cut fresh from the default base.
+async function addPublishWorktree(
+  prepared: PreparedPublish,
+  repository: RepositoryRef,
+  branchName: string,
+  worktreePath: string,
+  fromRemoteBranch: boolean
+): Promise<void> {
+  const { root, authEnv, signal } = prepared;
+  if (fromRemoteBranch) {
+    await git(root, ["fetch", "origin", branchName], { env: authEnv, signal });
+    await git(root, ["worktree", "add", "-B", branchName, worktreePath, `origin/${branchName}`], { signal });
+    return;
+  }
+  const baseRef = await resolveBaseRef(root, repository);
+  await git(root, ["worktree", "add", "-B", branchName, worktreePath, baseRef], { signal });
+}
+
+// The remote URL a publish reports back to the API — never with a credential.
+function reportedRemoteUrl(repository: RepositoryRef): string | undefined {
+  const url = repository.remoteUrl ?? repository.git?.remoteUrl;
+  return url ? stripUrlCredentials(url) : undefined;
+}
+
 export class LocalGitProposalPublisher {
-  async publish(request: PublishProposalBranchRequest): Promise<PublishProposalBranchResponse> {
+  async publish(
+    request: PublishProposalBranchRequest,
+    options: PublishOptions = {}
+  ): Promise<PublishProposalBranchResponse> {
     // Serialize worktree add/push against this checkout — they mutate the shared
     // `.git` (refs, config, worktree list) and would race a concurrent publish or
     // ensureGitCheckout on the same root (e.g. "could not lock config file").
     const root = request.repository.git?.workTreeRoot ?? request.repository.localPath;
-    return withCheckoutLock(root, () => this.publishLocked(request, root));
+    return withCheckoutLock(root, () => this.publishLocked(request, root, options.signal));
   }
 
   private async publishLocked(
     request: PublishProposalBranchRequest,
-    root: string
+    root: string,
+    signal: AbortSignal | undefined
   ): Promise<PublishProposalBranchResponse> {
     const targetPath = resolveTargetPath(request.repository, request.targetPath);
-    const remoteUrl = await ensureRemote(root);
-    const authEnv = buildGitAuthEnv(remoteUrl, request.repository.tokenEnv);
-
-    const remoteBranch = await tryGit(root, ["ls-remote", "--heads", "origin", request.branchName], authEnv);
-    const branchExists = Boolean(remoteBranch.trim());
+    const prepared = await preparePublish(root, request.repository, request.branchName, signal);
+    const { authEnv, branchExists } = prepared;
     // A regeneration re-bases on the fresh default tip and force-pushes; a normal
     // update fast-forwards the existing bot-owned branch. Both differ from a create.
     const updateInPlace = branchExists && !request.regenerate;
+    const remoteUrl = reportedRemoteUrl(request.repository);
 
     const tempRoot = await mkdtemp(path.join(tmpdir(), "markdown-magpie-worktree-"));
     const worktreePath = path.join(tempRoot, "checkout");
 
     try {
-      if (updateInPlace) {
-        // Update path: base the worktree on the existing remote branch tip so our
-        // new commit is a fast-forward — these branches are bot-owned, so the tip
-        // is always our last push and no force is ever needed.
-        await git(root, ["fetch", "origin", request.branchName], authEnv);
-        await git(root, ["worktree", "add", "-B", request.branchName, worktreePath, `origin/${request.branchName}`]);
-      } else {
-        // Create OR regenerate: cut the branch from the current default-base tip. For
-        // a regeneration this discards the stale branch history so the rewritten file
-        // sits directly on the new base — the conflict the old tip carried is gone.
-        const baseRef = await resolveBaseRef(root, request.repository);
-        await git(root, ["worktree", "add", "-B", request.branchName, worktreePath, baseRef]);
-      }
+      // Update path: base the worktree on the existing remote branch tip so our new
+      // commit is a fast-forward — these branches are bot-owned, so the tip is always
+      // our last push and no force is ever needed. Create OR regenerate: cut the
+      // branch from the current default-base tip; for a regeneration this discards the
+      // stale branch history so the rewritten file sits directly on the new base.
+      await addPublishWorktree(prepared, request.repository, request.branchName, worktreePath, updateInPlace);
 
       const absoluteTargetPath = path.resolve(worktreePath, targetPath);
       assertWithinRoot(worktreePath, absoluteTargetPath);
@@ -964,60 +1204,41 @@ export class LocalGitProposalPublisher {
       await mkdir(path.dirname(absoluteTargetPath), { recursive: true });
       await assertRealParentWithin(worktreePath, request.repository, absoluteTargetPath);
       await writeFile(absoluteTargetPath, request.markdown, "utf8");
-      await git(worktreePath, ["add", "--", targetPath]);
+      await git(worktreePath, ["add", "--", targetPath], { signal });
 
-      const status = await git(worktreePath, ["status", "--porcelain", "--", targetPath]);
+      const status = await git(worktreePath, ["status", "--porcelain", "--", targetPath], { signal });
       if (!status.trim()) {
         // No content change against the base. On a fresh create the generated doc is
         // a no-op — the base already carries this exact content — so there is nothing
         // to publish: return the base tip flagged noChange rather than throwing, and
         // the caller settles the proposal as superseded. On an in-place update it
-        // means the regenerated doc is identical — return the current tip. On a
-        // regenerate it means the fresh base already carries this exact content, so
-        // the branch (now reset to base) needs force-pushing to clear the stale
-        // divergence, then we return the base tip.
-        const head = (await git(worktreePath, ["rev-parse", "HEAD"])).trim();
+        // means the document is identical to the branch tip — which is also how a
+        // RETRY of a publish whose push landed resolves (P25): the tip is returned
+        // and nothing is pushed twice. On a regenerate it means the fresh base already
+        // carries this exact content, so the branch (now reset to base) needs
+        // force-pushing to clear the stale divergence, then we return the base tip.
+        const head = (await git(worktreePath, ["rev-parse", "HEAD"], { signal })).trim();
         if (!branchExists) {
-          return {
-            branchName: request.branchName,
-            commitSha: head,
-            remoteUrl: request.repository.remoteUrl ?? request.repository.git?.remoteUrl,
-            noChange: true
-          };
+          return { branchName: request.branchName, commitSha: head, remoteUrl, noChange: true };
         }
         if (request.regenerate) {
-          await git(worktreePath, ["push", "--force-with-lease", "-u", "origin", request.branchName], authEnv);
+          await git(worktreePath, ["push", "--force-with-lease", "-u", "origin", request.branchName], {
+            env: authEnv,
+            signal
+          });
         }
-        return {
-          branchName: request.branchName,
-          commitSha: head,
-          remoteUrl: request.repository.remoteUrl ?? request.repository.git?.remoteUrl
-        };
+        return { branchName: request.branchName, commitSha: head, remoteUrl };
       }
 
-      const { name: authorName, email: authorEmail } = resolveCommitterIdentity();
-      await git(worktreePath, [
-        "-c",
-        `user.name=${authorName}`,
-        "-c",
-        `user.email=${authorEmail}`,
-        "commit",
-        "-m",
-        request.title
-      ]);
-      const commitSha = (await git(worktreePath, ["rev-parse", "HEAD"])).trim();
+      const commitSha = await commitWorktree(worktreePath, request.title, signal);
       // A regeneration rewrote history onto the fresh base, so the remote branch is
       // no longer an ancestor — force-push (lease-guarded) to replace it in place.
       const pushArgs = request.regenerate
         ? ["push", "--force-with-lease", "-u", "origin", request.branchName]
         : ["push", "-u", "origin", request.branchName];
-      await git(worktreePath, pushArgs, authEnv);
+      await git(worktreePath, pushArgs, { env: authEnv, signal });
 
-      return {
-        branchName: request.branchName,
-        commitSha,
-        remoteUrl: request.repository.remoteUrl ?? request.repository.git?.remoteUrl
-      };
+      return { branchName: request.branchName, commitSha, remoteUrl };
     } finally {
       await cleanupWorktree(root, worktreePath, tempRoot);
     }
@@ -1026,14 +1247,18 @@ export class LocalGitProposalPublisher {
   // Publishes a multi-file changeset (writes and deletes) to a single new
   // branch in one commit. If the branch already exists, updates it in place so
   // folded/reconciled changesets can republish onto their existing PR branch.
-  async publishChangeset(request: PublishChangesetRequest): Promise<PublishProposalBranchResponse> {
+  async publishChangeset(
+    request: PublishChangesetRequest,
+    options: PublishOptions = {}
+  ): Promise<PublishProposalBranchResponse> {
     const root = request.repository.git?.workTreeRoot ?? request.repository.localPath;
-    return withCheckoutLock(root, () => this.publishChangesetLocked(request, root));
+    return withCheckoutLock(root, () => this.publishChangesetLocked(request, root, options.signal));
   }
 
   private async publishChangesetLocked(
     request: PublishChangesetRequest,
-    root: string
+    root: string,
+    signal: AbortSignal | undefined
   ): Promise<PublishProposalBranchResponse> {
     // Validate the WHOLE file-set before touching git, so a single bad entry never
     // leaves a half-applied worktree behind (the API rejects these too; this is the
@@ -1042,22 +1267,15 @@ export class LocalGitProposalPublisher {
     if (unsafe) {
       throw new Error(`Refusing to publish changeset: ${JSON.stringify(unsafe.path)} — ${unsafe.reason}`);
     }
-    const remoteUrl = await ensureRemote(root);
-    const authEnv = buildGitAuthEnv(remoteUrl, request.repository.tokenEnv);
-    const remoteBranch = await tryGit(root, ["ls-remote", "--heads", "origin", request.branchName], authEnv);
-    const branchExists = Boolean(remoteBranch.trim());
+    const prepared = await preparePublish(root, request.repository, request.branchName, signal);
+    const { authEnv, branchExists } = prepared;
+    const remoteUrl = reportedRemoteUrl(request.repository);
 
     const tempRoot = await mkdtemp(path.join(tmpdir(), "markdown-magpie-worktree-"));
     const worktreePath = path.join(tempRoot, "checkout");
 
     try {
-      if (branchExists) {
-        await git(root, ["fetch", "origin", request.branchName], authEnv);
-        await git(root, ["worktree", "add", "-B", request.branchName, worktreePath, `origin/${request.branchName}`]);
-      } else {
-        const baseRef = await resolveBaseRef(root, request.repository);
-        await git(root, ["worktree", "add", "-B", request.branchName, worktreePath, baseRef]);
-      }
+      await addPublishWorktree(prepared, request.repository, request.branchName, worktreePath, branchExists);
 
       for (const change of request.changes) {
         const repoRelativePath = resolveTargetPath(request.repository, change.path);
@@ -1068,7 +1286,7 @@ export class LocalGitProposalPublisher {
         await assertNoSymlinkOnPath(worktreePath, repoRelativePath);
 
         if (change.delete) {
-          await tryGit(worktreePath, ["rm", "--ignore-unmatch", "--", repoRelativePath]);
+          await tryGit(worktreePath, ["rm", "--ignore-unmatch", "--", repoRelativePath], { signal });
           // git rm already removes the file; unlink covers untracked paths.
           await unlink(absolutePath).catch(() => undefined);
           continue;
@@ -1077,45 +1295,40 @@ export class LocalGitProposalPublisher {
         await mkdir(path.dirname(absolutePath), { recursive: true });
         await assertRealParentWithin(worktreePath, request.repository, absolutePath);
         await writeFile(absolutePath, change.content ?? "", "utf8");
-        await git(worktreePath, ["add", "--", repoRelativePath]);
+        await git(worktreePath, ["add", "--", repoRelativePath], { signal });
       }
 
-      const status = await git(worktreePath, ["status", "--porcelain"]);
+      const status = await git(worktreePath, ["status", "--porcelain"], { signal });
       if (!status.trim()) {
-        const head = (await git(worktreePath, ["rev-parse", "HEAD"])).trim();
+        const head = (await git(worktreePath, ["rev-parse", "HEAD"], { signal })).trim();
         // A no-op on a fresh create: the base already carries this exact file-set, so
         // there is nothing to publish. Flag noChange rather than throwing, mirroring
-        // the single-file publisher; an existing branch just returns its tip.
+        // the single-file publisher; an existing branch (including a retry whose push
+        // already landed, P25) just returns its tip.
         return {
           branchName: request.branchName,
           commitSha: head,
-          remoteUrl: request.repository.remoteUrl ?? request.repository.git?.remoteUrl,
+          remoteUrl,
           ...(branchExists ? {} : { noChange: true })
         };
       }
 
-      const { name: authorName, email: authorEmail } = resolveCommitterIdentity();
-      await git(worktreePath, [
-        "-c",
-        `user.name=${authorName}`,
-        "-c",
-        `user.email=${authorEmail}`,
-        "commit",
-        "-m",
-        request.title
-      ]);
-      const commitSha = (await git(worktreePath, ["rev-parse", "HEAD"])).trim();
-      await git(worktreePath, ["push", "-u", "origin", request.branchName], authEnv);
+      const commitSha = await commitWorktree(worktreePath, request.title, signal);
+      await git(worktreePath, ["push", "-u", "origin", request.branchName], { env: authEnv, signal });
 
-      return {
-        branchName: request.branchName,
-        commitSha,
-        remoteUrl: request.repository.remoteUrl ?? request.repository.git?.remoteUrl
-      };
+      return { branchName: request.branchName, commitSha, remoteUrl };
     } finally {
       await cleanupWorktree(root, worktreePath, tempRoot);
     }
   }
+}
+
+async function commitWorktree(worktreePath: string, title: string, signal: AbortSignal | undefined): Promise<string> {
+  const { name: authorName, email: authorEmail } = resolveCommitterIdentity();
+  await git(worktreePath, ["-c", `user.name=${authorName}`, "-c", `user.email=${authorEmail}`, "commit", "-m", title], {
+    signal
+  });
+  return (await git(worktreePath, ["rev-parse", "HEAD"], { signal })).trim();
 }
 
 export interface MergeLocalProposalBranchRequest {
@@ -1220,8 +1433,8 @@ function resolveCommitterIdentity(): { name: string; email: string } {
   return { name, email };
 }
 
-async function ensureRemote(root: string): Promise<string> {
-  const remote = await git(root, ["remote", "get-url", "origin"]);
+async function ensureRemote(root: string, signal?: AbortSignal): Promise<string> {
+  const remote = await git(root, ["remote", "get-url", "origin"], { signal });
   if (!remote.trim()) {
     throw new Error("Cannot publish proposal because git remote 'origin' is not configured");
   }
@@ -1287,9 +1500,12 @@ async function resolveBaseRef(root: string, repository: RepositoryRef): Promise<
 
 // GitHub REST call with an abort-based timeout so the PR poller can't hang on a
 // stalled connection. The TimeoutError is rethrown as a readable message.
-async function githubFetch(url: string, init: RequestInit): Promise<Response> {
+// An optional caller signal (the job's) is combined with the timeout, so aborting
+// the job cancels the request too.
+async function githubFetch(url: string, init: RequestInit, signal?: AbortSignal): Promise<Response> {
+  const timeout = AbortSignal.timeout(GITHUB_API_TIMEOUT_MS);
   try {
-    return await fetch(url, { ...init, signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS) });
+    return await fetch(url, { ...init, signal: signal ? AbortSignal.any([timeout, signal]) : timeout });
   } catch (error) {
     if (error instanceof DOMException && error.name === "TimeoutError") {
       throw new Error(`GitHub request timed out after ${GITHUB_API_TIMEOUT_MS}ms`, { cause: error });
@@ -1298,42 +1514,12 @@ async function githubFetch(url: string, init: RequestInit): Promise<Response> {
   }
 }
 
-async function git(cwd: string, args: string[], env?: Partial<NodeJS.ProcessEnv>): Promise<string> {
-  return withGitRetry(async () => {
-    try {
-      const result = await execFileAsync("git", args, {
-        cwd,
-        // GIT_ALLOW_PROTOCOL is set on EVERY git invocation as an in-git backstop
-        // for #285: git itself refuses any transport outside the allowlist (notably
-        // the `ext::` RCE helper), even for a lazy blob fetch on an already-cloned
-        // repo. Placed after process.env so it wins over any operator value, and
-        // before `env` (which only ever carries GIT_CONFIG_* auth, never this key).
-        env: { ...process.env, GIT_ALLOW_PROTOCOL: GIT_ALLOW_PROTOCOL_VALUE, ...(env ?? {}) },
-        timeout: GIT_SUBPROCESS_TIMEOUT_MS,
-        maxBuffer: GIT_SUBPROCESS_MAX_BUFFER
-      });
-      return result.stdout;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "git command failed";
-      throw new Error(message, { cause: error });
-    }
-  });
-}
-
-async function tryGit(cwd: string, args: string[], env?: Partial<NodeJS.ProcessEnv>): Promise<string> {
-  try {
-    return await git(cwd, args, env);
-  } catch {
-    return "";
-  }
-}
-
 // Authenticate HTTPS git operations using a host-matched token, injected as an
 // http.extraheader via GIT_CONFIG_* environment variables (git >= 2.31). The
 // secret travels in the child's environment only — never in argv or the remote
 // URL — so it can't leak into the command line that git() echoes back in error
-// messages (which are surfaced to the UI). Returns {} when no token applies, so
-// public repos, SSH remotes, and credential-embedded URLs keep working unchanged.
+// messages (which are surfaced to the UI). Returns {} when no credential applies
+// (public repos, ssh/file remotes, any non-https URL).
 export function buildGitAuthEnv(remoteUrl: string | undefined, tokenEnv?: string): Partial<NodeJS.ProcessEnv> {
   const header = buildAuthHeader(remoteUrl, tokenEnv);
   if (!header) {
@@ -1381,13 +1567,18 @@ function buildAuthHeader(remoteUrl: string | undefined, tokenEnv?: string): stri
     return undefined;
   }
 
-  // SSH (git@/ssh://) authenticates with keys; credential-embedded URLs already
-  // carry their own auth — don't override either.
-  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+  // Credentials only ever travel over https (TM38): never over plain http (clear
+  // text), and never for ssh (keys), git:// or file:// remotes, which have no use
+  // for an HTTP header — attaching one there would only widen where a token goes.
+  if (parsed.protocol !== "https:") {
     return undefined;
   }
-  if (parsed.username || parsed.password) {
-    return undefined;
+  // A credential embedded in the configured URL is honoured — it is what the
+  // operator configured for this remote — but sent as a header, because the URL git
+  // is given (and stores in .git/config) is always the stripped form (TM36).
+  const embedded = embeddedHttpsCredentials(remoteUrl);
+  if (embedded) {
+    return basicAuthHeader(embedded.username, embedded.password);
   }
 
   const override = resolveOverrideToken(tokenEnv);
@@ -1413,9 +1604,12 @@ function basicAuthHeader(username: string, secret: string): string {
   return `Authorization: Basic ${encoded}`;
 }
 
+// Never takes the job's signal: cleanup must run even (especially) after an abort,
+// so an aborted publish does not itself leave a registered worktree behind.
 async function cleanupWorktree(root: string, worktreePath: string, tempRoot: string): Promise<void> {
-  await tryGit(root, ["worktree", "remove", "--force", worktreePath]);
+  await tryGit(root, ["worktree", "remove", "--force", "--force", worktreePath]);
   await rm(tempRoot, { force: true, recursive: true });
+  await tryGit(root, ["worktree", "prune"]);
 }
 
 function assertWithinRoot(root: string, candidate: string): void {
@@ -1465,12 +1659,8 @@ async function assertRealParentWithin(
   }
 }
 
-async function remoteBranchExists(
-  root: string,
-  branch: string,
-  authEnv?: Partial<NodeJS.ProcessEnv>
-): Promise<boolean> {
-  const result = await tryGit(root, ["ls-remote", "--heads", "origin", branch], authEnv);
+async function remoteBranchExists(root: string, branch: string, options: GitRunOptions = {}): Promise<boolean> {
+  const result = await tryGit(root, ["ls-remote", "--heads", "origin", branch], options);
   return Boolean(result.trim());
 }
 
