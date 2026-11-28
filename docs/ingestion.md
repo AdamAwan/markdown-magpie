@@ -61,9 +61,48 @@ zero embedding calls. It owns everything up to and including a populated, embedd
   travels, so the referenced variable MUST be set on **both** the API and the watcher. The
   override applies to clone/fetch/push **and** to the repo's GitHub PR create / comment /
   poll / review calls, and works for GitHub Enterprise / self-hosted HTTPS remotes with no
-  host default. SSH remotes and credential-embedded URLs authenticate on their own and
-  ignore `tokenEnv`; `tokenEnv` is honoured on `git` repositories only (ignored on
-  `local` / `internet` / `agent`).
+  host default. SSH remotes authenticate with keys and ignore `tokenEnv`; a credential
+  embedded in an `https` URL takes precedence over `tokenEnv` (but is sent as a header,
+  never stored — [TM36](./threat-model.md)); `tokenEnv` is honoured on `git` repositories
+  only (ignored on `local` / `internet` / `agent`). A token is only ever attached over
+  `https` ([TM38](./threat-model.md)).
+
+## Checkout robustness
+
+Checkouts live on a volume shared across restarts, so a git process that dies part-way
+must never leave a checkout every later sync trips over.
+
+- **IN41** — **A first clone has its own, much larger timeout.** `git clone` is bounded by
+  `GIT_CLONE_TIMEOUT_MS` (default **30 min**); every other git call — fetch, reset,
+  checkout, diff, push — stays on `GIT_TIMEOUT_MS` (default 120 s). Why: a large first
+  clone legitimately takes far longer than an incremental fetch, and bounding it by the
+  fetch timeout made it time out on every attempt, forever.
+- **IN42** — **Stale lock files are cleared before a sync.** Before fetching into an
+  existing checkout, `ensureGitCheckout` removes top-level git lock files older than
+  2 × `GIT_TIMEOUT_MS`, under the checkout lock — the same rule as
+  [P23](./proposals-and-publishing.md).
+- **IN43** — **A clone is staged and renamed into place.** `git clone` writes into a hidden
+  sibling of the checkout (`.<name>.clone-XXXXXX` in the checkout root) that is renamed
+  onto the checkout path only after the clone succeeded, and is deleted on any failure.
+  A timed-out, failed or killed clone therefore never leaves a half-written `.git` at the
+  checkout path, which later calls would mistake for a usable checkout. Staging left by a
+  killed **process** is swept on the next clone attempt once it is older than
+  2 × `GIT_CLONE_TIMEOUT_MS` (a younger one may be a clone still running in another
+  process). An existing **empty** directory at the checkout path is replaced; a non-empty
+  non-checkout directory is refused with a named error and left untouched. If another
+  process finished its clone first, that checkout is kept and ours discarded. A first
+  clone does **not** take the job's abort signal: the caller stops waiting on abort, but
+  the clone runs on (bounded by `GIT_CLONE_TIMEOUT_MS`) so the retry — which waits on the
+  checkout lock — reuses it instead of starting the long download again.
+- **IN44** — **Aborts reach source checkouts.** `ensureGitCheckout` and
+  `prepareSourceWorkspaces` accept the job's abort signal: an abort kills an in-flight
+  fetch/checkout/reset (see [P24](./proposals-and-publishing.md)) and rejects the call
+  promptly, and `prepareSourceWorkspaces` propagates it rather than degrading the source
+  to an "unavailable" note. An unavailable source's note — which reaches both a log line
+  and the model's prompt — is credential-redacted.
+  > ⚠️ The source-grounded runners (`runners/chat.ts`, `runners/cli.ts`) do not yet pass
+  > their job signal to `prepareSourceWorkspaces`; until they do, a source checkout in an
+  > AI job is bounded only by the git timeouts.
 
 ## What gets indexed
 
@@ -316,12 +355,14 @@ the backlog, and retrieval stays keyword-only until sections carry vectors.
 | Index-time background embedding | `apps/api/src/platform/background-embedder.ts`, `apps/api/src/stores/embed-sections.ts` |
 | Index endpoint (enqueue-free) & search | `apps/api/src/features/knowledge/{routes,service}.ts` |
 | Repository resolution / checkout at startup | `apps/api/src/platform/repositories.ts`, `apps/api/src/stores/knowledge-repositories.ts` |
+| Clone/sync, staging, timeouts, abort (IN41–IN44) | `packages/git/src/index.ts` (`ensureGitCheckout`, `cloneCheckout`, `stagedClone`), `packages/git/src/run-git.ts`, `packages/git/src/checkout-repair.ts`, `apps/watcher/src/source-workspace.ts` |
 | Embedding provider + model id / retrieval mode | `apps/api/src/platform/providers.ts` |
 
 ## Tests (behavioural contract)
 
 `packages/markdown/src/{index,advisory}.test.ts`,
 `packages/git/src/changed-markdown.test.ts`,
+`packages/git/src/{ensure-checkout,checkout-repair,run-git}.test.ts`, `apps/watcher/src/source-workspace.test.ts` (IN41–IN44),
 `apps/api/src/stores/{knowledge-index,knowledge-index-incremental,knowledge-index-branch,embed-sections,postgres-knowledge-store,knowledge-repositories}.test.ts`,
 `apps/api/src/features/knowledge/routes.test.ts`,
 `apps/api/src/features/proposals/register-check.test.ts`,

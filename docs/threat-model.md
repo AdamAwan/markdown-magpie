@@ -168,6 +168,38 @@ without realising it was load-bearing.
   surface is a residual risk bounded by the operator's own source/destination config, not
   by an attacker-supplied URL.
 
+- **TM36** — **Git credentials are never stored with a remote.** An operator MAY configure
+  a credential-embedded remote (`https://user:token@host/…`), but the URL git is given —
+  and so writes to `.git/config` as `origin` — is always the credential-free form
+  (`stripUrlCredentials`, `packages/git/src/credentials.ts`); the embedded credential
+  travels only in the git child's environment as an `http.extraheader`
+  (`buildGitAuthEnv`). A checkout whose stored origin still embeds a credential (cloned by
+  an older version) is recognised as the same remote and rewritten with `git remote
+  set-url` on its next sync. `ensureGitCheckout` returns, and the publisher reports, the
+  stripped URL. The ssh username (`git@`) is kept — it is not a secret — but an ssh
+  password is dropped. Why: `.git/config` is re-read by the indexer as the repository's
+  `remoteUrl`, which flows into the console, the DB and the watcher's execution context.
+- **TM37** — **Credentials are redacted from anything built from git output or a URL.**
+  Every failed git subprocess surfaces as a `GitCommandError` whose message (argv +
+  stderr) has URL userinfo and echoed `Authorization:` values redacted
+  (`redactCredentials`); the raw `execFile` error is deliberately not attached as
+  `cause`. URL-guard errors, the publish runner's PR-failure error, GitHub API error
+  details and unavailable-source notes (which also reach the model's prompt) are redacted
+  too. The API strips userinfo from `remoteUrl`/`git.remoteUrl` on everything it hands
+  out — `GET /api/knowledge/repositories`, the index response, and the watcher's
+  proposal execution context (`withoutRemoteCredentials`,
+  `apps/api/src/platform/repositories.ts`) — because a DB-persisted or hand-configured
+  remote can still embed one. A consequence: a credential embedded in a destination URL
+  no longer reaches the watcher; the watcher authenticates with its own `GITHUB_TOKEN` /
+  `AZURE_DEVOPS_PAT` / `tokenEnv`, like every other credential-free execution context.
+- **TM38** — **Auth is attached over https only.** The token header (`GITHUB_TOKEN`,
+  `AZURE_DEVOPS_PAT`, `tokenEnv` override, or an embedded https credential) is attached
+  only to `https:` remotes — never to `http:` (clear text), `ssh:`/scp-like (keys),
+  `git:` or `file:`. A remote URL that embeds a credential over plain `http:` is refused
+  by `assertAllowedGitUrl` with a credential-redacted error rather than silently cloned.
+  Every git child also runs with `GIT_TERMINAL_PROMPT=0`, so a missing credential fails
+  fast instead of hanging on a prompt.
+
 ## The mandatory human-review gate (primary control)
 
 This is the control that makes T1 tolerable — the backstop for everything a steered model
@@ -267,6 +299,7 @@ The non-negotiable is TM9: the human-review gate stays mandatory and enforced.
 | Watcher HTTP-only, no DB (TM6) | `apps/watcher/src/http-client.ts`, `apps/watcher/src/worker-loop.ts` |
 | Bounded, allowlisted web fetch (TM7) | `apps/watcher/src/fetch-url.ts`, `apps/watcher/src/source-tools.ts`, `apps/watcher/src/runners/source-agent.ts` |
 | Git-transport allowlist (TM8) | `packages/core/src/index.ts` (`isAllowedGitCloneUrl`), `packages/git/src/index.ts` (`assertAllowedGitUrl`, `GIT_ALLOW_PROTOCOL`), `packages/jobs/src/schemas.ts`, `apps/api/src/features/jobs/service.ts` |
+| Credential hygiene for git remotes (TM36–TM38) | `packages/git/src/credentials.ts` (`stripUrlCredentials`, `redactCredentials`, `embeddedHttpsCredentials`), `packages/git/src/run-git.ts` (`GitCommandError`), `packages/git/src/index.ts` (`ensureGitCheckout`, `buildGitAuthEnv`, `assertAllowedGitUrl`), `apps/api/src/platform/repositories.ts` (`withoutRemoteCredentials`), `apps/api/src/features/knowledge/service.ts` |
 | Review gate: PR-only publish, no auto-merge (TM9–TM12) | `apps/api/src/features/proposals/{routes,service}.ts`, `packages/git/src/index.ts` (`LocalGitProposalPublisher`, `applyPullRequestTransition`) |
 | Scope enforcement, fail-closed (TM11) | `apps/api/src/auth/middleware.ts` (`requireScopes`), `apps/api/src/features/proposals/routes.ts` (`manage:knowledge`) |
 | Per-flow knowledge role grants & admin gate (TM15) | `packages/auth`, `apps/api/src/auth` (`KNOWLEDGE_ROLE_GRANTS`) — see [authorization.md](./authorization.md) |
@@ -284,6 +317,9 @@ The non-negotiable is TM9: the human-review gate stays mandatory and enforced.
   `apps/api/src/features/source-sync/service.test.ts` (`constrainToCandidates`).
 - Bounded, allowlisted web fetch (TM7): `apps/watcher/src/fetch-url.test.ts`.
 - Git-transport allowlist (TM8): `packages/git/src/checkout-url-guard.test.ts`.
+- Credential hygiene (TM36–TM38): `packages/git/src/{credentials,run-git,auth-env,ensure-checkout}.test.ts`,
+  `apps/api/src/features/knowledge/repositories-credentials.test.ts`,
+  `apps/watcher/src/source-workspace.test.ts`, `apps/watcher/src/runners/publication.test.ts`.
 - Review gate — merge guard & no self-asserted merge (TM12):
   `apps/api/src/features/proposals/routes.merge-guard.test.ts`,
   `apps/api/src/features/proposals/{routes.merge,routes.merge-idempotency}.test.ts`.

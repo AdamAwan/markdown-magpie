@@ -256,14 +256,23 @@ See [proposals-and-publishing.md](./proposals-and-publishing.md). Git runs in bo
 | `MAGPIE_GIT_AUTHOR_NAME`, `MAGPIE_GIT_AUTHOR_EMAIL` | any process that commits (`packages/git`); the watcher's capability gates | — | **essential** for publishing | Commit identity. Publishing fails fast without both; they gate the `github` and `local-git` capabilities. |
 | `AZURE_DEVOPS_PAT` | api, watcher | — | **essential** for Azure DevOps remotes | Clone/fetch/push for dev.azure.com / visualstudio.com. |
 | `GIT_PROVIDER` | api | `local` | tuning | Display-only label on the config page. |
-| `GIT_TIMEOUT_MS` | api, watcher | `120000` | tuning | Per git subprocess. Read once at module load. Bad values fall back. |
+| `GIT_TIMEOUT_MS` | api, watcher | `120000` | tuning | Per git subprocess other than a first clone (fetch, reset, checkout, diff, push). Read once at module load. Bad values fall back. Also sets the stale-lock age: git lock files older than 2× this are cleared before a sync/publish. |
+| `GIT_CLONE_TIMEOUT_MS` | api, watcher | `1800000` (30 min) | tuning | Bound on a **first** `git clone` of a source/destination. Raise it for a very large repository on a slow link. A clone that times out leaves nothing at the checkout path (it is staged and renamed into place), and the next attempt starts clean. Read once at module load. Bad values fall back. |
 | `GIT_MAX_BUFFER_BYTES` | api, watcher | `67108864` | tuning | Git stdout/stderr buffer. |
 | `GITHUB_API_TIMEOUT_MS` | api, watcher | `30000` | tuning | Per GitHub REST/GraphQL call. |
 | `GIT_PARTIAL_CLONE` | api, watcher | `true` | tuning | `0`/`false`/`off`/`no` disables blobless partial clones. Read per call. A remote that rejects `--filter` already falls back automatically. |
 
-`GIT_ALLOW_PROTOCOL`, `GIT_CONFIG_COUNT`, `GIT_CONFIG_KEY_0` and `GIT_CONFIG_VALUE_0` are
-**set by the code** on every git subprocess (protocol allow-list and the auth header) and
-deliberately override anything in the environment. They are not operator configuration.
+`GIT_ALLOW_PROTOCOL`, `GIT_TERMINAL_PROMPT` (`0`), `GIT_CONFIG_COUNT`, `GIT_CONFIG_KEY_0`
+and `GIT_CONFIG_VALUE_0` are **set by the code** on every git subprocess (protocol
+allow-list, no credential prompts, and the auth header) and deliberately override anything
+in the environment. They are not operator configuration.
+
+Tokens are attached to **https** remotes only ([threat-model.md#TM38](./threat-model.md)).
+A credential embedded in an `https://user:token@…` source/destination URL still works on
+the process that holds that config (the API), but it is sent as a header and never stored
+in the checkout's `.git/config` or returned by the API (TM36/TM37) — so the **watcher**
+needs its own `GITHUB_TOKEN` / `AZURE_DEVOPS_PAT` / `tokenEnv` to push to that remote. A
+credential embedded in a plain `http://` URL is refused.
 
 ## MCP server
 

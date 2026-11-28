@@ -64,8 +64,11 @@ that changes the source of truth is always a human action.
   `github`. An in-flight publish for the same proposal id is deduped.
 - **P11** — The watcher's publication runner (capability `github`) owns the checkout,
   derives the branch name locally (`magpie/proposal-<id8>-<slug40>`), commits via a temp
-  worktree, and pushes. For a `github` destination it raises a PR, **degrading to
-  branch-only** if the PR call fails or no token resolves; `local-git` skips the PR step.
+  worktree, and pushes. For a `github` destination it raises a PR, degrading to
+  branch-only only when there is no PR to open (the remote is not GitHub, or no token
+  resolves); a PR call that **fails** fails the job instead (P26). `local-git` skips the PR
+  step. ⚠️ Corrected 2026-11: this clause used to say a failed PR call also degraded to
+  branch-only — that swallowed the failure and stranded the proposal without a PR.
   The API stores whatever `branchName` the watcher returns — it does not derive branches
   itself.
 - **P12** — Committer identity is required (`MAGPIE_GIT_AUTHOR_NAME` /
@@ -109,6 +112,58 @@ that changes the source of truth is always a human action.
   leaves the subtree — so a bad path cannot reach the working tree even if an API check is
   missed. A publish refused there fails the `publish_proposal` job with a `Refusing to
   publish …` error; nothing is pushed.
+
+## Crash, abort & retry robustness
+
+A publish is an ordinary retried job, so every way an attempt can die — watcher killed
+mid-git, job cancelled, GitHub briefly failing — MUST leave the destination checkout in a
+state the next attempt can proceed from, and the next attempt MUST converge on the same
+branch and PR rather than erroring or duplicating.
+
+- **P22** — **A dead publish's worktree never blocks a retry.** Before `git worktree add`,
+  under the checkout lock, the publisher runs `git worktree prune` (drops registrations
+  whose directory is gone, e.g. tmp wiped by a container restart), then force-removes
+  (`worktree remove --force --force`, falling back to deleting the directory) any linked
+  worktree that still has **this proposal's branch** checked out, and prunes again. Why:
+  a watcher killed between `worktree add` and its cleanup leaves the branch registered as
+  checked out, and every retry otherwise fails with "'…' is already used by worktree".
+  The main working tree and worktrees on other branches are never touched; a live
+  publish of the same branch in this process cannot exist, because it would hold the
+  lock (cross-process serialisation is out of scope, as for the checkout lock itself:
+  two watchers publishing the same proposal on one shared volume are not supported). The
+  publish's own cleanup always runs (even after an abort) and also prunes.
+- **P23** — **Stale git lock files are cleared, live ones are not.** Under the checkout
+  lock, before publishing (and before every sync, [IN42](./ingestion.md)), the top-level
+  `index.lock`, `HEAD.lock`, `config.lock`, `packed-refs.lock` and `shallow.lock` of the
+  checkout's git dir are deleted **only if older than 2 × `GIT_TIMEOUT_MS`**. In this
+  process the lock already guarantees none of our git children is running on the
+  checkout; the age bound covers a git started by another process sharing the volume —
+  every git child of ours is killed at `GIT_TIMEOUT_MS`, so an older lock has no live
+  owner. A younger lock is left alone: the operation fails as a transient lock error and
+  the job's retry finds it released or aged out.
+- **P24** — **The job's abort signal reaches every git and GitHub call.** Aborting (job
+  cancelled by the server, watcher shutting down) kills the in-flight git child with
+  SIGTERM — on which git removes its own lock files — rejects with an aborted
+  `GitCommandError` that is never retried and never swallowed as "no output", and cancels
+  an in-flight GitHub request. The temporary worktree is still removed.
+- **P25** — **Republishing an already-pushed branch is idempotent.** When the remote
+  branch exists and the document (or changeset) equals its tip, the publisher returns the
+  tip without committing or pushing, and reports it as published (not `noChange`, which
+  stays reserved for a fresh branch whose content already matches the base, P15). This is
+  how the retry of an attempt whose push landed resolves. The remote-branch probe
+  (`ls-remote`) fails the publish when the remote is unreachable rather than reading as
+  "branch absent" and taking the create path.
+- **P26** — **A PR failure after a successful push fails the job, and the retry reuses
+  what exists.** For a `github` destination the runner throws (`Branch … was pushed but
+  opening its pull request failed: …`, credential-redacted) so the queue retries the job;
+  recording a branch-only publish would strand the proposal at `branch-pushed` with no
+  PR and nothing that would ever open one. `raisePullRequest` first looks up an **open PR
+  for the head branch** and reuses it, creating one only when none exists, and adopts the
+  winner of a create race (422 "already exists"). A failed lookup throws rather than
+  reporting "none" — guessing would risk a duplicate PR. Together with P25 a retry pushes
+  nothing twice and opens at most one PR. When retries are exhausted the job fails
+  terminally like any other publish failure and the proposal keeps its pre-publish
+  status.
 
 ## Stale-PR auto-regeneration
 
@@ -173,7 +228,9 @@ Mounted at `/api/proposals`. Mutating routes require `manage:knowledge`;
 | `REGENERATION_CAP` | 3 | `apps/api/src/features/proposals/service.ts` |
 | Branch name | `magpie/proposal-<id8>-<slug40>` | `apps/watcher/src/runners/publication.ts` |
 | PR/commit title | `docs: <title>` | `apps/watcher/src/runners/publication.ts` |
-| `GIT_TIMEOUT_MS` | 120000 | `packages/git/src/index.ts` |
+| `GIT_TIMEOUT_MS` | 120000 | `packages/git/src/run-git.ts` |
+| `GIT_CLONE_TIMEOUT_MS` | 1800000 | `packages/git/src/run-git.ts` |
+| Stale git-lock age (P23) | 2 × `GIT_TIMEOUT_MS` | `packages/git/src/checkout-repair.ts` |
 | `GITHUB_API_TIMEOUT_MS` | 30000 | `packages/git/src/index.ts` |
 | `MAGPIE_CHECKOUT_ROOT` | `.magpie/checkouts` | `apps/watcher/src/runners/publication.ts` |
 | bulk `ids` cap | 100 | `apps/api/src/features/proposals/schema.ts` |
@@ -190,6 +247,8 @@ Mounted at `/api/proposals`. Mutating routes require `manage:knowledge`;
 | Watcher publication runner | `apps/watcher/src/runners/publication.ts`, `refresh-flow-snapshot.ts` |
 | Document-path policy (P20) | `packages/git/src/document-path.ts` (`checkDocumentPath`, `findUnsafeChangesetPath`) |
 | Changeset path enforcement (P21) | `apps/api/src/scheduling/changeset.ts` (`rejectUnsafeChangeset`); callers `apps/api/src/features/proposals/service.ts` (dedupe/split), `apps/api/src/scheduling/fold.ts` (`applyChangesetFoldFromCompletedJob`), `apps/api/src/features/source-sync/service.ts` (`constrainToCandidates`); publish-time `apps/watcher/src/runners/publication.ts` (`assertPublishablePaths`), `packages/git/src/index.ts` (`resolveTargetPath`, `assertNoSymlinkOnPath`, `assertRealParentWithin`) |
+| Crash/abort recovery (P22–P24) | `packages/git/src/checkout-repair.ts` (`releaseStaleBranchWorktrees`, `clearStaleGitLocks`), `packages/git/src/run-git.ts` (`git`, `GitCommandError`), `packages/git/src/index.ts` (`preparePublish`, `cleanupWorktree`) |
+| Idempotent retry & PR failure (P25–P26) | `packages/git/src/index.ts` (`publishLocked`, `raisePullRequest`, `findOpenPullRequest`), `apps/watcher/src/runners/publication.ts` (`publishProposal`) |
 | PR transitions & crosslink | `apps/api/src/scheduling/gap-reconciler.ts` (`applyPullRequestTransition`, `detectOverlaps`), `apps/api/src/stores/postgres-pr-crosslink-store.ts` |
 | Job contracts | `packages/jobs/src/{schemas,catalog}.ts` (`publish_proposal`, `draft_markdown_proposal`) |
 
@@ -198,6 +257,7 @@ Mounted at `/api/proposals`. Mutating routes require `manage:knowledge`;
 `apps/api/src/features/proposals/{service,closure-eval,link-cluster,provenance,regeneration,register-check,routes.bulk,routes.flow-scope,routes.merge-guard,routes.merge-idempotency,routes.merge,routes.validation}.test.ts`,
 `apps/api/src/stores/{postgres-proposal-store,proposal-store,proposal-path,pr-crosslink-store}.test.ts`,
 `packages/git/src/{publisher,publisher-concurrency,proposal-merge,comment,mergeability,review-decision,document-path}.test.ts`,
+`packages/git/src/{publisher-recovery,checkout-repair,run-git,raise-pull-request}.test.ts` (P22–P26),
 `apps/api/src/scheduling/fold.test.ts`, `apps/api/src/features/source-sync/service.test.ts` (P21),
 `apps/watcher/src/runners/{publication,publication-comment,publication-crosslink,refresh-flow-snapshot}.test.ts`.
 
