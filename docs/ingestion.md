@@ -214,6 +214,36 @@ must never leave a checkout every later sync trips over.
   merge cascade, publish pre-flight, dirty checkout, or plain-directory destination forces
   a full re-index — costs **zero** embedding calls.
 
+## Re-index consistency & hydration
+
+- **IN26** — **One re-index per repository at a time.** `indexLocalRepository` and
+  `indexMarkdownDocuments` MUST run their whole read → diff → persist → swap sequence under a
+  per-repository in-process lock (`KeyedMutex`), so a re-index always diffs against the
+  state the previous one committed; different repositories still index in parallel. Both
+  Postgres save paths additionally take a **transaction-level** advisory lock keyed on
+  `knowledge-index <repositoryId>` (`pg_advisory_xact_lock`), so two API replicas cannot
+  interleave writes to the same repository (overlapping section upserts could deadlock or
+  prune each other's rows). The lock releases with the transaction, so a crashed writer
+  never wedges the repository. (Each replica still holds its own in-memory index, hydrated
+  at startup; a re-index on one replica does not refresh another's memory.)
+
+- **IN27** — **Persist before swap.** A re-index MUST persist its full set
+  (`saveIndexedRepository`) or delta (`applyIncrementalIndex`) first and replace the
+  in-memory documents/sections only after that transaction commits. A failed save leaves
+  memory exactly as it was, i.e. still matching the database. A full swap removes every
+  previously-held document of the repository and **all** of their sections before inserting
+  the new set, so a document that now splits into fewer sections keeps no trailing stale
+  sections in memory.
+
+- **IN28** — **Hydration.** On startup the index loads the persisted corpus
+  (`hydrate`). A failed load MUST NOT leave the index silently empty: `startHydration`
+  retries in the background with exponential backoff (1 s doubling to 60 s, unref'd timers)
+  until a load succeeds, and `isHydrated()` stays `false` until then — which keeps
+  `GET /api/ready` at 503 ([api.md#API27](./api.md)). A hydrate never overwrites a
+  repository that a re-index swapped while the load was in flight (its snapshot is older
+  than memory). Without persistence (`KNOWLEDGE_STORE=memory`) the index is hydrated from the
+  start.
+
 ## Index-time embedding (the background embedder)
 
 - **IN18** — After an index or upload request returns, the API MUST spawn a **background**
@@ -248,6 +278,39 @@ must never leave a checkout every later sync trips over.
     by whatever was configured when computed) instead of paying a full-corpus re-embed.
   - The carry-forward upsert (IN17) moves the stamp with the vector — carried forward when
     the vector is, cleared to `NULL` when it resets.
+
+- **IN29** — **Input cap.** Each section's text MUST be truncated to `MAX_EMBED_INPUT_CHARS`
+  (**24 000** characters, never splitting a surrogate pair) before it is sent. The
+  supported models cap input at 8191 tokens and reject the whole request when one input is
+  over; there is no tokenizer in the API, so the cap is a conservative character budget
+  (~6k tokens of English). An over-long section is embedded from its leading text.
+
+- **IN30** — **Transient-failure retry.** A provider call that fails transiently — HTTP 429,
+  408, 5xx, or an error exposing no status (timeouts, connection resets) — MUST be retried
+  up to 4 attempts with exponential backoff (1 s doubling, capped at 30 s), waiting at least
+  a provider-supplied Retry-After. The embedder reads the status and Retry-After from
+  numeric `status` / `retryAfterMs` properties on the thrown error.
+  > ⚠️ The current `@magpie/retrieval` HTTP embedding providers throw a plain `Error`
+  > (status only in the message, no Retry-After), so today every provider failure is
+  > classified as transient-without-status and Retry-After is never honoured. A provider
+  > change exposing `status`/`retryAfterMs` activates the rest without an embedder change.
+
+- **IN31** — **Poison sections are skipped, not blocking.** When a batch still fails, the
+  embedder splits it in two. If **neither** half embeds, the failure is an outage: it is
+  rethrown and nothing is skipped. Once part of the batch has embedded (the provider is
+  demonstrably up), the failing half is bisected down to single sections, which are
+  recorded as **skipped** (`embedding_skipped_at` / `embedding_skipped_model` /
+  `embedding_skip_reason`, migration 0073) and logged; the rest are saved. A lone pending
+  section is skipped only on a definite client error (4xx other than 408/429). Rate
+  limiting (429) and a vector-count mismatch (IN19) are never bisected. A skipped section
+  is not listed or counted as pending under the model that rejected it; changing its
+  heading/content clears the skip (the IN17 upsert), and a different configured model
+  retries it.
+
+- **IN32** — **Outage recovery.** A background pass that fails (past IN30's retries) MUST
+  schedule its own re-run — 30 s doubling to 10 min per consecutive failure, unref'd —
+  rather than waiting for the next re-index to trigger it. A successful pass resets the
+  backoff; a `trigger()` cancels any pending scheduled retry.
 
 - **IN21** — Embeddings MUST come from an admin-configured endpoint; a CLI agent (Claude,
   Codex) cannot produce embeddings for this purpose. **Query-time** embedding (embedding
@@ -333,6 +396,10 @@ See [api.md](./api.md) for the full request/response reference.
 | --- | --- | --- |
 | `MAX_MARKDOWN_FILE_BYTES` | 5 MiB | `apps/api/src/stores/knowledge-index.ts` |
 | embedder `DEFAULT_BATCH_SIZE` | 64 | `apps/api/src/stores/embed-sections.ts` |
+| `MAX_EMBED_INPUT_CHARS` | 24 000 characters (IN29) | `apps/api/src/stores/embed-sections.ts` |
+| embedder batch retry | 4 attempts, 1 s → 30 s (IN30) | `apps/api/src/stores/embed-sections.ts` |
+| embedder pass retry | 30 s → 10 min (IN32) | `apps/api/src/platform/background-embedder.ts` |
+| hydrate retry | 1 s → 60 s (IN28) | `apps/api/src/stores/knowledge-index.ts` |
 | `EMBEDDING_DIMENSIONS` | 1536 (stored width; shorter provider vectors are zero-padded) | `packages/retrieval/src/embeddings.ts` |
 | keyword scorer weights | heading +3 / content +1 | `apps/api/src/stores/knowledge-index.ts` |
 
@@ -349,7 +416,10 @@ the backlog, and retrieval stays keyword-only until sections carry vectors.
 | --- | --- |
 | Markdown / frontmatter parse, section split, slugify | `packages/markdown/src/index.ts` |
 | Advisory-heading detection | `packages/markdown/src/advisory.ts` (consumer: `apps/api/src/features/proposals/register-check.ts`) |
-| In-memory index, full / incremental / branch strategy, index search | `apps/api/src/stores/knowledge-index.ts` |
+| In-memory index, full / incremental / branch strategy, index search, hydration | `apps/api/src/stores/knowledge-index.ts` |
+| Per-repository re-index lock | `apps/api/src/stores/keyed-mutex.ts` (+ advisory lock in `postgres-knowledge-store.ts`) |
+| FK indexes on `document_sections(document_id)` / `answer_citations(section_id)` | `packages/db/migrations/0072_section_fk_indexes.sql` |
+| Embedding skip columns | `packages/db/migrations/0073_section_embedding_skip.sql` |
 | Changed-Markdown diff (incremental input) | `packages/git/src/index.ts` (`listChangedMarkdown`, `diffChangedFiles`) |
 | Postgres persistence + carry-forward upsert + stamp adoption | `apps/api/src/stores/postgres-knowledge-store.ts` |
 | Index-time background embedding | `apps/api/src/platform/background-embedder.ts`, `apps/api/src/stores/embed-sections.ts` |
@@ -363,7 +433,9 @@ the backlog, and retrieval stays keyword-only until sections carry vectors.
 `packages/markdown/src/{index,advisory}.test.ts`,
 `packages/git/src/changed-markdown.test.ts`,
 `packages/git/src/{ensure-checkout,checkout-repair,run-git}.test.ts`, `apps/watcher/src/source-workspace.test.ts` (IN41–IN44),
-`apps/api/src/stores/{knowledge-index,knowledge-index-incremental,knowledge-index-branch,embed-sections,postgres-knowledge-store,knowledge-repositories}.test.ts`,
+`apps/api/src/stores/{knowledge-index,knowledge-index-incremental,knowledge-index-branch,knowledge-index-consistency,embed-sections,postgres-knowledge-store,knowledge-repositories}.test.ts`,
+`apps/api/src/stores/postgres-knowledge-store.integration.test.ts` (advisory lock, 0072
+indexes), `apps/api/src/platform/background-embedder.test.ts`,
 `apps/api/src/features/knowledge/routes.test.ts`,
 `apps/api/src/features/proposals/register-check.test.ts`,
 `apps/api/src/platform/source-descriptors.test.ts`,

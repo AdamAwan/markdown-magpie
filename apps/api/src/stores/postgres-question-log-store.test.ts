@@ -1181,6 +1181,35 @@ describe(
         .map((row) => [row.anchor, row.citationCount]);
     }
 
+    it("keeps a completion whose cited section was removed by a re-index mid-job, skipping only that citation row", async () => {
+      // The answer job retrieved two sections; a re-index then dropped one of them
+      // (ordinal 1) before the completion was posted. The section_id FK used to
+      // reject the whole completion — a 500 the watcher replays forever.
+      const documentId = `vanished-doc-${randomUUID()}`;
+      await seedDocument(documentId, ["setup"]);
+      const answer = answerCiting(documentId, ["setup", "removed"]);
+
+      const recorded = await store.record({
+        question: `vanished-record-${randomUUID()}`,
+        chatProvider: "codex",
+        retrievedSectionIds: [],
+        answer
+      });
+      const updated = await store.updateAnswer(recorded.id, { answer });
+      assert.equal(updated?.answer?.citations.length, 2, "the answer keeps every citation the model made");
+
+      const rows = await pool.query<{ section_id: string }>(
+        "SELECT section_id FROM answer_citations WHERE question_id = $1 ORDER BY section_id",
+        [recorded.id]
+      );
+      assert.deepEqual(
+        rows.rows.map((row) => row.section_id),
+        [`${documentId}:0`],
+        "only the citation whose section still exists gets an audit row"
+      );
+      await store.delete(recorded.id);
+    });
+
     it("counts each (question, section) once and survives a re-index that drops the cited sections", async () => {
       const documentId = `usage-doc-${randomUUID()}`;
       await seedDocument(documentId, ["setup", "faq"]);

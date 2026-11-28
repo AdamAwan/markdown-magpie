@@ -60,10 +60,17 @@ export function jobRoutes(ctx: AppContext): Hono {
   );
 
   app.get("/:id/wait", requireScopes("read:knowledge"), async (c) => {
+    // The request's own abort signal fires when the client disconnects, which
+    // ends the long-poll instead of polling for the rest of the wait timeout.
+    const signal = c.req.raw.signal;
     try {
-      const result = await jobsService.waitForJob(ctx, c.req.param("id"));
+      const result = await jobsService.waitForJob(ctx, c.req.param("id"), { signal });
       return c.json({ job: result.job }, result.terminal ? 200 : 202);
     } catch {
+      if (signal.aborted) {
+        // Nobody is listening; answer without a body rather than a misleading 404.
+        return c.body(null, 204);
+      }
       throw new HttpError(404, "job_not_found");
     }
   });

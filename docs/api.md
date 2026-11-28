@@ -133,6 +133,24 @@ The API is a [Hono](https://hono.dev) app served under `/api`. It listens on `PO
   (`/api/proposals/:id/verify-closure`). The watcher itself has **no database access**.
   With auth on, the job lifecycle callbacks accept **only** a service principal — a human
   `manage:jobs` holder gets 403 ([authorization.md](./authorization.md) AZ29).
+- **API26** — **Database restarts are survived, not fatal.** The shared store pool
+  (`createDbPool`) MUST handle `error` events both on the pool (an idle connection dropped)
+  and on every client it opens (a checked-out connection dropped, e.g. one holding an
+  advisory lock): they are logged and the process carries on. A Postgres restart therefore
+  fails the in-flight queries and `/api/ready` (API27) until the database is back, then the
+  pool reconnects on the next checkout — it no longer crashes the API with an unhandled
+  `error` event. pg-boss forwards its own pool's errors to its `error` event, which the
+  broker logs.
+- **API27** — **Readiness includes the knowledge index.** `GET /api/ready` is `503` until
+  the knowledge index has hydrated from Postgres (`checks.knowledgeIndex`), in addition to
+  the database and broker checks. A failed startup hydrate is retried in the background
+  ([ingestion.md#IN28](./ingestion.md)), so the probe turns green on its own once the store
+  is reachable, instead of a replica answering from an empty index while reporting ready.
+- **API28** — **Long-polls stop with their client.** `GET /api/jobs/:id/wait` MUST stop
+  polling the broker as soon as the request is aborted (the client disconnected): the wait
+  observes the request's abort signal and clears its poll timer, rather than polling for the
+  rest of `JOB_WAIT_TIMEOUT_MS` on behalf of nobody. An aborted wait answers `204` with no
+  body (nobody is there to read it).
 
 ## Mount map
 
@@ -182,12 +200,12 @@ Liveness check. Public (API5).
 
 Deep readiness check, in contrast to `/health`'s shallow liveness. Verifies the running
 process can actually serve traffic: Postgres is reachable (`SELECT 1` via the shared
-connection pool) and the pg-boss job broker has started. Public (API5), so orchestrator
-probes need no token. Returns `200` when ready and `503` otherwise, with a body reporting
-each dependency:
+connection pool), the pg-boss job broker has started, and the knowledge index has hydrated
+from storage (API27). Public (API5), so orchestrator probes need no token. Returns `200`
+when ready and `503` otherwise, with a body reporting each dependency:
 
 ```json
-{ "ready": true, "checks": { "database": true, "broker": true } }
+{ "ready": true, "checks": { "database": true, "broker": true, "knowledgeIndex": true } }
 ```
 
 Use `/ready` for readiness/startup probes (gate traffic on dependencies) and `/health`
@@ -1024,6 +1042,7 @@ pages (see [ai-jobs.md](./ai-jobs.md) J49).
 Long-polls until the job is terminal. `200` with `{ "job": Job }` once terminal; `202` with
 the current `{ "job": Job }` while still running — re-issue to keep waiting
 (`JOB_WAIT_TIMEOUT_MS` bounds each call, `JOB_WAIT_POLL_MS` the server poll cadence).
+Polling stops as soon as the client disconnects (API28).
 
 - `404 job_not_found`.
 

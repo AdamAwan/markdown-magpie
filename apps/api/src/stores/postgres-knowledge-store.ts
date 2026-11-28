@@ -7,6 +7,7 @@ import type {
   KnowledgePersistence,
   LoadedKnowledge,
   LoadedRepository,
+  SectionEmbeddingSkip,
   SectionEmbeddingToSave,
   SectionKeywordSearch,
   SectionToEmbed,
@@ -62,6 +63,7 @@ export class PostgresKnowledgeStore
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
+      await lockRepositoryForIndexing(client, summary.repository.id);
       await client.query(
         `
           INSERT INTO repositories (id, name, remote_url, default_branch, local_path, provider, indexed_commit_sha)
@@ -123,6 +125,7 @@ export class PostgresKnowledgeStore
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
+      await lockRepositoryForIndexing(client, input.repository.id);
 
       if (input.deletedDocumentIds.length > 0) {
         // document_sections.document_id references documents(id); delete sections
@@ -281,6 +284,26 @@ export class PostgresKnowledgeStore
                   AND document_sections.heading = EXCLUDED.heading
                 THEN document_sections.content_changed_at
                 ELSE now()
+              END,
+              -- An embedding skip (0073) is a verdict on the exact text the
+              -- provider rejected: changed text gets a fresh attempt.
+              embedding_skipped_at = CASE
+                WHEN document_sections.content = EXCLUDED.content
+                  AND document_sections.heading = EXCLUDED.heading
+                THEN document_sections.embedding_skipped_at
+                ELSE NULL
+              END,
+              embedding_skipped_model = CASE
+                WHEN document_sections.content = EXCLUDED.content
+                  AND document_sections.heading = EXCLUDED.heading
+                THEN document_sections.embedding_skipped_model
+                ELSE NULL
+              END,
+              embedding_skip_reason = CASE
+                WHEN document_sections.content = EXCLUDED.content
+                  AND document_sections.heading = EXCLUDED.heading
+                THEN document_sections.embedding_skip_reason
+                ELSE NULL
               END
         `,
         batch.flatMap((section) => [
@@ -394,20 +417,27 @@ export class PostgresKnowledgeStore
     // configured model produced are comparable to the query embedding — stale
     // vectors from a previous model are invisible here until re-embedded.
     const repositoryFilter = repositoryIds && repositoryIds.length > 0 ? repositoryIds : null;
-    const result = await this.pool.query<{ id: string; similarity: string }>(
-      `
-        SELECT s.id, 1 - (s.embedding <=> $1::vector) AS similarity
-        FROM document_sections s
-        JOIN documents d ON d.id = s.document_id
-        WHERE s.embedding IS NOT NULL
-          AND ($3::text[] IS NULL OR d.repository_id = ANY($3))
-          AND ($4::text IS NULL OR s.embedding_model = $4)
-        ORDER BY s.embedding <=> $1::vector
-        LIMIT $2
-      `,
-      [literal, limit, repositoryFilter, this.embeddingModel ?? null]
-    );
-    return result.rows.map((row) => ({ id: row.id, similarity: Number(row.similarity) }));
+    const values = [literal, limit, repositoryFilter, this.embeddingModel ?? null];
+    const result = await this.pool.query<{ id: string; similarity: string }>(VECTOR_SEARCH_SQL, values);
+    if (repositoryFilter === null || result.rows.length >= limit) {
+      return mapVectorHits(result.rows);
+    }
+
+    // A short FILTERED result is not proof the flow has fewer matches. The HNSW
+    // scan collects only hnsw.ef_search (default 40) nearest candidates from the
+    // WHOLE corpus and the repository filter runs on those afterwards — so a
+    // small flow whose sections are not among the corpus-wide nearest came back
+    // with few or zero hits even though it had plenty of embedded sections
+    // (docs/retrieval.md R24). Re-run it as an EXACT search: the repository
+    // filter then runs before the distance ordering, so the result is the true
+    // top-`limit` within the flow. Only a short filtered result pays for it, and
+    // a short result means the flow is small relative to the corpus — exactly
+    // when an exact scan of its sections is cheap. (pgvector 0.8's
+    // hnsw.iterative_scan would solve this inside the index, but the project does
+    // not pin a pgvector version that has it — the compose and test images track
+    // pgvector/pgvector:pg16 — and setting an unknown hnsw.* parameter errors.)
+    const exact = await this.pool.query<{ id: string; similarity: string }>(EXACT_VECTOR_SEARCH_SQL, values);
+    return mapVectorHits(exact.rows);
   }
 
   async searchByKeyword(
@@ -485,7 +515,9 @@ export class PostgresKnowledgeStore
   // when its vector was produced by a different model than the configured one —
   // a model change re-embeds exactly like a content change, via the same
   // background-embedder path. On an unversioned store ($3 NULL) only vectorless
-  // sections qualify, preserving the original behaviour.
+  // sections qualify, preserving the original behaviour. A section the embedder
+  // skipped under this same model (0073, IN31) is not pending: it would only be
+  // rejected again, and at the head of the id-ordered page it blocked the rest.
   async listSectionsNeedingEmbedding(limit: number, repositoryId?: string): Promise<SectionToEmbed[]> {
     const result = await this.pool.query<{ id: string; heading: string; content: string }>(
       `
@@ -493,6 +525,7 @@ export class PostgresKnowledgeStore
         FROM document_sections s
         JOIN documents d ON d.id = s.document_id
         WHERE (s.embedding IS NULL OR ($3::text IS NOT NULL AND s.embedding_model IS DISTINCT FROM $3))
+          AND ${notSkippedUnderModel("$3")}
           AND ($1::text IS NULL OR d.repository_id = $1)
         ORDER BY s.id
         LIMIT $2
@@ -512,11 +545,27 @@ export class PostgresKnowledgeStore
         FROM document_sections s
         JOIN documents d ON d.id = s.document_id
         WHERE (s.embedding IS NULL OR ($2::text IS NOT NULL AND s.embedding_model IS DISTINCT FROM $2))
+          AND ${notSkippedUnderModel("$2")}
           AND ($1::text IS NULL OR d.repository_id = $1)
       `,
       [repositoryId ?? null, this.embeddingModel ?? null]
     );
     return Number(result.rows[0]?.count ?? 0);
+  }
+
+  async markSectionsEmbeddingSkipped(entries: SectionEmbeddingSkip[]): Promise<void> {
+    if (entries.length === 0) {
+      return;
+    }
+    await this.pool.query(
+      `
+        UPDATE document_sections AS s
+        SET embedding_skipped_at = now(), embedding_skipped_model = $3, embedding_skip_reason = v.reason
+        FROM unnest($1::text[], $2::text[]) AS v(id, reason)
+        WHERE s.id = v.id
+      `,
+      [entries.map((entry) => entry.id), entries.map((entry) => entry.reason), this.embeddingModel ?? null]
+    );
   }
 
   // One-time upgrade grace for vectors that predate embedding-model versioning:
@@ -581,6 +630,57 @@ export class PostgresKnowledgeStore
       );
     }
   }
+}
+
+// True unless the section was skipped by the embedder under the model bound at
+// `modelParam` (NULL on an unversioned store, which IS NOT DISTINCT matches).
+function notSkippedUnderModel(modelParam: string): string {
+  return `NOT (s.embedding_skipped_at IS NOT NULL AND s.embedding_skipped_model IS NOT DISTINCT FROM ${modelParam}::text)`;
+}
+
+// Serializes index writes for one repository across every API replica sharing
+// this database (docs/ingestion.md IN26). The in-process KeyedMutex in
+// InMemoryKnowledgeIndex covers one replica; two replicas re-indexing the same
+// repository could still interleave their transactions — upserting overlapping
+// section rows in different orders (a deadlock) or pruning each other's rows.
+// A TRANSACTION-level advisory lock releases itself at COMMIT/ROLLBACK, so a
+// crashed writer can never leave the repository locked. Keyed like run-lock.ts.
+async function lockRepositoryForIndexing(client: pg.PoolClient, repositoryId: string): Promise<void> {
+  await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [`knowledge-index ${repositoryId}`]);
+}
+
+// The approximate (HNSW) vector search. `ORDER BY embedding <=> query` is the
+// exact shape the document_sections_embedding_hnsw index (0006) serves.
+// $1 query vector, $2 limit, $3 repository filter (NULL = all), $4 model stamp
+// (NULL = unversioned store).
+const VECTOR_SEARCH_SQL = `
+  SELECT s.id, 1 - (s.embedding <=> $1::vector) AS similarity
+  FROM document_sections s
+  JOIN documents d ON d.id = s.document_id
+  WHERE s.embedding IS NOT NULL
+    AND ($3::text[] IS NULL OR d.repository_id = ANY($3))
+    AND ($4::text IS NULL OR s.embedding_model = $4)
+  ORDER BY s.embedding <=> $1::vector
+  LIMIT $2
+`;
+
+// The same search, exact. Ordering by the computed similarity (rather than the
+// bare distance operator) is deliberately a form no HNSW index can serve, so the
+// planner filters to the requested repositories first and sorts every matching
+// section by its true distance. Same parameters as VECTOR_SEARCH_SQL.
+const EXACT_VECTOR_SEARCH_SQL = `
+  SELECT s.id, 1 - (s.embedding <=> $1::vector) AS similarity
+  FROM document_sections s
+  JOIN documents d ON d.id = s.document_id
+  WHERE s.embedding IS NOT NULL
+    AND ($3::text[] IS NULL OR d.repository_id = ANY($3))
+    AND ($4::text IS NULL OR s.embedding_model = $4)
+  ORDER BY similarity DESC, s.id
+  LIMIT $2
+`;
+
+function mapVectorHits(rows: Array<{ id: string; similarity: string }>): Array<{ id: string; similarity: number }> {
+  return rows.map((row) => ({ id: row.id, similarity: Number(row.similarity) }));
 }
 
 interface RepositoryRow {

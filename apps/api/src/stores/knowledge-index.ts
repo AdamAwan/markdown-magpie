@@ -16,6 +16,7 @@ import { parseMarkdownDocument, splitIntoSections } from "@magpie/markdown";
 import { isAncestor, listChangedMarkdown, resolvePrimaryBranch, type ChangedMarkdownFile } from "@magpie/git";
 import { fuseRankings } from "@magpie/retrieval";
 import { logger } from "../logger.js";
+import { KeyedMutex } from "./keyed-mutex.js";
 import { LruCache } from "./lru-cache.js";
 import { diffKnowledgeSnapshots, type DiffSection, type KnowledgeSnapshot } from "./knowledge-change-diff.js";
 import type { KnowledgeChangeAttribution, KnowledgeChangeStore } from "./knowledge-change-store.js";
@@ -104,6 +105,15 @@ export interface EmbeddingPersistence {
   // Saves every embedding from one provider batch in a single multi-row
   // statement instead of one round-trip per section.
   saveSectionEmbeddings(entries: SectionEmbeddingToSave[]): Promise<void>;
+  // Records sections the provider rejected even after truncation, so they stop
+  // being listed (and counted) as pending under the current model until their
+  // text changes (docs/ingestion.md IN31).
+  markSectionsEmbeddingSkipped(entries: SectionEmbeddingSkip[]): Promise<void>;
+}
+
+export interface SectionEmbeddingSkip {
+  id: string;
+  reason: string;
 }
 
 export interface MarkdownUpload {
@@ -180,28 +190,57 @@ export class InMemoryKnowledgeIndex {
   // the index on reset(). Query embeddings depend only on the question, not the
   // corpus, so re-indexing never has to invalidate this.
   private readonly queryEmbeddingCache = new LruCache<string, number[]>(QUERY_EMBEDDING_CACHE_SIZE);
+  // One re-index of a repository at a time (docs/ingestion.md IN26). Two
+  // overlapping re-indexes of the same repository used to interleave their
+  // read-diff-write steps against the shared maps — the second could diff
+  // against the first's half-applied state and persist a stale delta.
+  private readonly repositoryLocks = new KeyedMutex();
+  // Whether the persisted corpus has been loaded (IN28). Without persistence
+  // there is nothing to load, so the index starts out complete.
+  private hydrated: boolean;
+  // Bumped on every in-memory swap a re-index commits, and stamped per
+  // repository, so a hydrate that read the store BEFORE that swap knows its
+  // snapshot of that repository is older than memory and must not overwrite it.
+  private swapGeneration = 0;
+  private readonly swapGenerationByRepository = new Map<string, number>();
+  private hydrationRetry: ReturnType<typeof setTimeout> | undefined;
 
   constructor(
     private readonly persistence?: KnowledgePersistence,
     private readonly hybrid: HybridSearchOptions = {},
     private readonly changeLog?: KnowledgeChangeLogOptions
-  ) {}
+  ) {
+    this.hydrated = !persistence;
+  }
 
   /**
    * Loads previously persisted repositories, documents, and sections into the in-memory
    * index. Without this, a Postgres-backed deployment would serve an empty index after a
    * restart until something was re-indexed. Git context is re-derived from each repository's
    * local path so publishing keeps working with fresh branch/SHA state.
+   *
+   * A repository re-indexed while the load was in flight is left as the re-index
+   * swapped it: that state was committed after the snapshot this load read.
    */
   async hydrate(): Promise<void> {
     if (!this.persistence) {
+      this.hydrated = true;
       return;
     }
 
+    const startedAt = this.swapGeneration;
     const { repositories, documents, sections } = await this.persistence.loadAll();
+    const swappedSinceLoad = (repositoryId: string) =>
+      (this.swapGenerationByRepository.get(repositoryId) ?? 0) > startedAt;
 
     for (const { repository, indexedCommitSha } of repositories) {
+      if (swappedSinceLoad(repository.id)) {
+        continue;
+      }
       const git = await detectGitContext(repository.localPath);
+      if (swappedSinceLoad(repository.id)) {
+        continue;
+      }
       this.repositories.set(repository.id, {
         ...repository,
         remoteUrl: repository.remoteUrl ?? git.remoteUrl,
@@ -211,12 +250,72 @@ export class InMemoryKnowledgeIndex {
         this.indexedShaByRepository.set(repository.id, indexedCommitSha);
       }
     }
+    const repositoryByDocument = new Map<string, string>();
     for (const document of documents) {
-      this.documents.set(document.id, document);
+      repositoryByDocument.set(document.id, document.repositoryId);
+      if (!swappedSinceLoad(document.repositoryId)) {
+        this.documents.set(document.id, document);
+      }
     }
     for (const section of sections) {
-      this.sections.set(section.id, section);
+      const repositoryId = repositoryByDocument.get(section.documentId);
+      if (repositoryId === undefined || !swappedSinceLoad(repositoryId)) {
+        this.sections.set(section.id, section);
+      }
     }
+    this.hydrated = true;
+  }
+
+  // True once the persisted corpus is loaded. /api/ready reports not-ready until
+  // then, so an orchestrator never routes traffic to a replica answering from an
+  // empty index because its startup hydrate failed (docs/api.md API27).
+  isHydrated(): boolean {
+    return this.hydrated;
+  }
+
+  /**
+   * Hydrates, and on failure keeps retrying in the background with exponential
+   * backoff (initialDelayMs doubling up to maxDelayMs) until a load succeeds —
+   * a store that was unreachable at boot must not leave the index empty for the
+   * life of the process. Resolves after the FIRST attempt with whether it
+   * succeeded; the retry timers are unref'd so they never hold the process open.
+   */
+  async startHydration(
+    options: { initialDelayMs?: number; maxDelayMs?: number; onError?: (error: unknown, attempt: number) => void } = {}
+  ): Promise<boolean> {
+    const initialDelayMs = options.initialDelayMs ?? 1_000;
+    const maxDelayMs = options.maxDelayMs ?? 60_000;
+    const attempt = async (count: number): Promise<boolean> => {
+      try {
+        await this.hydrate();
+        return true;
+      } catch (error) {
+        options.onError?.(error, count);
+        const delay = Math.min(maxDelayMs, initialDelayMs * 2 ** (count - 1));
+        this.hydrationRetry = setTimeout(() => {
+          this.hydrationRetry = undefined;
+          void attempt(count + 1);
+        }, delay);
+        this.hydrationRetry.unref();
+        return false;
+      }
+    };
+    this.stopHydration();
+    return attempt(1);
+  }
+
+  // Cancels a pending background hydrate retry (shutdown, tests).
+  stopHydration(): void {
+    if (this.hydrationRetry) {
+      clearTimeout(this.hydrationRetry);
+      this.hydrationRetry = undefined;
+    }
+  }
+
+  // Marks a repository's in-memory state as replaced by a committed re-index.
+  private recordSwap(repositoryId: string): void {
+    this.swapGeneration += 1;
+    this.swapGenerationByRepository.set(repositoryId, this.swapGeneration);
   }
 
   async indexLocalRepository(input: {
@@ -230,9 +329,23 @@ export class InMemoryKnowledgeIndex {
     attribution?: KnowledgeChangeAttribution;
   }): Promise<IndexedRepositorySummary> {
     const localPath = resolveLocalPath(input.localPath);
+    const repositoryId = input.repositoryId ?? slugify(path.basename(localPath));
+    // The whole read → diff → persist → swap sequence runs under the repository's
+    // lock, so the prior state a re-index diffs against is always the state the
+    // previous re-index committed.
+    return this.repositoryLocks.run(repositoryId, () =>
+      this.indexLocalRepositoryLocked(input, localPath, repositoryId)
+    );
+  }
+
+  private async indexLocalRepositoryLocked(
+    input: { name?: string; configuredBranch?: string; attribution?: KnowledgeChangeAttribution },
+    localPath: string,
+    repositoryId: string
+  ): Promise<IndexedRepositorySummary> {
     const git = await detectGitContext(localPath);
     const repository: RepositoryRef = {
-      id: input.repositoryId ?? slugify(path.basename(localPath)),
+      id: repositoryId,
       name: input.name ?? path.basename(localPath),
       // The single primary-branch precedence: configured `branch` wins, else the
       // detected origin/HEAD default, else the current branch, else "main". Making
@@ -312,16 +425,6 @@ export class InMemoryKnowledgeIndex {
     // change log's "before", and a full index replaces the repository wholesale.
     const priorSnapshot = this.snapshotRepository(repository.id);
 
-    this.repositories.set(repository.id, repository);
-    this.pruneRepository(repository.id, new Set(documents.map((document) => document.id)));
-    for (const document of documents) {
-      this.documents.set(document.id, document);
-    }
-    for (const section of sections) {
-      this.sections.set(section.id, section);
-    }
-    this.setIndexedSha(repository.id, headSha);
-
     const summary: IndexedRepositorySummary = {
       repository,
       documentCount: documents.length,
@@ -329,7 +432,12 @@ export class InMemoryKnowledgeIndex {
       commitSha: headSha
     };
 
+    // Persist FIRST, swap memory only once the transaction has committed
+    // (IN27). Swapping first meant a failed save left this replica serving — and
+    // diffing the next re-index against — a corpus the database never got.
     await this.persistence?.saveIndexedRepository(summary, documents, sections);
+    this.replaceRepository(repository, documents, sections);
+    this.setIndexedSha(repository.id, headSha);
     // A repository with no prior documents is being BASELINED, not changed: its
     // first index would otherwise log every document as an addition, asserting
     // that the whole knowledge base "changed" on install day. That is the
@@ -428,6 +536,15 @@ export class InMemoryKnowledgeIndex {
     // state. Only the touched documents can have changed, so only they are diffed.
     const priorSnapshot = this.snapshotDocuments(affectedDocumentIds);
 
+    // Persist first; swap memory only after the transaction commits (IN27).
+    await this.persistence?.applyIncrementalIndex({
+      repository,
+      commitSha: headSha,
+      upsertedDocuments,
+      upsertedSections,
+      deletedDocumentIds: [...deletedDocumentIds]
+    });
+
     this.repositories.set(repository.id, repository);
     for (const documentId of affectedDocumentIds) {
       for (const sectionId of sectionIdsByDocumentId.get(documentId) ?? []) {
@@ -444,14 +561,7 @@ export class InMemoryKnowledgeIndex {
       this.sections.set(section.id, section);
     }
     this.setIndexedSha(repository.id, headSha);
-
-    await this.persistence?.applyIncrementalIndex({
-      repository,
-      commitSha: headSha,
-      upsertedDocuments,
-      upsertedSections,
-      deletedDocumentIds: [...deletedDocumentIds]
-    });
+    this.recordSwap(repository.id);
 
     await this.recordChanges({
       repository,
@@ -687,9 +797,19 @@ export class InMemoryKnowledgeIndex {
     name?: string;
   }): Promise<IndexedRepositorySummary> {
     const repositoryId = input.repositoryId ?? "uploaded";
+    return this.repositoryLocks.run(repositoryId, () =>
+      this.indexMarkdownDocumentsLocked(input.documents, repositoryId, input.name)
+    );
+  }
+
+  private async indexMarkdownDocumentsLocked(
+    uploads: MarkdownUpload[],
+    repositoryId: string,
+    name: string | undefined
+  ): Promise<IndexedRepositorySummary> {
     const repository: RepositoryRef = {
       id: repositoryId,
-      name: input.name ?? "Uploaded Markdown",
+      name: name ?? "Uploaded Markdown",
       defaultBranch: "main",
       localPath: "uploaded",
       provider: "local"
@@ -697,7 +817,7 @@ export class InMemoryKnowledgeIndex {
     const documents: KnowledgeDocument[] = [];
     const sections: DocumentSection[] = [];
 
-    for (const upload of input.documents) {
+    for (const upload of uploads) {
       const parsed = parseMarkdownDocument(upload.content);
       const document: KnowledgeDocument = {
         id: `${repository.id}:${upload.path}`,
@@ -711,26 +831,51 @@ export class InMemoryKnowledgeIndex {
       sections.push(...splitIntoSections(document));
     }
 
-    this.repositories.set(repository.id, repository);
-    // Prune docs/sections for files no longer in the set; surviving documents'
-    // sections are overwritten by id below (pruneRepository already dropped
-    // anything stale for documents that didn't survive).
-    this.pruneRepository(repository.id, new Set(documents.map((document) => document.id)));
-    for (const document of documents) {
-      this.documents.set(document.id, document);
-    }
-    for (const section of sections) {
-      this.sections.set(section.id, section);
-    }
-
     const summary: IndexedRepositorySummary = {
       repository,
       documentCount: documents.length,
       sectionCount: sections.length
     };
 
+    // Persist first; swap memory only after the transaction commits (IN27).
     await this.persistence?.saveIndexedRepository(summary, documents, sections);
+    this.replaceRepository(repository, documents, sections);
     return summary;
+  }
+
+  // Swaps one repository's whole corpus in memory for a freshly-indexed set:
+  // every previously-held document of the repository and ALL of its sections go
+  // (including the trailing sections of a document that now splits into fewer —
+  // overwriting by id alone left those behind), then the new set goes in. Called
+  // only after the same set has been persisted.
+  private replaceRepository(
+    repository: RepositoryRef,
+    documents: KnowledgeDocument[],
+    sections: DocumentSection[]
+  ): void {
+    const previousDocumentIds = new Set<string>();
+    for (const document of this.documents.values()) {
+      if (document.repositoryId === repository.id) {
+        previousDocumentIds.add(document.id);
+      }
+    }
+    for (const [sectionId, section] of this.sections) {
+      if (previousDocumentIds.has(section.documentId)) {
+        this.sections.delete(sectionId);
+      }
+    }
+    for (const documentId of previousDocumentIds) {
+      this.documents.delete(documentId);
+    }
+
+    this.repositories.set(repository.id, repository);
+    for (const document of documents) {
+      this.documents.set(document.id, document);
+    }
+    for (const section of sections) {
+      this.sections.set(section.id, section);
+    }
+    this.recordSwap(repository.id);
   }
 
   async search(question: string, limit: number, repositoryIds?: string[]): Promise<RankedSection[]> {
@@ -913,40 +1058,6 @@ export class InMemoryKnowledgeIndex {
       documentCount: this.documents.size,
       sectionCount: this.sections.size
     };
-  }
-
-  // Drops previously-indexed documents (and their sections) for a repository
-  // that are absent from the freshly-indexed set, so re-indexing a source whose
-  // files were deleted doesn't leave stale docs/sections behind. Sections are
-  // grouped by documentId once up front (O(S)) rather than re-scanning the full
-  // section map per stale document (O(D×S)).
-  private pruneRepository(repositoryId: string, keepDocumentIds: Set<string>): void {
-    const staleDocumentIds: string[] = [];
-    for (const [documentId, document] of this.documents) {
-      if (document.repositoryId === repositoryId && !keepDocumentIds.has(documentId)) {
-        staleDocumentIds.push(documentId);
-      }
-    }
-    if (staleDocumentIds.length === 0) {
-      return;
-    }
-
-    const sectionIdsByDocumentId = new Map<string, string[]>();
-    for (const [sectionId, section] of this.sections) {
-      const existing = sectionIdsByDocumentId.get(section.documentId);
-      if (existing) {
-        existing.push(sectionId);
-      } else {
-        sectionIdsByDocumentId.set(section.documentId, [sectionId]);
-      }
-    }
-
-    for (const documentId of staleDocumentIds) {
-      this.documents.delete(documentId);
-      for (const sectionId of sectionIdsByDocumentId.get(documentId) ?? []) {
-        this.sections.delete(sectionId);
-      }
-    }
   }
 
   reset(): void {

@@ -4,6 +4,7 @@ import { exportJWK, generateKeyPair, SignJWT, type JSONWebKeySet } from "jose";
 import { makeTestContext } from "./test-support/context.js";
 import { loadConfig } from "./platform/config.js";
 import { buildApp } from "./app.js";
+import { InMemoryKnowledgeIndex, type KnowledgePersistence } from "./stores/knowledge-index.js";
 
 const authIssuer = "https://auth.test/";
 const authAudience = "https://markdown-magpie.test/api";
@@ -98,7 +99,27 @@ test("GET /api/ready reports 200 once the broker is started", async () => {
   const res = await app.request("/api/ready");
   assert.equal(res.status, 200);
   const body = (await res.json()) as { ready: boolean; checks: { database: boolean; broker: boolean } };
-  assert.deepEqual(body, { ready: true, checks: { database: true, broker: true } });
+  assert.deepEqual(body, { ready: true, checks: { database: true, broker: true, knowledgeIndex: true } });
+});
+
+test("GET /api/ready reports 503 while the knowledge index has not hydrated", async () => {
+  const ctx = makeTestContext();
+  await ctx.jobs.start();
+  // A persisted index whose store is unreachable: the startup hydrate fails.
+  const unreachable: KnowledgePersistence = {
+    saveIndexedRepository: async () => undefined,
+    applyIncrementalIndex: async () => undefined,
+    loadAll: async () => {
+      throw new Error("ECONNREFUSED");
+    },
+    reset: async () => undefined
+  };
+  ctx.stores.knowledgeIndex = new InMemoryKnowledgeIndex(unreachable);
+  await assert.rejects(ctx.stores.knowledgeIndex.hydrate(), /ECONNREFUSED/);
+  const res = await buildApp(ctx).request("/api/ready");
+  assert.equal(res.status, 503);
+  const body = (await res.json()) as { ready: boolean; checks: Record<string, boolean> };
+  assert.deepEqual(body, { ready: false, checks: { database: true, broker: true, knowledgeIndex: false } });
 });
 
 test("GET /api/ready is public even when auth is required", async () => {

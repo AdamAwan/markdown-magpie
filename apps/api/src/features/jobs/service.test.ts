@@ -236,6 +236,30 @@ test("wait returns current jobs on timeout and terminal jobs immediately", async
   assert.equal(terminal.job.state, "cancelled");
 });
 
+test("wait stops polling as soon as the client disconnects", async () => {
+  const ctx = makeTestContext();
+  const created = await ctx.jobs.create("answer_question", answerInput());
+  let polls = 0;
+  const get = ctx.jobs.get.bind(ctx.jobs);
+  ctx.jobs.get = async (id) => {
+    polls += 1;
+    return get(id);
+  };
+  const controller = new AbortController();
+  // A long timeout and poll: without the abort this wait would last a minute.
+  const waiting = waitForJob(ctx, created.id, { timeoutMs: 60_000, pollMs: 30_000, signal: controller.signal });
+  await new Promise((resolve) => setImmediate(resolve));
+  const started = Date.now();
+  controller.abort(new Error("client disconnected"));
+  await assert.rejects(waiting, /client disconnected/);
+  assert.ok(Date.now() - started < 1_000, "the wait ends promptly, without sleeping out its poll interval");
+  assert.equal(polls, 1, "no broker poll after the disconnect");
+
+  // An already-aborted signal never polls at all.
+  await assert.rejects(waitForJob(ctx, created.id, { signal: AbortSignal.abort(new Error("gone")) }), /gone/);
+  assert.equal(polls, 1);
+});
+
 test("display projection recursively redacts secrets without mutating stored input", () => {
   const input = { apiKey: "a", nested: [{ token: "b", authorization: "c" }], password: "d", safe: "ok" };
   const job: JobView = {
