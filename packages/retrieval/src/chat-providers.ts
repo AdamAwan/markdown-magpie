@@ -1,5 +1,14 @@
 import { aiUsageFromTokenCounts, type ChatProvider, type ChatRequest, type ChatResponse } from "@magpie/core";
-import { DEFAULT_CHAT_TIMEOUT_MS, fetchWithTimeout } from "./http.js";
+import {
+  assertProviderResponseOk,
+  DEFAULT_CHAT_RETRY_POLICY,
+  DEFAULT_CHAT_TIMEOUT_MS,
+  fetchWithTimeout,
+  ProviderOutputTruncatedError,
+  withProviderRetry,
+  type RetryHooks,
+  type RetryPolicy
+} from "./http.js";
 
 export type ChatProviderName = "openai-compatible" | "azure-openai";
 
@@ -23,7 +32,23 @@ export interface ChatProviderConfig {
    * operator-chosen, so this is configuration, never a name heuristic.
    */
   temperature?: number | null;
+  /**
+   * Bounded retry for a transient provider failure (429, 408, 5xx, timeout,
+   * dropped connection), honouring Retry-After. Defaults to
+   * DEFAULT_CHAT_RETRY_POLICY; `maxRetries: 0` disables it.
+   */
+  retry?: Partial<RetryPolicy>;
+  /** Observes retries (the watcher logs them) and lets tests stub the wait. */
+  retryHooks?: RetryHooks;
 }
+
+// Per-provider retry settings, resolved once at construction.
+interface ChatRetryOptions {
+  retry?: Partial<RetryPolicy>;
+  retryHooks?: RetryHooks;
+}
+
+const LABEL = "Chat provider";
 
 // Conditional spread so `null` contributes no key at all, matching the idiom
 // used for the optional embedding `authorization` header.
@@ -36,10 +61,15 @@ export class OpenAICompatibleChatProvider implements ChatProvider {
   constructor(
     private readonly config: Required<Pick<ChatProviderConfig, "apiKey" | "baseUrl" | "model">> &
       Pick<ChatProviderConfig, "temperature">,
-    private readonly timeoutMs: number = DEFAULT_CHAT_TIMEOUT_MS
+    private readonly timeoutMs: number = DEFAULT_CHAT_TIMEOUT_MS,
+    private readonly retryOptions: ChatRetryOptions = {}
   ) {}
 
-  async complete(request: ChatRequest): Promise<ChatResponse> {
+  complete(request: ChatRequest): Promise<ChatResponse> {
+    return completeWithRetry(this.retryOptions, request.signal, () => this.attempt(request));
+  }
+
+  private async attempt(request: ChatRequest): Promise<ChatResponse> {
     const response = await fetchWithTimeout(
       `${trimTrailingSlash(this.config.baseUrl)}/chat/completions`,
       {
@@ -56,7 +86,7 @@ export class OpenAICompatibleChatProvider implements ChatProvider {
         })
       },
       this.timeoutMs,
-      "Chat provider",
+      LABEL,
       request.signal
     );
 
@@ -70,10 +100,15 @@ export class AzureOpenAIChatProvider implements ChatProvider {
       Pick<ChatProviderConfig, "apiKey" | "azureEndpoint" | "azureDeployment" | "azureApiVersion">
     > &
       Pick<ChatProviderConfig, "temperature">,
-    private readonly timeoutMs: number = DEFAULT_CHAT_TIMEOUT_MS
+    private readonly timeoutMs: number = DEFAULT_CHAT_TIMEOUT_MS,
+    private readonly retryOptions: ChatRetryOptions = {}
   ) {}
 
-  async complete(request: ChatRequest): Promise<ChatResponse> {
+  complete(request: ChatRequest): Promise<ChatResponse> {
+    return completeWithRetry(this.retryOptions, request.signal, () => this.attempt(request));
+  }
+
+  private async attempt(request: ChatRequest): Promise<ChatResponse> {
     const endpoint = trimTrailingSlash(this.config.azureEndpoint);
     const deployment = encodeURIComponent(this.config.azureDeployment);
     const apiVersion = encodeURIComponent(this.config.azureApiVersion);
@@ -92,7 +127,7 @@ export class AzureOpenAIChatProvider implements ChatProvider {
         })
       },
       this.timeoutMs,
-      "Chat provider",
+      LABEL,
       request.signal
     );
 
@@ -112,7 +147,8 @@ export function createChatProvider(config: ChatProviderConfig): ChatProvider {
         model: config.model,
         ...(config.temperature === undefined ? {} : { temperature: config.temperature })
       },
-      config.timeoutMs ?? DEFAULT_CHAT_TIMEOUT_MS
+      config.timeoutMs ?? DEFAULT_CHAT_TIMEOUT_MS,
+      retryOptionsOf(config)
     );
   }
 
@@ -128,20 +164,41 @@ export function createChatProvider(config: ChatProviderConfig): ChatProvider {
         azureApiVersion: config.azureApiVersion ?? "2024-10-21",
         ...(config.temperature === undefined ? {} : { temperature: config.temperature })
       },
-      config.timeoutMs ?? DEFAULT_CHAT_TIMEOUT_MS
+      config.timeoutMs ?? DEFAULT_CHAT_TIMEOUT_MS,
+      retryOptionsOf(config)
     );
   }
 
   throw new Error(`Unsupported chat provider: ${String(config.provider)}`);
 }
 
+function retryOptionsOf(config: ChatProviderConfig): ChatRetryOptions {
+  return {
+    ...(config.retry ? { retry: config.retry } : {}),
+    ...(config.retryHooks ? { retryHooks: config.retryHooks } : {})
+  };
+}
+
+// One logical completion: the attempt, retried on a transient provider failure
+// within the bounded policy (docs/ai-jobs.md J81). The caller's signal stops
+// both the in-flight attempt and any wait between attempts.
+function completeWithRetry(
+  options: ChatRetryOptions,
+  signal: AbortSignal | undefined,
+  attempt: () => Promise<ChatResponse>
+): Promise<ChatResponse> {
+  const policy: RetryPolicy = { ...DEFAULT_CHAT_RETRY_POLICY, ...options.retry };
+  return withProviderRetry(attempt, policy, signal, options.retryHooks);
+}
+
 async function parseChatCompletionResponse(response: Response): Promise<ChatResponse> {
-  if (!response.ok) {
-    throw new Error(`Chat provider failed with ${response.status}: ${await response.text()}`);
-  }
+  // A non-2xx throws a typed ProviderRequestError (status + Retry-After) whose
+  // message carries only a short redacted summary of the body (J82).
+  await assertProviderResponseOk(response, LABEL);
 
   const body = (await response.json()) as {
     choices?: Array<{
+      finish_reason?: unknown;
       message?: {
         content?: string;
       };
@@ -152,6 +209,17 @@ async function parseChatCompletionResponse(response: Response): Promise<ChatResp
       total_tokens?: unknown;
     };
   };
+  // A reply cut off at the output-token limit is a prefix of an answer, never an
+  // answer: fail it as a distinct truncation (J83) before anything parses it.
+  if (body.choices?.[0]?.finish_reason === "length") {
+    const outputTokens = body.usage?.completion_tokens;
+    throw new ProviderOutputTruncatedError(
+      LABEL,
+      typeof outputTokens === "number"
+        ? `finish_reason "length" after ${outputTokens} output tokens`
+        : 'finish_reason "length"'
+    );
+  }
   const content = body.choices?.[0]?.message?.content?.trim();
   if (!content) {
     throw new Error("Chat provider returned no message content");

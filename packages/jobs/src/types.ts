@@ -148,3 +148,11 @@ export function isJobType(value: unknown): value is JobType {
 export function isAiProviderName(value: unknown): value is AiProviderName {
   return typeof value === "string" && (AI_PROVIDERS as readonly string[]).includes(value);
 }
+
+const NON_PROVIDER_CAPABILITIES: readonly string[] = ["github", "maintenance", "local-git"] satisfies JobCapability[];
+
+// Narrows an untyped capability string (e.g. one a watcher advertised and the
+// registry stored as text) to a JobCapability.
+export function isJobCapability(value: unknown): value is JobCapability {
+  return isAiProviderName(value) || (typeof value === "string" && NON_PROVIDER_CAPABILITIES.includes(value));
+}

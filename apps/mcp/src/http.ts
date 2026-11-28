@@ -12,8 +12,10 @@ import {
   createApiTokenProvider,
   createRemoteAuthVerifier,
   hasScopes,
+  ON_BEHALF_OF_SCOPE,
   parseBearerToken,
   providerProfile,
+  tokenGrantsOnBehalfOf,
   type ApiTokenProvider,
   type AuthProvider,
   type AuthSettings,
@@ -153,6 +155,93 @@ export interface HttpMcpOptions {
   // determine the client-credentials request shape (see @magpie/auth).
   apiAuthProvider?: AuthProvider;
   apiIdUri?: string;
+  // Run the on-behalf-of delegation check (M32) as soon as the app is created,
+  // so a missing act:on-behalf-of grant is logged at boot. `main` sets it; tests
+  // leave it off and drive the check through /health.
+  checkDelegationAtStartup?: boolean;
+}
+
+// Whether downstream API calls are actually authorized as the end user
+// (docs/mcp.md M32, docs/authorization.md AZ23):
+//   - "enabled": the MCP's service token carries act:on-behalf-of, so the API
+//     honours the forwarded user identity;
+//   - "missing_scope": it does not — the API IGNORES the on-behalf-of headers and
+//     every tool call runs with the MCP's own service identity (all flows);
+//   - "unverifiable": the token could not be inspected (opaque static token) or
+//     acquired right now;
+//   - "not_applicable": auth is off, so there is no user to delegate.
+type DelegationStatus = "enabled" | "missing_scope" | "unverifiable" | "not_applicable";
+
+// Checks (and re-checks on demand) whether the service token grants delegation,
+// logging loudly whenever the outcome changes. Cheap to call repeatedly: the
+// token provider caches the token until shortly before it expires.
+function createDelegationCheck(options: {
+  enabled: boolean;
+  token: ApiTokenProvider;
+  provider: AuthProvider;
+}): () => Promise<DelegationStatus> {
+  let last: DelegationStatus | undefined;
+  const report = (status: DelegationStatus, detail?: string): DelegationStatus => {
+    if (status === last) {
+      return status;
+    }
+    last = status;
+    if (status === "missing_scope") {
+      logger.error(
+        { event: "on_behalf_of", status },
+        `The MCP's API service credential does NOT hold ${ON_BEHALF_OF_SCOPE}: the API ignores the forwarded ` +
+          "user identity, so every tool call runs as the MCP service identity with access to ALL flows " +
+          "(per-user flow scoping is OFF on the MCP surface). Grant the MCP's M2M application the " +
+          `${ON_BEHALF_OF_SCOPE} permission on the API (docs/authorization.md AZ23).`
+      );
+    } else if (status === "unverifiable") {
+      logger.warn(
+        { event: "on_behalf_of", status, detail },
+        `Could not verify that the MCP's API service credential holds ${ON_BEHALF_OF_SCOPE}; if it does not, ` +
+          "tool calls run as the MCP service identity with access to all flows."
+      );
+    } else {
+      logger.info({ event: "on_behalf_of", status }, "MCP on-behalf-of delegation status");
+    }
+    return status;
+  };
+
+  return async () => {
+    if (!options.enabled) {
+      return report("not_applicable");
+    }
+    let token: string | undefined;
+    try {
+      token = await options.token();
+    } catch (error) {
+      return report("unverifiable", error instanceof Error ? error.message : "token acquisition failed");
+    }
+    if (!token) {
+      return report("unverifiable", "no service token configured");
+    }
+    const granted = tokenGrantsOnBehalfOf(token, options.provider);
+    if (granted === undefined) {
+      return report("unverifiable", "the service token is not an inspectable JWT");
+    }
+    return report(granted ? "enabled" : "missing_scope");
+  };
+}
+
+// Production safety for the HTTP MCP server (docs/mcp.md M33): with
+// NODE_ENV=production it refuses to start with auth disabled — anyone reaching it
+// could then call every tool with the MCP's own service identity — unless
+// MAGPIE_ALLOW_UNAUTHENTICATED_PRODUCTION is exactly "true" (the same override the
+// API honours).
+export function mcpProductionIssues(env: NodeJS.ProcessEnv, auth: Pick<AuthSettings, "required">): string[] {
+  const production = env.NODE_ENV?.trim().toLowerCase() === "production";
+  const override = env.MAGPIE_ALLOW_UNAUTHENTICATED_PRODUCTION?.trim().toLowerCase() === "true";
+  if (!production || auth.required || override) {
+    return [];
+  }
+  return [
+    "AUTH_REQUIRED=false while NODE_ENV=production: the MCP server would let anyone call every tool as its own " +
+      "service identity. Enable auth, or set MAGPIE_ALLOW_UNAUTHENTICATED_PRODUCTION=true if this is deliberate."
+  ];
 }
 
 // Carries the current request's verified user principal into the MCP tool handlers
@@ -182,6 +271,14 @@ export function createHttpMcpApp(options: HttpMcpOptions): Express {
   // request carries a verified user, forward that user's identity so the API
   // authorizes as the user (on-behalf-of delegation). Falls back to plain service
   // identity when there is no user (auth disabled / non-user context).
+  const checkDelegation = createDelegationCheck({
+    enabled: options.auth.required,
+    token: apiTokenProvider,
+    provider: options.apiAuthProvider ?? options.auth.provider ?? "auth0"
+  });
+  if (options.checkDelegationAtStartup) {
+    void checkDelegation();
+  }
   const kbOptions: KbClientOptions = {
     token: apiTokenProvider,
     onBehalfOf: () => {
@@ -357,9 +454,11 @@ export function createHttpMcpApp(options: HttpMcpOptions): Express {
     void handle(req, res);
   });
 
-  // Health check
+  // Health check. Also reports whether downstream calls really run as the end
+  // user (M32), so a missing act:on-behalf-of grant is visible to monitoring and
+  // not only in the boot log. The service stays up either way.
   app.get("/health", (_req: Request, res: Response) => {
-    res.json({ status: "ok" });
+    void checkDelegation().then((onBehalfOf) => res.json({ status: "ok", onBehalfOf }));
   });
 
   return app;
@@ -659,7 +758,10 @@ function toolScopeForMessage(message: unknown): string | undefined {
 async function main(): Promise<void> {
   const resourceUrl = envValue(process.env.MCP_RESOURCE_URL) ?? `http://localhost:${port}/mcp`;
   const auth = mcpAuthSettingsFromEnv(process.env, resourceUrl);
-  const startupIssues = mcpStartupIssues(process.env, auth, resourceUrl);
+  const startupIssues = [
+    ...mcpProductionIssues(process.env, auth),
+    ...mcpStartupIssues(process.env, auth, resourceUrl)
+  ];
   if (startupIssues.length > 0) {
     logger.error(`Invalid MCP auth configuration:\n- ${startupIssues.join("\n- ")}`);
     process.exit(1);
@@ -702,7 +804,8 @@ async function main(): Promise<void> {
     apiTokenUrl,
     apiAudience,
     apiAuthProvider: apiSettings.provider,
-    apiIdUri: apiSettings.apiIdUri
+    apiIdUri: apiSettings.apiIdUri,
+    checkDelegationAtStartup: true
   });
 
   app.listen(port, host, () => {

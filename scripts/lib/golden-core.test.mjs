@@ -11,8 +11,10 @@ import {
   routeCall,
   splitClauses,
   splitSentences,
+  stripUntrustedMarkers,
   verifyCall
 } from "./golden-core.mjs";
+import { wrapUntrusted } from "@magpie/prompts";
 
 const RETENTION_SECTION =
   "[section repo:backups.md:2] # Backup retention\n" +
@@ -229,6 +231,38 @@ describe("verifyCall", () => {
       "How long a backup is retained: nightly database backups are retained for 35 days. The knowledge base does not cover: cold storage.";
     const reply = verifyCall(`Question:\nQ\n\nAnswer under review:\n${answer}\n\nContext:\n${RETENTION_SECTION}`);
     assert.equal(reply.grounded, true);
+  });
+
+  // The watcher wraps both the answer under review and the context sections in
+  // nonce'd untrusted-content markers (TM31). Built with the REAL wrapUntrusted so
+  // this fixture breaks loudly if the marker format changes again, instead of
+  // silently reading the markers as answer claims (which regressed the golden
+  // eval: every answer came back claims_stripped).
+  it("reads a wrapped answer and wrapped context the way the watcher sends them", () => {
+    const answer = "How long a backup is retained: nightly database backups are retained for 35 days.";
+    const reply = verifyCall(
+      `Question:\nQ\n\nAnswer under review:\n${wrapUntrusted(answer)}\n\nContext:\n${wrapUntrusted(RETENTION_SECTION)}`
+    );
+    assert.deepEqual(reply, { grounded: true, unsupportedClaims: [] });
+  });
+
+  it("still strips a fabricated claim from a wrapped answer", () => {
+    const answer = `Aurora is not yet SOC 2 certified; a SOC 2 Type II audit is in progress. ${FABRICATED_SOC2_CLAIM}`;
+    const reply = verifyCall(
+      `Question:\nQ\n\nAnswer under review:\n${wrapUntrusted(answer)}\n\nContext:\n${wrapUntrusted(context)}`
+    );
+    assert.deepEqual(reply.unsupportedClaims, [FABRICATED_SOC2_CLAIM]);
+  });
+});
+
+describe("untrusted markers in the assess turn", () => {
+  it("never folds a marker into a section's content or an answer sentence", () => {
+    const wrapped = wrapUntrusted(RETENTION_SECTION);
+    assert.ok(!parseSections(wrapped)[0].content.includes("UNTRUSTED"));
+    const reply = assessCall(ANSWER_SYSTEM, assessMessage("How long are backups retained?", wrapped));
+    assert.equal(reply.action, "answer");
+    assert.ok(!reply.answer.includes("UNTRUSTED"), reply.answer);
+    assert.equal(stripUntrustedMarkers(wrapped).includes("<<<"), false);
   });
 });
 

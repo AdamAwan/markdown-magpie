@@ -47,20 +47,38 @@ bad value instead (noted per variable).
 | Variable | Read by | Default | Class | Notes |
 | --- | --- | --- | --- | --- |
 | `DATABASE_URL` | api, `scripts/migrate.mjs`, `scripts/eval-golden.ts` | — | **essential** | Postgres URL. Backs every store and the pg-boss job queue. Required by the API even with `STORAGE_BACKEND=memory`. |
-| `STORAGE_BACKEND` | api | `memory` | **essential** in practice | `memory` \| `postgres`. Every real deployment sets `postgres`; the in-memory default loses all data on restart. |
+| `STORAGE_BACKEND` | api | `memory` | **essential** in practice | `memory` \| `postgres`. Every real deployment sets `postgres`; the in-memory default loses all data on restart. With `NODE_ENV=production` the API refuses to start while any store resolves to `memory` (see [Production safety](#production-safety)). |
 | `PORT` | api (web via Next.js) | `4000` (api) | common | API listen port. Compose sets `4000` for the API and `3000` for the web container. |
 | `API_BASE_URL` | watcher, mcp, `scripts/eval-api.ts` | `http://localhost:4000` | **essential** outside local dev | How the watcher and MCP server reach the API. The watcher refuses to start without it when auth is on. A trailing `/api` is stripped by mcp and the eval script. |
 | `NEXT_PUBLIC_API_BASE_URL` | web (inlined at **build** time; also read at runtime by the server layout) | empty (same origin) | common | Browser-facing API URL. Takes precedence over `PUBLIC_API_BASE_URL`. |
 | `PUBLIC_API_BASE_URL` | web (runtime) | empty (same origin) | common | Runtime fallback for a prebuilt image. Leave both blank when the API is served from the web app's origin. |
-| `CORS_ALLOWED_ORIGINS` | api | `*` | common | Comma-separated origin allow-list. Restrict it in production. |
-| `NODE_ENV` | api, watcher, mcp, web | `development` | common | `production` selects JSON logs at `info` and the `.next-build` output dir. The Docker image sets it. |
+| `CORS_ALLOWED_ORIGINS` | api | `*` | common; **essential** with `NODE_ENV=production` | Comma-separated origin allow-list. With `NODE_ENV=production` the API refuses to start while it allows any origin (unset, blank or `*`) — see [Production safety](#production-safety). |
+| `NODE_ENV` | api, watcher, mcp, web | `development` | common | `production` selects JSON logs at `info`, the `.next-build` output dir, and turns on the API/MCP [production safety](#production-safety) checks. The Docker image sets it. |
 | `LOG_LEVEL` | api, watcher, mcp | `info` in production, else `debug` | common | `trace` \| `debug` \| `info` \| `warn` \| `error` \| `fatal`. |
 | `LOG_STARTUP_CONFIG` | api | on | tuning | Set exactly `false` to skip the resolved-configuration log at startup. Secrets are always masked. |
-| `API_SHUTDOWN_DRAIN_MS` | api | `10000` | tuning | Longest the API waits for in-flight background work on SIGTERM/SIGINT. |
+| `API_SHUTDOWN_DRAIN_MS` | api | `10000` | tuning | One drain window on SIGTERM/SIGINT, shared by in-flight HTTP requests (force-closed at the deadline) and background work, before the broker stops and the pool ends ([api.md](./api.md) API37/API38). Keep the container stop grace period above this + 10 s. |
 | `DB_POOL_MAX` | api | `10` | tuning | Connections in the shared store pool (pg-boss keeps its own pool). |
 | `DB_IDLE_TIMEOUT_MS` | api | `30000` | tuning | Idle connection lifetime. |
 | `DB_CONNECTION_TIMEOUT_MS` | api | `10000` | tuning | Fail if a connection cannot be acquired in time. |
 | `DB_STATEMENT_TIMEOUT_MS` | api | `30000` | tuning | Server-side cap on a single statement. |
+
+### Production safety
+
+With `NODE_ENV=production` (the Docker image sets it) the API refuses to start in a
+posture that is only acceptable for local development, naming the variable and the
+override in the startup error. Each posture has its own override, honoured only when set
+to exactly `true` (any case) and only in production; a typo keeps the check on.
+
+| Refused in production | Override (exactly `true`) | Also applies to |
+| --- | --- | --- |
+| `AUTH_REQUIRED=false` (every route open) | `MAGPIE_ALLOW_UNAUTHENTICATED_PRODUCTION` | the HTTP MCP server |
+| Any store resolving to `memory` (`STORAGE_BACKEND` unset or `memory`, or a per-store override) | `MAGPIE_ALLOW_MEMORY_STORAGE_IN_PRODUCTION` | — |
+| `CORS_ALLOWED_ORIGINS` allowing any origin (unset, blank or `*`) | `MAGPIE_ALLOW_ANY_CORS_ORIGIN_IN_PRODUCTION` | — |
+
+Independently of `NODE_ENV`, the API also refuses to start when `MAGPIE_CHECKOUT_ROOT` or
+`MAGPIE_SNAPSHOT_ROOT` is not writable, and always logs one `event=security_posture` line
+at startup (auth on/off, provider, issuer, audience, memory-backed stores, CORS policy,
+overrides in effect), plus a warning for each insecure posture.
 
 ### Per-store backend overrides
 
@@ -121,8 +139,8 @@ plain-string forms — a bare path, a git URL, `agent`, `internet` — are unaff
 | `KNOWLEDGE_SOURCES` | api | `[]` | **essential** | JSON array of read-from sources. |
 | `KNOWLEDGE_DESTINATIONS` | api | `[]` | **essential** | JSON array of written-to knowledge bases (the indexed answer corpus). |
 | `KNOWLEDGE_FLOWS` | api | `[]` | **essential** | JSON array linking sources to a destination. |
-| `MAGPIE_CHECKOUT_ROOT` | api, watcher | `.magpie/checkouts` | **essential** in containers | Managed clone root. Must be a writable volume; API and watcher each need one. Relative paths resolve from the working directory. |
-| `MAGPIE_SNAPSHOT_ROOT` | api | `.magpie/snapshots` | **essential** in containers | Where per-flow snapshots are written. Must be writable. |
+| `MAGPIE_CHECKOUT_ROOT` | api, watcher | `.magpie/checkouts` | **essential** in containers | Managed clone root. Must be a writable volume; API and watcher each need one. Relative paths resolve from the working directory. The API refuses to start when it is not writable. |
+| `MAGPIE_SNAPSHOT_ROOT` | api | `.magpie/snapshots` | **essential** in containers | Where per-flow snapshots are written. Must be writable: the API refuses to start otherwise. |
 | `MAGPIE_LOCAL_INDEX_ROOT` | api | working directory | tuning | Root a client-supplied local index path must stay inside (path-traversal guard). |
 | `SOURCE_SYNC_MAX_CHANGED_FILES` | api | `1000` | tuning | Changed files one source-sync run considers per source; the true total is still recorded on the run. Bad values fall back. |
 | `SEED_BOOTSTRAP_MAX_DOCS` | api | `3` | tuning | A flow with fewer indexed documents than this is offered an auto-proposed seed plan. |
@@ -148,12 +166,14 @@ provider's capability only when that provider's required variables are all set.
 | `CLAUDE_CLI_PATH` | watcher | `claude` | **essential** for `claude` | Same rule as `CODEX_CLI_PATH`. |
 | `CODEX_CLI_ARGS` | watcher | `exec` | tuning | Base arguments. Isolation flags are appended in code and cannot be configured away. |
 | `CLAUDE_CLI_ARGS` | watcher | `-p` | tuning | As above. |
-| `CODEX_CLI_PROMPT_MODE`, `CLAUDE_CLI_PROMPT_MODE` | watcher | `arg` | common on Windows | `arg` \| `stdin`. Anything other than `stdin` means `arg`. Use `stdin` on Windows. |
+| `CODEX_CLI_PROMPT_MODE`, `CLAUDE_CLI_PROMPT_MODE` | watcher | `stdin` | tuning | `stdin` \| `arg`. Anything other than `arg` means `stdin`. `arg` fails to spawn once a prompt passes ~128 KB on Linux (`E2BIG`) or ~32 KB on Windows (`ENAMETOOLONG`); keep it only for a CLI build that cannot read stdin ([ai-jobs.md](./ai-jobs.md) J80). **Changed default** — was `arg`. |
+| `AGENT_CLI_MAX_OUTPUT_BYTES` | watcher | `8388608` (8 MiB) | tuning | Cap on a CLI run's captured stdout; exceeding it stops the run and fails the job (J85). |
 | `CODEX_CLI_MODEL`, `CLAUDE_CLI_MODEL` | watcher | CLI's own default | common | Appended as `--model <value>` when set. |
 | `CHAT_TEMPERATURE` | watcher | `0.2` is sent | common | A number overrides it; `default` omits the field — required for reasoning deployments that reject an explicit temperature. |
-| `AGENT_API_TIMEOUT_MS` | watcher (api reads it for config display only) | `120000` | tuning | Per-request timeout for hosted chat calls. |
+| `AGENT_API_TIMEOUT_MS` | watcher (api reads it for config display only) | `120000` | tuning | Per-attempt timeout for hosted chat calls. |
+| `AGENT_API_MAX_RETRIES` | watcher | `2` | tuning | In-process retries of a transient hosted-chat failure (408/429/5xx, timeout, dropped connection) with backoff honouring `Retry-After`; `0` disables, values outside 0–10 fall back to the default ([ai-jobs.md](./ai-jobs.md) J81). |
 | `AGENT_CLI_TIMEOUT_MS` | watcher | `120000` | tuning | Per-invocation timeout for one-shot CLI runs. |
-| `MAGPIE_AGENTIC_TIMEOUT_MS` | watcher | `600000` | tuning | Timeout for source-grounded agentic runs. Keep below the 900 s queue expiry of the draft jobs. |
+| `MAGPIE_AGENTIC_TIMEOUT_MS` | watcher | `600000` | tuning | Timeout for source-grounded agentic runs — the CLI run, or the whole HTTP-provider tool loop (every step and the forced closing turn, J84). Keep below the 900 s queue expiry of the draft jobs. |
 | `CLI_CANCEL_GRACE_MS` | watcher | `5000` | tuning | Grace period before a cancelled CLI run is killed. |
 | `MAGPIE_CLI_ENV_PASSTHROUGH` | watcher | empty | common for Bedrock/Vertex | Extra variable **names** (comma/space separated) forwarded to spawned CLIs. |
 | `AI_PRICING` | api | unset (no cost reporting) | common | JSON price table per (provider, model). A malformed value fails startup. |
@@ -195,7 +215,7 @@ from which variables are set; with none, retrieval is keyword-only.
 | `OPENAI_COMPATIBLE_EMBEDDING_DIMENSIONS` | api | not sent | tuning | Sent as `dimensions` only when set. Many servers reject the field. |
 | `AZURE_OPENAI_EMBEDDING_DEPLOYMENT` | api | — | **essential** for Azure embeddings | Enables Azure embeddings. |
 | `AZURE_OPENAI_EMBEDDING_DIMENSIONS` | api | not sent | **essential** for `text-embedding-3-large` on Azure | Must be `1536` for that model; leave blank for ada-002. |
-| `EMBEDDING_TIMEOUT_MS` | api | `60000` | tuning | Per-request timeout for embedding calls. |
+| `EMBEDDING_TIMEOUT_MS` | api | `60000` | tuning | Per-request timeout for **background** embedding calls (indexing, gap bucketing, questionnaire matching). Query-time retrieval and embedding routing use a separate 5 s timeout behind a circuit breaker that is not yet configurable ([ai-jobs.md](./ai-jobs.md) J86). |
 | `FLOW_ROUTER_MIN_SCORE` | api | `0.25` | tuning | Float in [0,1]. Bad values fall back. |
 | `FLOW_ROUTER_MIN_MARGIN` | api | `0.05` | tuning | Float in [0,1]. Bad values fall back. |
 | `GAP_CLUSTER_ASSIGN_THRESHOLD` | api | `0.84` | tuning | Float in (0,1]. Re-tune with `npm run eval:gap-threshold` after changing the embedding model. Bad values fall back. |
@@ -241,8 +261,9 @@ See [questionnaires.md](./questionnaires.md). All read by the API; bad values fa
 | `WATCHER_MAINTENANCE_TIMEOUT_MS` | watcher | `900000` | tuning | Abort deadline for the long maintenance orchestration callbacks. |
 | `WATCHER_HEALTH_PORT` | watcher | `4002` | common | Health server port. An invalid port fails startup. |
 | `WATCHER_HEALTH_HOST` | watcher | `0.0.0.0` | tuning | Health server bind address. |
-| `WATCHER_HEALTH_STALE_AFTER_MS` | watcher | `120000` | tuning | `/health` returns 503 if the poll loop has not ticked within this window. |
-| `WATCHER_ACTIVE_WINDOW_MS` | api | `900000` | tuning | How long a silent watcher is still listed as connected. |
+| `WATCHER_HEALTH_STALE_AFTER_MS` | watcher | `120000` | tuning | `/health` returns 503 if neither the poll loop nor a running job's heartbeat has ticked within this window ([ai-jobs.md](./ai-jobs.md) J55). Keep it above the heartbeat cadence (30 s by default). |
+| `WATCHER_SHUTDOWN_TIMEOUT_MS` | watcher | `20000` | tuning | Longest a graceful stop (abort the runner, release its job back to the queue, close health, flush telemetry) may take before the watcher force-exits 1 ([ai-jobs.md](./ai-jobs.md) J53/J54). Keep the container stop grace period above it. |
+| `WATCHER_ACTIVE_WINDOW_MS` | api | `900000` | tuning | How long a silent watcher is still listed as connected — on the Jobs screen and in the `magpie.watchers.*` gauges ([observability.md](observability.md) O19). |
 
 ## Git and publishing
 
@@ -256,14 +277,23 @@ See [proposals-and-publishing.md](./proposals-and-publishing.md). Git runs in bo
 | `MAGPIE_GIT_AUTHOR_NAME`, `MAGPIE_GIT_AUTHOR_EMAIL` | any process that commits (`packages/git`); the watcher's capability gates | — | **essential** for publishing | Commit identity. Publishing fails fast without both; they gate the `github` and `local-git` capabilities. |
 | `AZURE_DEVOPS_PAT` | api, watcher | — | **essential** for Azure DevOps remotes | Clone/fetch/push for dev.azure.com / visualstudio.com. |
 | `GIT_PROVIDER` | api | `local` | tuning | Display-only label on the config page. |
-| `GIT_TIMEOUT_MS` | api, watcher | `120000` | tuning | Per git subprocess. Read once at module load. Bad values fall back. |
+| `GIT_TIMEOUT_MS` | api, watcher | `120000` | tuning | Per git subprocess other than a first clone (fetch, reset, checkout, diff, push). Read once at module load. Bad values fall back. Also sets the stale-lock age: git lock files older than 2× this are cleared before a sync/publish. |
+| `GIT_CLONE_TIMEOUT_MS` | api, watcher | `1800000` (30 min) | tuning | Bound on a **first** `git clone` of a source/destination. Raise it for a very large repository on a slow link. A clone that times out leaves nothing at the checkout path (it is staged and renamed into place), and the next attempt starts clean. Read once at module load. Bad values fall back. |
 | `GIT_MAX_BUFFER_BYTES` | api, watcher | `67108864` | tuning | Git stdout/stderr buffer. |
 | `GITHUB_API_TIMEOUT_MS` | api, watcher | `30000` | tuning | Per GitHub REST/GraphQL call. |
 | `GIT_PARTIAL_CLONE` | api, watcher | `true` | tuning | `0`/`false`/`off`/`no` disables blobless partial clones. Read per call. A remote that rejects `--filter` already falls back automatically. |
 
-`GIT_ALLOW_PROTOCOL`, `GIT_CONFIG_COUNT`, `GIT_CONFIG_KEY_0` and `GIT_CONFIG_VALUE_0` are
-**set by the code** on every git subprocess (protocol allow-list and the auth header) and
-deliberately override anything in the environment. They are not operator configuration.
+`GIT_ALLOW_PROTOCOL`, `GIT_TERMINAL_PROMPT` (`0`), `GIT_CONFIG_COUNT`, `GIT_CONFIG_KEY_0`
+and `GIT_CONFIG_VALUE_0` are **set by the code** on every git subprocess (protocol
+allow-list, no credential prompts, and the auth header) and deliberately override anything
+in the environment. They are not operator configuration.
+
+Tokens are attached to **https** remotes only ([threat-model.md#TM38](./threat-model.md)).
+A credential embedded in an `https://user:token@…` source/destination URL still works on
+the process that holds that config (the API), but it is sent as a header and never stored
+in the checkout's `.git/config` or returned by the API (TM36/TM37) — so the **watcher**
+needs its own `GITHUB_TOKEN` / `AZURE_DEVOPS_PAT` / `tokenEnv` to push to that remote. A
+credential embedded in a plain `http://` URL is refused.
 
 ## MCP server
 
@@ -315,9 +345,10 @@ None of these affect a running deployment. Class **dev/test**.
 
 | Variable | Read by | Default | Notes |
 | --- | --- | --- | --- |
-| `RUN_PG_INTEGRATION` | Postgres-backed `*.integration.test.ts` | unset (skipped) | `1` enables them; `npm run test:db` provides the database. |
-| `TEST_POSTGRES_IMAGE` | `scripts/test-db.mjs` | `pgvector/pgvector:pg16` | Image for the throwaway test database. |
-| `E2E_API_BASE_URL` | `scripts/e2e-jobs.ts` | `http://localhost:4000` | API under test. |
+| `RUN_PG_INTEGRATION` | Postgres-backed `*.integration.test.ts` | unset (skipped) | `1` enables them. `npm run test:db` sets it for you and provides the database. |
+| `TEST_DATABASE_ADMIN_URL` | `scripts/test-db.mjs` | unset (use Docker) | Admin connection to an existing pgvector-enabled Postgres. When set, each run creates, migrates and drops its own `magpie_test_<pid>_<random>` database there instead of booting a container (CI, Docker-less machines). |
+| `TEST_POSTGRES_IMAGE` | `scripts/test-db.mjs` | `pgvector/pgvector:pg16` | Image for the throwaway test container (Docker mode only). |
+| `E2E_API_BASE_URL` | `scripts/e2e-jobs.ts` | `http://localhost:4000` | API under test (`npm run e2e:jobs:local` sets it to the stack it boots). |
 | `E2E_API_TOKEN` | `scripts/e2e-jobs.ts` | — | Bearer token when the API under test has auth on. |
 | `EVAL_TIMEOUT_MS` | `scripts/eval-api.ts` | `30000` | Request timeout. |
 | `EVAL_CASES_JSON` | `scripts/eval-api.ts` | built-in cases | JSON array overriding the eval cases. |
@@ -327,7 +358,8 @@ None of these affect a running deployment. Class **dev/test**.
 
 `scripts/eval-golden.ts` builds the environment of the API and watcher it spawns itself
 (`AI_PROVIDER`, `STORAGE_BACKEND`, `RATE_LIMIT_ENABLED`, the knowledge variables, …); those
-are the same variables documented above, set by the script rather than read from you.
+are the same variables documented above, set by the script rather than read from you. The
+same holds for `scripts/e2e-jobs-local.ts` (`npm run e2e:jobs:local`).
 
 ## Docker Compose and CI
 
@@ -357,6 +389,13 @@ the env files**:
   A value for one of these that exists only in `.env.compose` is replaced by the
   interpolated one (an empty string when the shell and `.env` do not define it), so keep
   them in the project `.env` or pass `--env-file`.
+
+The image sets `NODE_ENV=production`, so the compose stack runs the
+[production safety](#production-safety) checks: `.env.compose.example` sets
+`STORAGE_BACKEND=postgres` and `CORS_ALLOWED_ORIGINS` (the deployed console origin — change
+it in `.env.compose` for another host), and `docker-compose.e2e.yml` sets
+`MAGPIE_ALLOW_UNAUTHENTICATED_PRODUCTION=true` on the API so an e2e stack run with
+`AUTH_REQUIRED=false` still boots.
 
 `docker-compose.watcher.yml` (a standalone remote watcher) instead loads `.env` as its
 `env_file` and pins only `MAGPIE_CHECKOUT_ROOT`.

@@ -41,7 +41,8 @@ route's scope **and** the required capability on the resource's flow.
   (`c.get("authRequired") === false`); an unset flag is treated as required. Auth
   itself is likewise fail-closed: `isAuthRequired` (`packages/auth/src/index.ts`)
   keeps auth **on** unless an operator sets `AUTH_REQUIRED=false` (case-insensitive) —
-  a blank or typo'd value leaves it enabled.
+  a blank or typo'd value leaves it enabled. Disabling auth in production is a
+  further explicit step (AZ35).
 - **AZ4** — **Flow-scoped capabilities** layer on top of the scope gates to answer
   *which flow* a principal may act on. The motivating sensitivity boundary is that
   **draft proposals embed source-derived material**; a draft can leak source content
@@ -55,9 +56,9 @@ route's scope **and** the required capability on the resource's flow.
 
 | Capability | Scope of grant | Gates |
 |---|---|---|
-| `read`   | per flow | Reading proposals & gaps for that flow (list results are filtered; single resources in other flows report 404) |
+| `read`   | per flow | Reading proposals, gaps, questions, snapshots, the indexed knowledge base and job content for that flow (list results are filtered; single resources in other flows report 404 — AZ30–AZ34) |
 | `manage` | per flow | Drafting, publishing, status changes, reconcile for that flow |
-| `ask`    | per flow | Asking questions routed to that flow |
+| `ask`    | per flow | Asking questions routed to that flow; also reads that flow's indexed knowledge (AZ32) and its answer jobs (AZ34), and gives feedback on its questions (AZ33) |
 | `admin`  | `*` only | The destructive `POST /api/admin/reset` (wipes all data); on Entra also config writes and question purge (AZ27) |
 | `ops`    | `*` only | On Entra only: job and schedule management and maintenance triggers (AZ27) |
 
@@ -284,7 +285,65 @@ stays the single source of authorization truth.
 > Keep the MCP→API channel on a trusted network / TLS, since the headers are trusted
 > once the caller is authenticated. If the scope is *not* granted, MCP calls fall back
 > to the service-identity bypass (AZ13) — so, like the rest of this model, per-user
-> enforcement on MCP is opt-in.
+> enforcement on MCP is opt-in. That fallback is no longer silent: the MCP checks its
+> own service token for the scope at startup and on every `/health` (AZ36).
+
+## Flow-scoped reads
+
+The read routes under the `read:knowledge` scope apply the flow-scoped capabilities
+the same way the proposal and gap routes do. A shared helper resolves the caller's
+visible flows (`readableFlowIds`, `canAny`; `apps/api/src/auth/capabilities.ts`).
+
+- **AZ30** — A list route MUST return only resources in flows the caller holds the
+  route's capability on, and MUST compute its totals over the same visible set. A
+  flow-less resource is visible only through a `*` grant (AZ14); a caller whose reads
+  are **unrestricted** (no grants configured, auth disabled, a service principal, or a
+  `*` grant) sees everything, flow-less resources included. A single resource in a flow
+  the caller cannot read MUST report **404**, never 403, so ids in other flows are not
+  enumerable. An empty visible set MUST mean "nothing", never an unscoped read.
+- **AZ31** — **Snapshots** (`GET /api/snapshots`, `/:flowId`) carry a flow's gaps and
+  in-flight proposals, so they need `read` on the flow; the un-routed `default`
+  snapshot needs `read` on `*`.
+- **AZ32** — **Indexed knowledge** (`GET /api/knowledge/documents`, `/search`,
+  `/sections/:id`, `/citation-usage`) is scoped to the destination repositories of the
+  flows the caller holds `read` **or `ask`** on — the indexed corpus is the published
+  answer material an asker already reaches through `/api/retrieve` (AZ19) and cited
+  excerpts, so MCP `kb_search` / `kb_citation` keep working for askers. A document in
+  a repository that is no flow's destination needs a `*` grant. A restricted
+  citation-usage report drops usage rows for documents no longer indexed (their
+  repository cannot be known). `GET /api/knowledge/changes` keeps its own rule
+  (unrestricted when every configured flow is readable).
+- **AZ33** — **Questions**: `GET /api/questions` (filtered in the store query, so
+  `total`/`matching` stay exact), `/parked` and `/:id` need `read` on the question's
+  flow. The per-question actions under `feedback:questions` (`/:id/feedback`,
+  `/:id/gap`, `/:id/gap/{retry,dismiss}`) need `read` **or `ask`** on it, so an asker
+  can rate its own answers (MCP `kb_feedback`); anything else is a 404. An un-routed
+  question needs a `*` grant. `DELETE /api/questions/:id` stays an admin action (AZ27).
+- **AZ34** — **Jobs** (`GET /api/jobs`, `/:id`, `/:id/wait`) are **redacted, not
+  hidden**: the caller sees a job's content when it holds `read` or `manage` on the
+  job's flow — or, for an answer job, `ask` (an asker waiting on its answer) —
+  and otherwise gets the job with `input: {}`, no `output`/`repair`/`traceContext`,
+  the error reduced to its code and category, and `redacted: true`. A job's flow is
+  its input `flowId`, or for an answer job the flow it was answered in (else asked
+  in); a flow-less job needs `*`. Redaction instead of filtering is deliberate: the
+  job list is the operator's view of the queue (an ops admin holds no `read`, AZ17)
+  and is paginated by the broker, so dropping rows would make its totals lie.
+
+## Production safety and the MCP delegation check
+
+- **AZ35** — With `NODE_ENV=production` the API (`productionSafetyIssues`,
+  `apps/api/src/platform/config.ts`) and the HTTP MCP server (`mcpProductionIssues`,
+  `apps/mcp/src/http.ts`) MUST refuse to start with `AUTH_REQUIRED=false` unless
+  `MAGPIE_ALLOW_UNAUTHENTICATED_PRODUCTION` is exactly `true`; the API logs its auth
+  state (required, provider, issuer, audience) on every boot
+  (`apps/api/src/platform/security-posture.ts`). See
+  [configuration.md](./configuration.md#production-safety) for the storage and CORS
+  checks that sit beside it.
+- **AZ36** — The HTTP MCP server MUST check whether its own API service token carries
+  `act:on-behalf-of` (`tokenGrantsOnBehalfOf`, `packages/auth/src/on-behalf-of.ts`) at
+  startup and on every `/health`, log an error when it does not, and report the
+  outcome as `/health`'s `onBehalfOf` ([mcp.md](./mcp.md) M32). The check is a
+  diagnostic only — it decodes the token without verifying it and authorizes nothing.
 
 ## Identity providers
 
@@ -342,8 +401,8 @@ everything that differs between providers is computed in one profile per provide
 
   | Capability | Routes |
   | --- | --- |
-  | `admin` | `POST /api/config`, `POST /api/admin/reset` (which also keeps its AZ16 `assertCan(admin)`), `DELETE /api/questions/:id` |
-  | `ops` | `POST /api/jobs`, `POST /api/jobs/:id/{cancel,retry,accept-failure}`, `POST /api/scheduled-tasks/:key/{settings,run}`, `POST /api/fix-patrol/run`, `POST /api/fix-patrol/improve/run`, `POST /api/source-sync/run`, `POST /api/flows/:flowId/seed-bootstrap/run` |
+  | `admin` | `GET /api/config`, `POST /api/config`, `POST /api/admin/reset` (which also keeps its AZ16 `assertCan(admin)`), `DELETE /api/questions/:id` |
+  | `ops` | `POST /api/jobs`, `POST /api/jobs/:id/{cancel,retry,accept-failure}`, `POST /api/scheduled-tasks/:key/{settings,run}`, `POST /api/fix-patrol/run`, `POST /api/fix-patrol/improve/run`, `POST /api/source-sync/run`, `POST /api/flows/:flowId/seed-bootstrap/run`, `POST /api/knowledge/repositories/index`, `POST /api/proposals/:id/verify-closure` (the maintenance watcher's callback: its service principal is always admitted) |
 
   Unchanged by AZ27: requests with **no principal** (auth disabled), **service**
   principals (`isService` — their scopes are per-application permissions an
@@ -361,11 +420,11 @@ everything that differs between providers is computed in one profile per provide
   roles for everyone else (AZ14: a user whose roles match no grant sees no flow
   content).
 
-> ⚠️ **Residual (Entra).** The flow-scoped `manage` capability (AZ14) already gates
-> per-flow writes, and the routes above are role-gated, but scope-only routes outside
-> that list still trust Entra's non-per-user scopes: `GET /api/config` (masked runtime
-> config, read by every console poll), `POST /api/knowledge/repositories/index`
-> (re-index), and `POST /api/proposals/:id/verify-closure` (a maintenance callback).
+> ⚠️ **Residual closed.** `GET /api/config`, `POST /api/knowledge/repositories/index`
+> and `POST /api/proposals/:id/verify-closure` used to be scope-only on Entra; they
+> are now in the table above. Note the console's slow poll includes `GET /api/config`,
+> so an Entra user without the `admin` role gets a 403 there (as an Auth0 user without
+> `manage:admin` always has).
 
 ### Using Microsoft Entra ID
 
@@ -464,20 +523,26 @@ JWKS and token endpoints, the roles claim, and the client-credentials scope
 | Runtime M2M service-token acquisition (client-credentials) | `packages/auth/src/api-token.ts` |
 | On-behalf-of delegation (headers, scope, resolver) | `packages/auth/src/on-behalf-of.ts` |
 | `requireAuth` / `requireScopes` / `requireServicePrincipal` + delegation wiring | `apps/api/src/auth/middleware.ts` |
-| Flow-scoped check, `can` / `assertCan`, roleless-human alert, privileged-action gate (`requirePrivilege`) | `apps/api/src/auth/capabilities.ts` |
-| Entra boot check (no role grants with auth on) | `apps/api/src/platform/config.ts` (`authorizationConfigIssues`) |
+| Flow-scoped check, `can` / `canAny` / `assertCan` / `readableFlowIds`, roleless-human alert, privileged-action gate (`requirePrivilege`) | `apps/api/src/auth/capabilities.ts` |
+| Entra boot check (no role grants with auth on); production auth refusal (AZ35) | `apps/api/src/platform/config.ts` (`authorizationConfigIssues`, `productionSafetyIssues`) |
+| Startup auth/security-posture log (AZ35) | `apps/api/src/platform/security-posture.ts` |
+| Flow-scoped reads (AZ30–AZ34) | `apps/api/src/features/{snapshots,knowledge,questions}/routes.ts`, `apps/api/src/features/jobs/visibility.ts`, `apps/api/src/stores/{question-log-store,postgres-question-log-store}.ts` (`flowIds` filter) |
+| MCP production refusal + delegation check (AZ35/AZ36) | `apps/mcp/src/http.ts` (`mcpProductionIssues`, `createDelegationCheck`), `packages/auth/src/on-behalf-of.ts` (`tokenGrantsOnBehalfOf`) |
 | Capability set, `KNOWLEDGE_ROLE_GRANTS` parsing | `apps/api/src/stores/knowledge-repositories.ts` (`getConfiguredRoleGrants`) |
 | Enforcement points (`assertCan`) | `apps/api/src/features/{ask,retrieve,route}/routes.ts`, `apps/api/src/features/config/routes.ts` (`/admin/reset`) |
-| Enforcement points (`requirePrivilege`, AZ27) | `apps/api/src/features/{config,jobs,questions,scheduled-tasks,patrol,source-sync,seed}/routes.ts` |
+| Enforcement points (`requirePrivilege`, AZ27) | `apps/api/src/features/{config,jobs,questions,scheduled-tasks,patrol,source-sync,seed,knowledge,proposals}/routes.ts` |
 
 ## Tests (behavioural contract)
 
 `packages/auth/src/{index,api-token,on-behalf-of}.test.ts` (incl. Entra issuer,
 endpoint defaults, claim mapping, form-encoded client-credentials, legacy-env
 fallbacks), `apps/api/src/platform/config.test.ts`, `apps/watcher/src/config.test.ts`,
-`apps/api/src/auth/{capabilities,middleware,middleware.delegation,privileged-routes}.test.ts`,
+`apps/api/src/auth/{capabilities,middleware,middleware.delegation,privileged-routes,read-routes.flow-scope}.test.ts`,
 `apps/api/src/features/{retrieve,route}/routes.flow-scope.test.ts`,
-`apps/api/src/features/jobs/routes.worker-auth.test.ts`.
+`apps/api/src/features/jobs/routes.worker-auth.test.ts`,
+`apps/api/src/stores/{question-log-store,postgres-question-log-store}.test.ts` (flow filter),
+`apps/api/src/platform/security-posture.test.ts`, `apps/mcp/src/http.test.ts` (delegation
+`/health`, production refusal).
 
 ## Provenance (design history)
 

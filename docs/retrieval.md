@@ -187,6 +187,20 @@ callbacks. Weak or unanswerable questions feed the gaps subsystem
   > option without an account**: the `embeddings` compose profile clears this cliff with no
   > third-party dependency (see "Local embeddings sidecar").
 
+- **R24** — **A flow-scoped vector search MUST NOT under-return because of the ANN
+  index.** The vector leg first runs the approximate query (`ORDER BY embedding <=> query`,
+  served by the HNSW index from migration `0006`). HNSW collects only `hnsw.ef_search`
+  (default 40) nearest candidates from the **whole** corpus and the repository filter runs
+  on those afterwards, so a small flow whose sections are not among the corpus-wide nearest
+  used to get few or zero vector hits. When a repository-filtered search returns fewer than
+  `limit` rows, `searchByEmbedding` re-runs it as an **exact** search (ordered by the
+  computed similarity, a form no HNSW index can serve), which returns the true top-`limit`
+  within the flow. A short filtered result means the flow is small relative to the corpus,
+  which is exactly when its exact scan is cheap; an unfiltered or full result never pays
+  for it. pgvector 0.8's `hnsw.iterative_scan` would fix this inside the index, but the
+  project does not pin a pgvector version that has it (compose and the test harness track
+  `pgvector/pgvector:pg16`), and setting an unknown `hnsw.*` parameter is an error.
+
 ## Citations
 
 - **R18** — Citations MUST be derived in code from the retrieved sections and never
@@ -309,7 +323,11 @@ Caveats an operator needs before turning it on:
   For an air-gapped host, pre-populate the `embeddings-cache` volume.
 - **It is not free of cost, just of money.** ~2.5 GB image (linux/amd64) plus ~275 MB of
   weights, and CPU inference is markedly slower than a hosted endpoint — hence the
-  `EMBEDDING_TIMEOUT_MS=60000` in the example config.
+  `EMBEDDING_TIMEOUT_MS=60000` in the example config. That timeout covers indexing only:
+  query-time embeddings (retrieval, embedding routing) use a separate 5 s timeout behind a
+  circuit breaker ([ai-jobs.md](./ai-jobs.md) J86), so a query that lands while Ollama is
+  still loading the model after an idle unload degrades to keyword-only for that ask
+  rather than waiting.
 - **Retrieval quality is below a hosted model.** Measured below.
 
 ### Measured comparison
@@ -390,6 +408,7 @@ npm run eval:gap-threshold -- --refresh --fixture=.magpie/eval/gap-threshold-<mo
 | Retrieve callback + relevance floor | `apps/api/src/features/retrieve/{routes,service}.ts` |
 | Route callback (embedding-first) | `apps/api/src/features/route/{routes,service}.ts` |
 | Hybrid search + RRF fusion | `apps/api/src/stores/knowledge-index.ts`, `apps/api/src/stores/postgres-knowledge-store.ts`, `packages/retrieval/src/rrf.ts` |
+| Filtered vector search exact fallback (R24) | `apps/api/src/stores/postgres-knowledge-store.ts` (`VECTOR_SEARCH_SQL`, `EXACT_VECTOR_SEARCH_SQL`) |
 | Weighted FTS vector + refresh trigger | `packages/db/migrations/0067_weighted_section_fts.sql` (`document_sections_search_tsv_refresh`, `document_sections_search_tsv_trg`) |
 | Gap retrieval-mode stamp + candidacy gate | `packages/db/migrations/0068_gap_retrieval_mode.sql`, `apps/api/src/stores/postgres-question-log-store.ts` |
 | Empty-search framing | `apps/watcher/src/job-prompts.ts` (`buildEmptySearchNote`) |
@@ -406,6 +425,7 @@ npm run eval:gap-threshold -- --refresh --fixture=.magpie/eval/gap-threshold-<mo
 `apps/api/src/features/route/{service,routes.flow-scope}.test.ts`,
 `packages/retrieval/src/{rrf,embeddings,flow-router,routing,index}.test.ts`,
 `apps/api/src/stores/{knowledge-index,embed-sections}.test.ts`,
+`apps/api/src/stores/postgres-knowledge-store.integration.test.ts` (R24, Postgres-backed),
 `apps/watcher/src/runners/generative.test.ts`, `apps/watcher/src/job-prompts.test.ts`,
 `packages/jobs/src/{schemas,catalog}.test.ts`,
 `apps/api/src/platform/config.test.ts`.

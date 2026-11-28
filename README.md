@@ -278,6 +278,8 @@ docker compose down
 
 Use `docker compose down -v` only when you want to delete the local Postgres volume.
 
+Stops and restarts are graceful: the image runs `tini` as PID 1 and each service execs `node` directly (never `npm run start`, which swallows SIGTERM), so on `docker compose stop`/`restart` the API finishes in-flight requests before closing its database pool and the watcher hands its running job back to the queue without spending a retry. Each app service has `stop_grace_period: 30s`, which must stay above `API_SHUTDOWN_DRAIN_MS` + 10 s and `WATCHER_SHUTDOWN_TIMEOUT_MS`. If you run the image some other way, keep its `ENTRYPOINT` and override `CMD` in exec form, e.g. `["node", "apps/watcher/dist/main.js"]` (see [docs/api.md](docs/api.md) API37/API38 and [docs/ai-jobs.md](docs/ai-jobs.md) J53/J54).
+
 ## MCP
 
 The MCP server lets agent clients call the indexed knowledge base through tools such as `kb_ask`, `kb_search`, and `kb_feedback`.
@@ -304,8 +306,13 @@ npm run format        # auto-format with Prettier
 npm run format:check
 npm run typecheck
 npm test
-npm run test:db
+npm run test:db        # + Postgres-backed integration tests on a single-use DB
+npm run e2e:jobs:local # queue lifecycle e2e on a self-booted stack
 ```
+
+`test:db` boots a throwaway pgvector container (Docker), or — with
+`TEST_DATABASE_ADMIN_URL=postgres://…/postgres` pointing at a Postgres that has pgvector —
+creates and drops its own database there. CI runs both on every PR.
 
 Formatting is enforced automatically. A Prettier `format:check` runs in CI
 (the Verify workflow), and a husky pre-commit hook runs `lint-staged` to
@@ -333,7 +340,7 @@ bulk-format commit, run `git config blame.ignoreRevsFile .git-blame-ignore-revs`
 
 Authentication **fails closed**: it is required unless an operator explicitly opts out by setting `AUTH_REQUIRED=false`. An unset, blank, or misspelled value leaves auth **on**, so a misconfigured deployment is locked down rather than silently exposed. When auth is required, the API also refuses to start unless the identity provider is configured (a missing or placeholder `AUTH_AUDIENCE` / legacy `AUTH0_AUDIENCE`, or a missing issuer, aborts startup).
 
-When enabled, the API, web app, and both MCP transports validate tokens from the configured identity provider: Auth0 (the default) or Microsoft Entra ID (`AUTH_PROVIDER=entra`, single tenant — see [Using Microsoft Entra ID](docs/authorization.md#using-microsoft-entra-id)). Configure the relevant `AUTH_*` (or legacy `AUTH0_*`), `NEXT_PUBLIC_AUTH_*`, watcher, and MCP service credentials in `.env` or `.env.compose`; existing Auth0 deployments need no changes. For local development, run unauthenticated by explicitly setting `AUTH_REQUIRED=false`.
+When enabled, the API, web app, and both MCP transports validate tokens from the configured identity provider: Auth0 (the default) or Microsoft Entra ID (`AUTH_PROVIDER=entra`, single tenant — see [Using Microsoft Entra ID](docs/authorization.md#using-microsoft-entra-id)). Configure the relevant `AUTH_*` (or legacy `AUTH0_*`), `NEXT_PUBLIC_AUTH_*`, watcher, and MCP service credentials in `.env` or `.env.compose`; existing Auth0 deployments need no changes. For local development, run unauthenticated by explicitly setting `AUTH_REQUIRED=false`. With `NODE_ENV=production` (which the Docker image sets) the API and HTTP MCP server refuse `AUTH_REQUIRED=false` — and the API also refuses in-memory stores and an any-origin CORS policy — unless an explicit `MAGPIE_ALLOW_*` override is set; see [Production safety](docs/configuration.md#production-safety).
 
 The web console signs in with a generic OIDC client (`oidc-client-ts` + `react-oidc-context`: authorization code + PKCE, refresh-token renewal, RP-initiated logout) against either Auth0 or Microsoft Entra ID, selected by `AUTH_PROVIDER` (`auth0`, the default, or `entra`). It reads `AUTH_ISSUER`, `AUTH_CLIENT_ID`, `AUTH_AUDIENCE`, `AUTH_REDIRECT_URI` and (Entra only) `AUTH_API_ID_URI` at request time, with optional `NEXT_PUBLIC_AUTH_*` build-time overrides; the legacy `AUTH0_DOMAIN` / `AUTH0_ISSUER_BASE_URL` / `AUTH0_CLIENT_ID` / `AUTH0_AUDIENCE` / `AUTH0_REDIRECT_URI` and `NEXT_PUBLIC_AUTH0_*` names keep working as fallbacks. The IdP's SPA client must allow the console origin as a callback URL, post-logout redirect URL and (Auth0) web origin, and allow refresh tokens (`offline_access`).
 

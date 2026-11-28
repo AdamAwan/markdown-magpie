@@ -55,7 +55,9 @@ export function buildApp(ctx: AppContext, options?: ApiAuthOptions): Hono {
       // Defaults to "*" (any origin); set CORS_ALLOWED_ORIGINS to a comma-
       // separated allow-list to restrict which web origins may call the API.
       origin: ctx.settings.cors.allowedOrigins,
-      allowMethods: ["GET", "POST", "DELETE", "OPTIONS"],
+      // PATCH is used by the console (seed-plan edits); without it the browser
+      // preflight rejects every cross-origin PATCH.
+      allowMethods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
       allowHeaders: ["content-type", "authorization"]
     })
   );
@@ -98,8 +100,15 @@ export function buildApp(ctx: AppContext, options?: ApiAuthOptions): Hono {
         );
       }
     }
-    const ready = databaseOk && brokerStarted;
-    return c.json({ ready, checks: { database: databaseOk, broker: brokerStarted } }, ready ? 200 : 503);
+    // The knowledge index must have loaded the persisted corpus: a replica whose
+    // startup hydrate failed would otherwise answer every question from an empty
+    // index while reporting ready (hydrate retries in the background).
+    const knowledgeIndexOk = ctx.stores.knowledgeIndex.isHydrated();
+    const ready = databaseOk && brokerStarted && knowledgeIndexOk;
+    return c.json(
+      { ready, checks: { database: databaseOk, broker: brokerStarted, knowledgeIndex: knowledgeIndexOk } },
+      ready ? 200 : 503
+    );
   });
   api.use("*", requireAuth(authOptions));
 

@@ -99,11 +99,12 @@ No watcher is running, or it advertises no `provider` capability. All chat/gener
 is **queue-only** — the watcher is required. Its startup log lists each capability as
 ready/missing; the selected `AI_PROVIDER` must have a ready runner.
 
-### CLI provider (codex / claude): `spawn ENAMETOOLONG`
-The prompt is passed as a **command-line argument** and exceeds Windows' ~32 KB limit.
-Switch that provider to stdin mode: `CODEX_CLI_PROMPT_MODE=stdin` /
-`CLAUDE_CLI_PROMPT_MODE=stdin` (pipes the prompt in instead). Effectively required on
-Windows for retrieval-augmented prompts.
+### CLI provider (codex / claude): `spawn ENAMETOOLONG` / `spawn E2BIG`
+The prompt is being passed as a **command-line argument** and exceeds the OS limit
+(Windows: ~32 KB of command line → `ENAMETOOLONG`; Linux: ~128 KB per argument →
+`E2BIG`). stdin is the default prompt mode, so this only happens when
+`CODEX_CLI_PROMPT_MODE=arg` / `CLAUDE_CLI_PROMPT_MODE=arg` is set — often a stale `.env`
+copied from before the default changed. Remove the override (or set it to `stdin`).
 
 ### CLI provider: `spawn ENOENT` for `claude` / `codex`
 The runner spawns **without a shell**, so a Windows `.cmd`/`.ps1` PATH shim can't be

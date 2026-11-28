@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { realpath } from "node:fs/promises";
 import path from "node:path";
 import type { SourceDescriptor, SourceMapEntry } from "@magpie/core";
-import { ensureGitCheckout, getHeadSha } from "@magpie/git";
+import { ensureGitCheckout, getHeadSha, redactCredentials } from "@magpie/git";
 import { fetchableInternetSources, type FetchableInternetSource } from "./fetch-url.js";
 import {
   correctDocumentInputSchema,
@@ -100,6 +100,8 @@ export async function prepareSourceWorkspaces(
     checkoutRoot: string;
     checkout?: typeof ensureGitCheckout;
     headSha?: (localPath: string) => Promise<string | undefined>;
+    // The job's abort signal: an aborted job stops fetching its sources (IN44).
+    signal?: AbortSignal;
   }
 ): Promise<PreparedSources> {
   const checkout = options.checkout ?? ensureGitCheckout;
@@ -135,7 +137,8 @@ export async function prepareSourceWorkspaces(
                 id: descriptor.id,
                 url: descriptor.url,
                 checkoutRoot: options.checkoutRoot,
-                ...(descriptor.tokenEnv ? { tokenEnv: descriptor.tokenEnv } : {})
+                ...(descriptor.tokenEnv ? { tokenEnv: descriptor.tokenEnv } : {}),
+                ...(options.signal ? { signal: options.signal } : {})
               })
             ).localPath
           : descriptor.path;
@@ -150,7 +153,14 @@ export async function prepareSourceWorkspaces(
       }
       workspaces.push({ sourceId: descriptor.id, name: descriptor.name, rootDir, ...(headSha ? { headSha } : {}) });
     } catch (error) {
-      const message = error instanceof Error ? error.message : "unavailable";
+      // An abort is the job stopping, not a source being unavailable: propagate it
+      // instead of degrading the source to a note and running on.
+      if (options.signal?.aborted) {
+        throw error;
+      }
+      // The message reaches a log line AND the model's prompt: never with a
+      // credential from a source URL (TM37).
+      const message = redactCredentials(error instanceof Error ? error.message : "unavailable");
       logger.warn({ sourceId: descriptor.id, err: message }, "source workspace unavailable");
       notes.push(`Source "${descriptor.name}" is unavailable (${message}).`);
     }

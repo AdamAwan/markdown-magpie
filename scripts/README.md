@@ -14,8 +14,20 @@ Small repo-level helpers live here. Prefer adding an npm script in the root `pac
     renumber already-applied migrations (that makes the migrator re-run them).
 - `lib/migration-order.mjs` is the pure prefix-uniqueness guard used by
   `migrate.mjs`; `lib/migration-order.test.mjs` covers it (`npm run test:scripts`).
-- `test-db.mjs` starts a throwaway pgvector Postgres container, runs migrations, then runs the command passed after it.
-- `e2e-jobs.ts` drives the API and watcher through queue lifecycle smoke tests.
+- `test-db.mjs` provides a single-use, freshly migrated database and runs the command passed
+  after it with `DATABASE_URL` pointed at it and `RUN_PG_INTEGRATION=1` set (so the gated
+  `*.integration.test.ts` files run). By default it boots a throwaway pgvector container
+  (needs Docker); with `TEST_DATABASE_ADMIN_URL` set to an admin connection on an existing
+  pgvector-enabled Postgres it instead creates a `magpie_test_<pid>_<random>` database there
+  and drops it afterwards (CI's service container, Docker-less machines). Pure helpers in
+  `lib/test-db-target.mjs`.
+- `e2e-jobs.ts` drives an already-running API + watcher through queue lifecycle smoke tests
+  (`npm run e2e:jobs`, `E2E_API_BASE_URL` defaults to `http://localhost:4000`).
+- `e2e-jobs-local.ts` boots that stack itself — chat fixture + API + watcher as Node
+  processes against the `test-db.mjs` database — and runs `e2e-jobs.ts` against it
+  (`npm run e2e:jobs:local`; CI's Queue E2E job). Logs land in `.magpie/e2e-jobs/`.
+- `lib/local-stack.mjs` holds the child-process helpers (`launch`, `cleanEnv`, `freePort`,
+  `waitFor`) shared by `e2e-jobs-local.ts` and `eval-golden.ts`.
 - `fixtures/openai-fixture.mjs` is the deterministic OpenAI-compatible chat fixture used by the E2E stack.
 
 ## Evaluation

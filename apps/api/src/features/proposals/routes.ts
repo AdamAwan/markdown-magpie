@@ -6,7 +6,7 @@ import type { Proposal } from "@magpie/core";
 import type { JobView } from "@magpie/jobs";
 import type { AppContext } from "../../context.js";
 import { requireScopes } from "../../auth/middleware.js";
-import { assertCan, can } from "../../auth/capabilities.js";
+import { assertCan, can, requirePrivilege } from "../../auth/capabilities.js";
 import { apiLink, parseLimit } from "../../platform/paths.js";
 import { HttpError } from "../../http/errors.js";
 import * as proposalsService from "./service.js";
@@ -232,7 +232,10 @@ export function proposalRoutes(ctx: AppContext): Hono {
   // orchestration — re-asking the triggering questions and running the
   // deterministic closure test — because it needs DB access; the only generative
   // step is the enqueued answer_question re-asks.
-  app.post("/:id/verify-closure", requireScopes("manage:jobs"), async (c) => {
+  // The maintenance watcher calls this with its service identity, which
+  // requirePrivilege always admits; a human (an Entra user holding the delegated
+  // manage:jobs scope) needs the ops role (docs/authorization.md AZ27).
+  app.post("/:id/verify-closure", requireScopes("manage:jobs"), requirePrivilege(ctx, "ops"), async (c) => {
     const proposal = await proposalsService.get(ctx, c.req.param("id"));
     if (!proposal) {
       throw new HttpError(404, "proposal_not_found");

@@ -20,8 +20,19 @@ export const claimJobBodySchema = z.object({
 // Heartbeats carry the watcher's name so the registry can keep it marked busy on
 // the job it is running. Optional so older watchers (and internal callers) still
 // heartbeat fine; they just don't refresh their liveness.
+// `attempt` is the job's retryCount when the watcher claimed it (J60): it fences
+// heartbeat/complete/fail to that claim. Optional so older watchers keep working,
+// unfenced, across a rolling upgrade.
+const attemptSchema = z.number().int().nonnegative().optional();
 export const heartbeatJobBodySchema = z.object({
-  workerName: z.string().trim().min(1).optional()
+  workerName: z.string().trim().min(1).optional(),
+  attempt: attemptSchema
+});
+// A shutting-down watcher's hand-back of its claimed job (J53). The name lets
+// the registry mark that watcher idle; optional like the heartbeat's.
+export const releaseJobBodySchema = z.object({
+  workerName: z.string().trim().min(1).optional(),
+  attempt: attemptSchema
 });
 // The watcher's summed provider-reported token usage for the run (#241).
 // Optional end to end: CLI providers report nothing, and older watchers don't
@@ -48,9 +59,11 @@ export const completeJobBodySchema = z.object({
   executor: z.string().trim().min(1).optional(),
   usage: jobUsageSchema.optional().catch(undefined),
   provider: identityFieldSchema,
-  model: identityFieldSchema
+  model: identityFieldSchema,
+  attempt: attemptSchema
 });
 export const failJobBodySchema = z.object({
+  attempt: attemptSchema,
   error: z.object({
     code: z.string().min(1),
     message: z.string().min(1),

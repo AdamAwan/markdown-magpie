@@ -31,6 +31,9 @@ export interface ChatRunnerOptions {
   model?: string;
   // Root of the shared checkout volume where source workspaces are resolved.
   checkoutRoot?: string;
+  // Overall deadline for one source-agent tool loop (MAGPIE_AGENTIC_TIMEOUT_MS):
+  // bounds every step, tool call and the forced closing turn together (J84).
+  agenticTimeoutMs?: number;
   // Test seam: substitute workspace preparation (no real checkouts in tests).
   prepareWorkspaces?: typeof prepareSourceWorkspaces;
   // What an undeclared field in a parsed job output does (see
@@ -46,6 +49,7 @@ export class ChatRunner {
   readonly undeclaredOutputFields: UndeclaredOutputFieldPolicy;
   private readonly agentModel?: LanguageModel;
   private readonly checkoutRoot: string;
+  private readonly agenticTimeoutMs?: number;
   private readonly prepareWorkspaces: typeof prepareSourceWorkspaces;
 
   constructor(
@@ -57,6 +61,7 @@ export class ChatRunner {
     this.aiIdentity = { provider: capability, ...(options.model ? { model: options.model } : {}) };
     this.agentModel = options.agentModel;
     this.checkoutRoot = options.checkoutRoot ?? process.env.MAGPIE_CHECKOUT_ROOT ?? ".magpie/checkouts";
+    this.agenticTimeoutMs = options.agenticTimeoutMs;
     this.prepareWorkspaces = options.prepareWorkspaces ?? prepareSourceWorkspaces;
     this.undeclaredOutputFields = options.undeclaredOutputFields ?? DEFAULT_UNDECLARED_OUTPUT_FIELDS;
   }
@@ -87,7 +92,8 @@ export class ChatRunner {
     if (hasFsSources(descriptors) || hasFetchableSources(descriptors)) {
       if (this.agentModel) {
         const { workspaces, notes, fetchable } = await this.prepareWorkspaces(descriptors, {
-          checkoutRoot: this.checkoutRoot
+          checkoutRoot: this.checkoutRoot,
+          signal
         });
         logger.info(
           { jobId: job.id, workspaceCount: workspaces.length, fetchableCount: fetchable.length },
@@ -104,6 +110,7 @@ export class ChatRunner {
             fetchable,
             signal,
             undeclaredOutputFields: this.undeclaredOutputFields,
+            ...(this.agenticTimeoutMs === undefined ? {} : { timeoutMs: this.agenticTimeoutMs }),
             ...(onUsage ? { onUsage } : {})
           }),
           workspaces

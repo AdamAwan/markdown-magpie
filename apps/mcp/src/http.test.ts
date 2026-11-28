@@ -2,7 +2,13 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import request from "supertest";
 import { exportJWK, generateKeyPair, SignJWT, type JSONWebKeySet } from "jose";
-import { createHttpMcpApp, mcpAuthSettingsFromEnv, mcpStartupIssues, type HttpMcpOptions } from "./http.js";
+import {
+  createHttpMcpApp,
+  mcpAuthSettingsFromEnv,
+  mcpProductionIssues,
+  mcpStartupIssues,
+  type HttpMcpOptions
+} from "./http.js";
 
 const authIssuer = "https://example.auth0.com/";
 const authAudience = "https://markdown-magpie.local/api";
@@ -886,4 +892,46 @@ test("one app instance serves many sequential MCP requests (fresh stateless tran
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+// An unsigned service token: the delegation check decodes without verifying.
+function serviceJwt(scope: string): string {
+  const encode = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64url");
+  return `${encode({ alg: "none", typ: "JWT" })}.${encode({ gty: "client-credentials", scope })}.`;
+}
+
+test("/health reports on-behalf-of delegation enabled when the service token holds act:on-behalf-of", async () => {
+  const app = createHttpMcpApp(testOptions({ apiToken: serviceJwt("read:knowledge act:on-behalf-of") }));
+  const res = await request(app).get("/health");
+  assert.equal(res.status, 200);
+  assert.deepEqual(res.body, { status: "ok", onBehalfOf: "enabled" });
+});
+
+test("/health flags a service token WITHOUT act:on-behalf-of (tool calls would run as the service identity)", async () => {
+  const app = createHttpMcpApp(testOptions({ apiToken: serviceJwt("read:knowledge ask:knowledge") }));
+  const res = await request(app).get("/health");
+  assert.equal(res.status, 200, "the server stays up; the misconfiguration is reported, not fatal");
+  assert.deepEqual(res.body, { status: "ok", onBehalfOf: "missing_scope" });
+});
+
+test("/health reports an opaque service token as unverifiable, and auth-off as not applicable", async () => {
+  const opaque = await request(createHttpMcpApp(testOptions({ apiToken: "service-token" }))).get("/health");
+  assert.equal(opaque.body.onBehalfOf, "unverifiable");
+  const off = await request(
+    createHttpMcpApp(testOptions({ auth: { required: false, issuer: authIssuer, audience: authAudience } }))
+  ).get("/health");
+  assert.equal(off.body.onBehalfOf, "not_applicable");
+});
+
+test("mcpProductionIssues refuses auth-off in production unless the explicit override is set", () => {
+  const off = { required: false };
+  const issues = mcpProductionIssues({ NODE_ENV: "production" }, off);
+  assert.equal(issues.length, 1);
+  assert.match(issues[0] ?? "", /MAGPIE_ALLOW_UNAUTHENTICATED_PRODUCTION/);
+  assert.deepEqual(
+    mcpProductionIssues({ NODE_ENV: "production", MAGPIE_ALLOW_UNAUTHENTICATED_PRODUCTION: "true" }, off),
+    []
+  );
+  assert.deepEqual(mcpProductionIssues({ NODE_ENV: "production" }, { required: true }), []);
+  assert.deepEqual(mcpProductionIssues({}, off), [], "outside production auth-off is a local-dev choice");
 });

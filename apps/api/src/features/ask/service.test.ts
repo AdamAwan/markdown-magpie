@@ -193,6 +193,8 @@ test("ask at saturation deletes the just-recorded log and throws 429 (no orphan)
   // second must be shed at the atomic gate.
   ctx.settings.rateLimit.aiMaxInflightJobs = 1;
   ctx.settings.rateLimit.aiInteractiveReservedJobs = 0;
+  // A live watcher for the provider makes the queued ask count (RL29).
+  await ctx.stores.watchers.touch({ name: "w", status: "idle", capabilities: ["openai-compatible"] });
 
   await ask(ctx, "first question"); // occupies the only slot
 

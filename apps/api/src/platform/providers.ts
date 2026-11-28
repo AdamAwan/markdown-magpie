@@ -1,5 +1,13 @@
 import { AI_PROVIDERS, type AiProviderName } from "@magpie/jobs";
-import { createEmbeddingProvider, type EmbeddingProviderName } from "@magpie/retrieval";
+import type { EmbeddingProvider } from "@magpie/core";
+import {
+  createEmbeddingProvider,
+  DEFAULT_QUERY_EMBEDDING_TIMEOUT_MS,
+  EmbeddingCircuitBreaker,
+  type EmbeddingProviderConfig,
+  type EmbeddingProviderName
+} from "@magpie/retrieval";
+import { logger } from "../logger.js";
 import { storeBackend } from "./stores.js";
 import type { AppConfig } from "./config.js";
 
@@ -51,7 +59,10 @@ export function embeddingModelId(config: AppConfig): string | undefined {
   return undefined;
 }
 
-export function createConfiguredEmbeddingProvider(config: AppConfig) {
+function embeddingProviderConfig(
+  config: AppConfig,
+  timeoutMs: number | undefined
+): EmbeddingProviderConfig | undefined {
   const provider = embeddingProviderName(config);
   if (!provider) {
     return undefined;
@@ -61,7 +72,7 @@ export function createConfiguredEmbeddingProvider(config: AppConfig) {
   // Opt-in: forwarded only when the operator set it, because sending
   // `dimensions` to a server that doesn't know the field fails the request.
   const dimensions = provider === "azure-openai" ? azure.embeddingDimensions : oai.embeddingDimensions;
-  return createEmbeddingProvider({
+  return {
     provider,
     ...(dimensions === undefined ? {} : { dimensions }),
     apiKey: embeddingApiKey(config) || azure.apiKey,
@@ -70,7 +81,39 @@ export function createConfiguredEmbeddingProvider(config: AppConfig) {
     azureEndpoint: azure.endpoint,
     azureDeployment: azure.embeddingDeployment,
     azureApiVersion: azure.apiVersion,
-    timeoutMs: config.embeddings.timeoutMs
+    ...(timeoutMs === undefined ? {} : { timeoutMs })
+  };
+}
+
+// The background (indexing, gap bucketing, questionnaire matching) embedding
+// provider: batches many texts, so it keeps EMBEDDING_TIMEOUT_MS (default 60 s).
+export function createConfiguredEmbeddingProvider(config: AppConfig): EmbeddingProvider | undefined {
+  const providerConfig = embeddingProviderConfig(config, config.embeddings.timeoutMs);
+  return providerConfig ? createEmbeddingProvider(providerConfig) : undefined;
+}
+
+// The request-path embedding provider (docs/ai-jobs.md J86): query-time
+// retrieval and embedding flow routing, where a caller is waiting and both
+// degrade without a vector. A separate instance with a short per-call timeout
+// behind a circuit breaker, so a down provider fails asks over to keyword-only
+// retrieval / the chat router in milliseconds instead of stalling each one for
+// the indexing timeout. Its breaker state is independent of background indexing.
+export function createConfiguredQueryEmbeddingProvider(config: AppConfig): EmbeddingProvider | undefined {
+  const providerConfig = embeddingProviderConfig(config, DEFAULT_QUERY_EMBEDDING_TIMEOUT_MS);
+  if (!providerConfig) {
+    return undefined;
+  }
+  return new EmbeddingCircuitBreaker(createEmbeddingProvider(providerConfig), {
+    onStateChange: ({ state, error }) => {
+      if (state === "open") {
+        logger.warn(
+          { err: error instanceof Error ? error.message : String(error) },
+          "query embedding circuit opened: request-path retrieval/routing degrades to keyword-only until it recovers"
+        );
+      } else {
+        logger.info("query embedding circuit closed: request-path embeddings recovered");
+      }
+    }
   });
 }
 

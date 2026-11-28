@@ -48,6 +48,13 @@ export interface InFlightCapacity {
   types: JobType[]; // counted for the global figure
   limit: number;
   reserve?: { types: JobType[]; reserved: number }; // reserve.types must be a subset of types
+  // The capabilities some live watcher currently advertises (docs/rate-limiting.md
+  // RL29). When present, a QUEUED job (created/retry) counts only if its queue's
+  // capability is in this set — queued work no live watcher can claim is not
+  // consuming anything, and an orphaned queue (a provider the fleet no longer
+  // runs) must not hold the ceiling shut. ACTIVE jobs always count. Absent means
+  // every queued job counts (the pre-RL29 rule).
+  servedCapabilities?: readonly JobCapability[];
 }
 
 // The outcome of an atomic admission attempt. `job` is present iff `admitted`.
@@ -60,6 +67,35 @@ export interface AdmissionResult {
   job?: JobView; // present iff admitted
   inFlight: number; // global count observed under the lock
   reserveInFlight?: number; // reserve-lane count, when a reserve was given
+}
+
+// Thrown by every broker operation that names a job id the broker does not hold.
+// Routes map exactly this to 404; any other error is a real failure (500), so a
+// watcher can tell "this job is gone" (stop) from "the API hiccupped" (retry).
+export class JobNotFoundError extends Error {
+  constructor(readonly jobId: string) {
+    super(`Job not found: ${jobId}`);
+    this.name = "JobNotFoundError";
+  }
+}
+
+// The attempt a watcher claimed a job at: its `retryCount` at claim time. Every
+// claim of a job bumps retryCount, so this names one attempt. Settling or
+// heartbeating with it fences the call to that attempt — a watcher whose claim
+// lapsed (heartbeat lost, expiry) cannot refresh, complete or fail a later
+// attempt another watcher now holds (docs/ai-jobs.md J60). Optional end to end:
+// internal callers and older watchers settle unfenced, as before.
+export interface JobAttemptFence {
+  attempt?: number;
+}
+
+// The outcome of a heartbeat: the job as it now stands, and whether the
+// heartbeating attempt still holds it (`active`). `active: false` means the
+// caller must stop working on the job — it was cancelled, failed, completed, or
+// re-queued/re-claimed after the caller's claim lapsed.
+export interface HeartbeatResult {
+  job: JobView;
+  active: boolean;
 }
 
 export interface JobBroker {
@@ -89,9 +125,16 @@ export interface JobBroker {
   // never queued behind earlier patrol fan-out for a free watcher (#240).
   // Background queues are served round-robin so none starves its siblings.
   claim(workerName: string, capabilities: JobCapability[]): Promise<JobView | undefined>;
-  heartbeat(id: string): Promise<JobView>;
-  complete(id: string, output: unknown): Promise<JobView>;
-  fail(id: string, error: JobError): Promise<JobView>;
+  heartbeat(id: string, fence?: JobAttemptFence): Promise<HeartbeatResult>;
+  // Completes an ACTIVE job (fenced to `fence.attempt` when given). One salvage
+  // case: a fenced completion for a job that has fallen back to `retry` while
+  // still at the same attempt (its claim lapsed, e.g. its heartbeats could not
+  // reach a restarting API, and nobody has re-claimed it) is accepted — the
+  // output is valid and already paid for, and re-running it would only redo the
+  // same work (J61). Anything else is a no-op: the caller checks the returned
+  // state.
+  complete(id: string, output: unknown, fence?: JobAttemptFence): Promise<JobView>;
+  fail(id: string, error: JobError, fence?: JobAttemptFence): Promise<JobView>;
   // Fail a job straight to the terminal `failed` state, skipping any remaining
   // retries, recording the error and routing it to the dead-letter queue exactly
   // as retry-exhaustion would (#288d). Used as the backstop for a reproducible
@@ -99,7 +142,34 @@ export interface JobBroker {
   // paid generations instead of spending the full retry budget. A no-op on a job
   // already in a terminal state, mirroring `fail` (protects the completion-replay
   // contract).
-  failTerminal(id: string, error: JobError): Promise<JobView>;
+  failTerminal(id: string, error: JobError, fence?: JobAttemptFence): Promise<JobView>;
+  // Terminal-failure settlement (docs/ai-jobs.md J63–J65). A job that ends in
+  // `failed` — through POST /fail, the terminal-fail backstop, or pg-boss itself
+  // (expiry, heartbeat loss, a crashed claimant) — has side effects that must run
+  // exactly once (fail a linked run, mark a questionnaire item, enqueue a fold
+  // fallback, …). `settleFailure` runs `run` for `job` unless the job's failure
+  // is already settled or another caller (this or another API replica) is
+  // settling it right now, and records it settled once `run` resolves. A `run`
+  // that throws leaves the failure unsettled, so the sweep retries it. Returns
+  // whether `run` executed.
+  settleFailure(job: JobView, run: () => Promise<void>): Promise<boolean>;
+  // Failed work-queue jobs whose failure is not settled (and not being settled),
+  // oldest failure first, at most `limit` — the sweep's input. Only failures at
+  // or after the settlement ledger's epoch (when it was introduced) are listed,
+  // so an upgrade never replays side effects for historical failures that the
+  // old POST /fail path already handled.
+  listUnsettledFailures(limit: number): Promise<JobView[]>;
+  // Hand an ACTIVE job back to its queue, claimable again at once, WITHOUT
+  // spending a retry: the released attempt is not counted, so the job's
+  // retryCount and remaining budget are exactly what they were before the claim
+  // that is being given back. Used by a watcher shutting down mid-job (J53) — the
+  // work was interrupted, not failed. A no-op on a job that is not active (already
+  // completed/failed/cancelled, or already released), so a release that races a
+  // cancellation or a heartbeat-expiry sweep never resurrects the job.
+  // Fenced like the other lifecycle calls (J60): with `attempt`, only that
+  // attempt is released, so a watcher whose claim lapsed cannot un-claim the
+  // attempt another watcher now holds.
+  release(id: string, fence?: JobAttemptFence): Promise<JobView>;
   cancel(id: string): Promise<JobView>;
   retry(id: string): Promise<JobView>;
   get(id: string): Promise<JobView | undefined>;
@@ -118,7 +188,9 @@ export interface JobBroker {
   // active) across their work queues. Used by the API's AI cost controls to
   // enforce a global cap on concurrent metered work at enqueue time. Implemented
   // as a single aggregate count, not a list scan, so it is cheap on the hot path.
-  countInFlight(types: JobType[]): Promise<number>;
+  // `servedCapabilities` narrows which queued jobs count exactly as in
+  // InFlightCapacity (RL29).
+  countInFlight(types: JobType[], servedCapabilities?: readonly JobCapability[]): Promise<number>;
   reconcileSchedules(schedules: DesiredSchedule[]): Promise<void>;
   listSchedules(): Promise<ScheduleView[]>;
   reset(): Promise<void>;

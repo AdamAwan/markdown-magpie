@@ -1,10 +1,10 @@
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { Logger } from "@magpie/logger";
 
 // A configured data directory the app must be able to write, paired with the env
-// var an operator sets to relocate it. Used to turn an unwritable mount into one
-// loud boot warning instead of a silent per-run failure (see issue #130).
+// var an operator sets to relocate it. Probed at boot so an unmounted/misowned
+// path stops startup with one clear message instead of failing every run that
+// touches it (issue #130).
 export interface DataPathProbe {
   label: string;
   envVar: string;
@@ -13,8 +13,7 @@ export interface DataPathProbe {
 
 // Probes a directory for writability the way the app will use it at runtime:
 // create it recursively, then write and delete a temp probe file. Returns
-// undefined on success or the failure's message otherwise. Never throws, so a
-// boot-time check can report the problem without aborting startup.
+// undefined on success or the failure's message otherwise. Never throws.
 export async function checkPathWritable(dir: string): Promise<string | undefined> {
   const probe = path.join(dir, ".magpie-write-probe");
   try {
@@ -29,19 +28,22 @@ export async function checkPathWritable(dir: string): Promise<string | undefined
   }
 }
 
-// Boot-time check: for each configured data path, emit a single prominent warning
-// if it is not writable — naming the resolved absolute path, the underlying error,
-// and the env var to set. Non-fatal: the app still starts, but the operator sees
-// the misconfiguration immediately instead of via per-run log archaeology.
-export async function preflightDataPaths(paths: DataPathProbe[], log: Logger): Promise<void> {
+// Boot-time check: every configured data path must be writable, or startup
+// aborts with one error naming each offending resolved path, the underlying
+// error, and the env var to set. Fails fast (rather than warning) because an
+// unwritable checkout or snapshot root breaks every clone, publish and snapshot
+// refresh — a deployment that boots in that state only looks healthy.
+export async function assertDataPathsWritable(paths: DataPathProbe[]): Promise<void> {
+  const failures: string[] = [];
   for (const { label, envVar, dir } of paths) {
     const error = await checkPathWritable(dir);
     if (error) {
-      log.warn(
-        { path: dir, envVar, err: error },
-        `${label} is not writable (${dir}): ${error}. ` +
-          `Set ${envVar} to a writable, mounted path or the ${label.toLowerCase()} step will fail on every run.`
+      failures.push(
+        `  - ${envVar}: ${label} is not writable (${dir}): ${error}. Set ${envVar} to a writable, mounted path.`
       );
     }
+  }
+  if (failures.length > 0) {
+    throw new Error(`Unwritable data directories:\n${failures.join("\n")}`);
   }
 }

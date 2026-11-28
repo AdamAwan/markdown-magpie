@@ -351,7 +351,8 @@ describe("PublicationRunner", () => {
     assert.equal(prRaised, false, "a no-op never attempts to raise a PR");
   });
 
-  it("degrades to a branch-only proposal publish when PR raising fails", async () => {
+  // P26: a swallowed PR failure stranded the proposal as branch-pushed with no PR.
+  it("fails a github publish when PR creation fails after the push, so the queue retries it", async () => {
     const runner = new PublicationRunner(fakeApi(), {
       prepareRepository: async (repository) => repository,
       publishProposal: async (request) => ({
@@ -361,17 +362,98 @@ describe("PublicationRunner", () => {
       }),
       publishChangeset: async () => ({ branchName: "b", commitSha: "c" }),
       raisePullRequest: async () => {
-        throw new Error("pr api down");
+        throw new Error("GitHub request failed for https://x-access-token:ghp_secret@github.com/acme/docs.git");
       },
       commentOnPullRequest: async () => undefined
     });
-    const output = await runner.run(
-      job("publish_proposal", { proposalId: "prop-12345678" }),
-      new AbortController().signal
+    await assert.rejects(
+      () => runner.run(job("publish_proposal", { proposalId: "prop-12345678" }), new AbortController().signal),
+      (error: unknown) => {
+        assert.ok(error instanceof Error);
+        assert.match(error.message, /was pushed but opening its pull request failed/);
+        assert.doesNotMatch(error.message, /ghp_secret/, "the job error is credential-redacted");
+        return true;
+      }
     );
-    const parsed = publishProposalOutputSchema.parse(output);
+  });
+
+  it("a retry after a PR failure republishes idempotently and opens the PR once", async () => {
+    // Stateful fakes standing in for the remote: the first attempt pushes, then the
+    // PR call fails; the retry finds the branch already at that tip (the real
+    // publisher returns it without pushing) and the PR call now succeeds.
+    let pushes = 0;
+    let prAttempts = 0;
+    const openPullRequests: string[] = [];
+    let remoteTip: string | undefined;
+    const runner = new PublicationRunner(fakeApi(), {
+      prepareRepository: async (repository) => repository,
+      publishProposal: async (request) => {
+        if (!remoteTip) {
+          pushes += 1;
+          remoteTip = "abc123";
+        }
+        return { branchName: request.branchName, commitSha: remoteTip, remoteUrl: REPOSITORY.remoteUrl };
+      },
+      publishChangeset: async () => ({ branchName: "b", commitSha: "c" }),
+      raisePullRequest: async (request) => {
+        prAttempts += 1;
+        if (prAttempts === 1) {
+          throw new Error("GitHub pull request creation failed (502)");
+        }
+        if (!openPullRequests.includes(request.headBranch)) {
+          openPullRequests.push(request.headBranch);
+        }
+        return { url: "https://github.com/acme/docs/pull/7", number: 7 };
+      },
+      commentOnPullRequest: async () => undefined
+    });
+    const publishJob = job("publish_proposal", { proposalId: "prop-12345678" });
+
+    await assert.rejects(() => runner.run(publishJob, new AbortController().signal));
+    const output = publishProposalOutputSchema.parse(await runner.run(publishJob, new AbortController().signal));
+
+    assert.equal(output.pullRequestUrl, "https://github.com/acme/docs/pull/7");
+    assert.equal(output.commitSha, "abc123");
+    assert.equal(pushes, 1, "the retry did not push again");
+    assert.deepEqual(openPullRequests, ["magpie/proposal-prop-123-deploy-guide"], "exactly one PR");
+  });
+
+  it("still records a branch-only publish when the remote has no GitHub PR to open", async () => {
+    const runner = new PublicationRunner(fakeApi(), {
+      prepareRepository: async (repository) => repository,
+      publishProposal: async (request) => ({ branchName: request.branchName, commitSha: "abc123" }),
+      publishChangeset: async () => ({ branchName: "b", commitSha: "c" }),
+      raisePullRequest: async () => undefined,
+      commentOnPullRequest: async () => undefined
+    });
+    const parsed = publishProposalOutputSchema.parse(
+      await runner.run(job("publish_proposal", { proposalId: "prop-12345678" }), new AbortController().signal)
+    );
     assert.equal(parsed.pullRequestUrl, undefined);
     assert.equal(parsed.commitSha, "abc123");
+  });
+
+  it("threads the job's abort signal into checkout, publish and PR creation (P24)", async () => {
+    const controller = new AbortController();
+    const seen: Array<AbortSignal | undefined> = [];
+    const runner = new PublicationRunner(fakeApi(), {
+      prepareRepository: async (repository, signal) => {
+        seen.push(signal);
+        return repository;
+      },
+      publishProposal: async (request, signal) => {
+        seen.push(signal);
+        return { branchName: request.branchName, commitSha: "abc123", remoteUrl: REPOSITORY.remoteUrl };
+      },
+      publishChangeset: async () => ({ branchName: "b", commitSha: "c" }),
+      raisePullRequest: async (request) => {
+        seen.push(request.signal);
+        return { url: "https://github.com/acme/docs/pull/7", number: 7 };
+      },
+      commentOnPullRequest: async () => undefined
+    });
+    await runner.run(job("publish_proposal", { proposalId: "prop-12345678" }), controller.signal);
+    assert.deepEqual(seen, [controller.signal, controller.signal, controller.signal]);
   });
 
   it("skips PR raising for a local-git destination and returns a branch-only publish", async () => {

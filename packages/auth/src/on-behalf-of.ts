@@ -1,4 +1,6 @@
+import { decodeJwt } from "jose";
 import type { Principal } from "./index.js";
+import { providerProfile, type AuthProvider } from "./provider.js";
 
 // Trusted on-behalf-of delegation.
 //
@@ -23,6 +25,26 @@ export const ON_BEHALF_OF_SCOPE = "act:on-behalf-of";
 // request — an absent roles header means "no delegation, use my own identity".
 export const ON_BEHALF_OF_SUBJECT_HEADER = "x-on-behalf-of-subject";
 export const ON_BEHALF_OF_ROLES_HEADER = "x-on-behalf-of-roles";
+
+// Whether a service access token carries ON_BEHALF_OF_SCOPE — i.e. whether the
+// API will honour the delegation headers sent with it. A DIAGNOSTIC for the
+// delegating gateway's own freshly-acquired token (the MCP checks it at startup
+// so a missing grant is loud instead of silently falling back to service
+// identity, docs/mcp.md M32): the payload is decoded WITHOUT verification, which
+// is fine because the API verifies the token on every call and nothing is
+// authorized from this result. Scopes are read the way the verifier reads them
+// for the provider (Auth0 `scope`; Entra app token `roles`). Returns undefined
+// for a token that is not a decodable JWT (an opaque token cannot be inspected).
+export function tokenGrantsOnBehalfOf(accessToken: string, provider: AuthProvider): boolean | undefined {
+  let payload: ReturnType<typeof decodeJwt>;
+  try {
+    payload = decodeJwt(accessToken);
+  } catch {
+    return undefined;
+  }
+  const profile = providerProfile(provider);
+  return profile.claims(payload, profile.defaultRolesClaim).scopes.includes(ON_BEHALF_OF_SCOPE);
+}
 
 // Serializes the forwarded role names for the roles header. JSON (not
 // space-delimited) so a role name is never ambiguous.

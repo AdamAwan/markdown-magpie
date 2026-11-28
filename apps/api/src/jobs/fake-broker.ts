@@ -11,14 +11,17 @@ import {
 } from "@magpie/jobs";
 import { CronExpressionParser } from "cron-parser";
 import { injectTraceContext } from "@magpie/telemetry";
-import type {
-  AdmissionResult,
-  DesiredSchedule,
-  InFlightCapacity,
-  JobBroker,
-  JobListFilters,
-  JobMatch,
-  ScheduleView
+import {
+  JobNotFoundError,
+  type AdmissionResult,
+  type DesiredSchedule,
+  type HeartbeatResult,
+  type InFlightCapacity,
+  type JobAttemptFence,
+  type JobBroker,
+  type JobListFilters,
+  type JobMatch,
+  type ScheduleView
 } from "./broker.js";
 
 // Job states pg-boss treats as finished (`state >= 'completed'` in its own enum
@@ -40,6 +43,7 @@ function inputField(input: unknown, field: string): unknown {
 export class FakeJobBroker implements JobBroker {
   private readonly jobs = new Map<string, JobView>();
   private readonly schedules = new Map<string, ScheduleView>();
+  private readonly settlements = new Map<string, "claimed" | "settled">();
   private started = false;
 
   async start(): Promise<void> {
@@ -93,8 +97,10 @@ export class FakeJobBroker implements JobBroker {
   // in-memory jobs with the same in-flight states, applies the IDENTICAL block
   // rule, and create()s only when admitted.
   async createIfAdmitted(type: JobType, input: unknown, capacity: InFlightCapacity): Promise<AdmissionResult> {
-    const inFlight = this.countInFlightSync(capacity.types);
-    const reserveInFlight = capacity.reserve ? this.countInFlightSync(capacity.reserve.types) : 0;
+    const inFlight = this.countInFlightSync(capacity.types, capacity.servedCapabilities);
+    const reserveInFlight = capacity.reserve
+      ? this.countInFlightSync(capacity.reserve.types, capacity.servedCapabilities)
+      : 0;
     const blocked = capacity.reserve
       ? reserveInFlight >= capacity.reserve.reserved && inFlight >= capacity.limit
       : inFlight >= capacity.limit;
@@ -124,6 +130,7 @@ export class FakeJobBroker implements JobBroker {
       ...job,
       state: "active",
       startedAt: now,
+      heartbeatAt: now,
       updatedAt: now
     };
     this.jobs.set(job.id, claimed);
@@ -131,21 +138,37 @@ export class FakeJobBroker implements JobBroker {
     return claimed;
   }
 
-  async heartbeat(id: string): Promise<JobView> {
+  // Mirrors pg-boss's touch(): only an active row (of the fenced attempt, when
+  // given) is refreshed, and `active` reports whether it was.
+  async heartbeat(id: string, fence: JobAttemptFence = {}): Promise<HeartbeatResult> {
     const job = this.getExisting(id);
+    if (!holdsAttempt(job, fence)) {
+      return { job, active: false };
+    }
     const now = new Date().toISOString();
-    // If cancelled, keep cancelled state; otherwise stays active
     const updated: JobView = {
       ...job,
       heartbeatAt: now,
       updatedAt: now
     };
     this.jobs.set(id, updated);
-    return updated;
+    return { job: updated, active: true };
   }
 
-  async complete(id: string, output: unknown): Promise<JobView> {
+  // Unfenced, the fake completes whatever state the job is in (tests drive
+  // created jobs straight to completed). Fenced, it mirrors the real broker:
+  // only the held active attempt completes, plus the J61 salvage of that
+  // attempt's own un-reclaimed retry; anything else is a no-op.
+  async complete(id: string, output: unknown, fence: JobAttemptFence = {}): Promise<JobView> {
     const job = this.getExisting(id);
+    if (
+      fence.attempt !== undefined &&
+      !holdsAttempt(job, fence) &&
+      // The lapsed attempt's own, un-reclaimed retry (one bump past it here).
+      !(job.state === "retry" && job.retryCount === fence.attempt + 1)
+    ) {
+      return job;
+    }
     const now = new Date().toISOString();
     const completed: JobView = {
       ...job,
@@ -158,19 +181,23 @@ export class FakeJobBroker implements JobBroker {
     return completed;
   }
 
-  async fail(id: string, error: JobError): Promise<JobView> {
+  async fail(id: string, error: JobError, fence: JobAttemptFence = {}): Promise<JobView> {
     const job = this.getExisting(id);
     // Mirrors pg-boss's failJobsById SQL (`WHERE state < 'completed'`): failing a
     // job that already reached a terminal state is a no-op, not an overwrite.
     // This matters for #161's side-effect replay: completion is persisted before
     // the side-effect fan-out, so when the watcher exhausts its complete() retries
     // on side_effects_failed and falls back to fail(), the completed row (and its
-    // paid-for output) must survive untouched.
-    if (TERMINAL_JOB_STATES.has(job.state)) {
+    // paid-for output) must survive untouched. Fenced, only the held attempt fails.
+    if (TERMINAL_JOB_STATES.has(job.state) || (fence.attempt !== undefined && !holdsAttempt(job, fence))) {
       return job;
     }
     const now = new Date().toISOString();
 
+    // Unlike pg-boss (which bumps retryCount at the NEXT claim), the fake bumps
+    // it here, on the failure. The attempt a claimant holds still differs from
+    // any later claim's, so the J60 fence behaves the same; only the J61
+    // salvage check (complete()) has to account for the earlier bump.
     let updated: JobView;
     if (job.retryCount < job.retryLimit) {
       updated = {
@@ -198,9 +225,9 @@ export class FakeJobBroker implements JobBroker {
   // is preserved (only the state and error/failedAt change), mirroring the real
   // broker's retry_limit=0 + fail path. A no-op on an already-terminal job, like
   // fail() — protecting the completion-replay contract.
-  async failTerminal(id: string, error: JobError): Promise<JobView> {
+  async failTerminal(id: string, error: JobError, fence: JobAttemptFence = {}): Promise<JobView> {
     const job = this.getExisting(id);
-    if (TERMINAL_JOB_STATES.has(job.state)) {
+    if (TERMINAL_JOB_STATES.has(job.state) || (fence.attempt !== undefined && !holdsAttempt(job, fence))) {
       return job;
     }
     const now = new Date().toISOString();
@@ -213,6 +240,26 @@ export class FakeJobBroker implements JobBroker {
     };
     this.jobs.set(id, failed);
     return failed;
+  }
+
+  // Mirrors the real broker's release (J53): only an active job moves, back to
+  // the claimable state a fetch would have found it in, with retryCount
+  // untouched (this fake's claim never counts attempts, so leaving it alone is
+  // the faithful mirror of "the released attempt is not counted").
+  async release(id: string, fence: JobAttemptFence = {}): Promise<JobView> {
+    const job = this.getExisting(id);
+    if (job.state !== "active" || !holdsAttempt(job, fence)) {
+      return job;
+    }
+    const released: JobView = {
+      ...job,
+      state: job.retryCount > 0 ? "retry" : "created",
+      startedAt: undefined,
+      heartbeatAt: undefined,
+      updatedAt: new Date().toISOString()
+    };
+    this.jobs.set(id, released);
+    return released;
   }
 
   async cancel(id: string): Promise<JobView> {
@@ -250,7 +297,32 @@ export class FakeJobBroker implements JobBroker {
       updatedAt: now
     };
     this.jobs.set(id, retried);
+    // A retried job's next terminal failure settles afresh (J65).
+    this.settlements.delete(id);
     return retried;
+  }
+
+  // Single-process mirror of the real ledger (J64): a settled id, or one being
+  // settled right now, is skipped; a run that throws leaves it unsettled.
+  async settleFailure(job: JobView, run: () => Promise<void>): Promise<boolean> {
+    if (this.settlements.has(job.id)) return false;
+    this.settlements.set(job.id, "claimed");
+    try {
+      await run();
+    } catch (error) {
+      this.settlements.delete(job.id);
+      throw error;
+    }
+    this.settlements.set(job.id, "settled");
+    return true;
+  }
+
+  // The fake has no settlement epoch: every failed job it holds is eligible.
+  async listUnsettledFailures(limit: number): Promise<JobView[]> {
+    return [...this.jobs.values()]
+      .filter((job) => job.state === "failed" && !job.deadLetter && !this.settlements.has(job.id))
+      .sort((a, b) => (a.failedAt ?? "").localeCompare(b.failedAt ?? ""))
+      .slice(0, limit);
   }
 
   async get(id: string): Promise<JobView | undefined> {
@@ -300,19 +372,22 @@ export class FakeJobBroker implements JobBroker {
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   }
 
-  async countInFlight(types: JobType[]): Promise<number> {
-    return this.countInFlightSync(types);
+  async countInFlight(types: JobType[], servedCapabilities?: readonly JobCapability[]): Promise<number> {
+    return this.countInFlightSync(types, servedCapabilities);
   }
 
   // Shared by countInFlight and createIfAdmitted so both apply the identical
-  // in-flight-state predicate — they must never disagree on what counts.
-  private countInFlightSync(types: JobType[]): number {
+  // in-flight predicate — they must never disagree on what counts. An active job
+  // always counts; a queued one only on a queue a live watcher serves, when the
+  // served set is given (RL29).
+  private countInFlightSync(types: JobType[], servedCapabilities?: readonly JobCapability[]): number {
     const wanted = new Set(types);
+    const servedQueues = servedCapabilities ? new Set(queueNamesForCapabilities(servedCapabilities)) : undefined;
     let count = 0;
     for (const job of this.jobs.values()) {
-      if (wanted.has(job.type) && IN_FLIGHT_JOB_STATES.has(job.state)) {
-        count += 1;
-      }
+      if (!wanted.has(job.type) || !IN_FLIGHT_JOB_STATES.has(job.state)) continue;
+      if (job.state !== "active" && servedQueues && !servedQueues.has(job.queueName)) continue;
+      count += 1;
     }
     return count;
   }
@@ -338,10 +413,16 @@ export class FakeJobBroker implements JobBroker {
   private getExisting(id: string): JobView {
     const job = this.jobs.get(id);
     if (!job) {
-      throw new Error(`Job not found: ${id}`);
+      throw new JobNotFoundError(id);
     }
     return job;
   }
+}
+
+// Whether `fence` (unfenced: any claimant) still holds `job`: it is active, at
+// the fenced attempt when one is given — pg-boss's attemptFence.
+function holdsAttempt(job: JobView, fence: JobAttemptFence): boolean {
+  return job.state === "active" && (fence.attempt === undefined || job.retryCount === fence.attempt);
 }
 
 // A trace carrier is empty when telemetry is disabled; drop it so JobView.traceContext

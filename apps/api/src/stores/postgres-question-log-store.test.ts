@@ -476,6 +476,29 @@ describe("PostgresQuestionLogStore", { skip: databaseUrl ? false : "DATABASE_URL
     assert.deepEqual(await store.list(50, 0, `%${token}%`), [], "percent signs are literal too");
   });
 
+  it("narrows list and count to a set of flows (NULL flow never matches; empty set matches nothing)", async () => {
+    const token = `flows-${randomUUID()}`;
+    const hrFlow = `hr-${token}`;
+    const engFlow = `eng-${token}`;
+    const hr = await store.record({
+      question: `HR ${token}`,
+      chatProvider: "codex",
+      retrievedSectionIds: [],
+      flowId: hrFlow
+    });
+    await store.record({ question: `Eng ${token}`, chatProvider: "codex", retrievedSectionIds: [], flowId: engFlow });
+    await store.record({ question: `Unrouted ${token}`, chatProvider: "codex", retrievedSectionIds: [] });
+
+    assert.deepEqual(
+      (await store.list(50, 0, token, [hrFlow])).map((log) => log.id),
+      [hr.id]
+    );
+    assert.equal(await store.count(token, [hrFlow, engFlow]), 2);
+    assert.equal(await store.count(token), 3, "no flow filter includes the unrouted question");
+    assert.deepEqual(await store.list(50, 0, token, []), []);
+    assert.equal(await store.count(token, []), 0);
+  });
+
   it("resolves gaps by question id and summary", async () => {
     const uniqueId = randomUUID();
     const recorded = await store.record({
@@ -1180,6 +1203,35 @@ describe(
         .sort((left, right) => left.anchor.localeCompare(right.anchor))
         .map((row) => [row.anchor, row.citationCount]);
     }
+
+    it("keeps a completion whose cited section was removed by a re-index mid-job, skipping only that citation row", async () => {
+      // The answer job retrieved two sections; a re-index then dropped one of them
+      // (ordinal 1) before the completion was posted. The section_id FK used to
+      // reject the whole completion — a 500 the watcher replays forever.
+      const documentId = `vanished-doc-${randomUUID()}`;
+      await seedDocument(documentId, ["setup"]);
+      const answer = answerCiting(documentId, ["setup", "removed"]);
+
+      const recorded = await store.record({
+        question: `vanished-record-${randomUUID()}`,
+        chatProvider: "codex",
+        retrievedSectionIds: [],
+        answer
+      });
+      const updated = await store.updateAnswer(recorded.id, { answer });
+      assert.equal(updated?.answer?.citations.length, 2, "the answer keeps every citation the model made");
+
+      const rows = await pool.query<{ section_id: string }>(
+        "SELECT section_id FROM answer_citations WHERE question_id = $1 ORDER BY section_id",
+        [recorded.id]
+      );
+      assert.deepEqual(
+        rows.rows.map((row) => row.section_id),
+        [`${documentId}:0`],
+        "only the citation whose section still exists gets an audit row"
+      );
+      await store.delete(recorded.id);
+    });
 
     it("counts each (question, section) once and survives a re-index that drops the cited sections", async () => {
       const documentId = `usage-doc-${randomUUID()}`;

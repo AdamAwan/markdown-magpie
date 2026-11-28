@@ -18,25 +18,41 @@ const DDL = (schema: string) => `
   CREATE TABLE "${schema}".job (name text, state text, created_on timestamptz, completed_on timestamptz, output jsonb, data jsonb);
 `;
 
+// A 7-day window whose upper bound is strictly after every row the test has
+// already inserted. The rollups filter with an inclusive `<= to`, and fixture rows
+// are stamped with Postgres `now()` (microsecond precision) while a JS Date only
+// has millisecond precision: a bare `new Date()` taken in the same millisecond as
+// the insert truncates to *before* the row's timestamp and silently drops it from
+// the window (an intermittent empty result). `Date.now()` floors the real time to
+// the millisecond, so `+ 1` lands strictly after it — and after every earlier
+// `now()` stamp on the same host clock.
+function windowEndingNow(): { from: Date; to: Date } {
+  const to = new Date(Date.now() + 1);
+  return { from: new Date(to.getTime() - 7 * 24 * 3600 * 1000), to };
+}
+
 test("gapBacklog buckets question_gaps by day", { skip: !runIntegration }, async (t) => {
   const pool = new pg.Pool({ connectionString: databaseUrl });
   t.after(() => pool.end());
   const store = new PostgresInsightsStore(pool, "pgboss");
 
+  // Scoped to a dedicated flow: other test files share this database and run
+  // concurrently, so an unscoped "today" bucket could count their gaps too.
   const q = "insights-test-q1";
+  const flowId = `insights-test-backlog-${process.pid}`;
   await pool.query("DELETE FROM question_gaps WHERE question_id = $1", [q]);
   await pool.query("DELETE FROM questions WHERE id = $1", [q]);
-  await pool.query("INSERT INTO questions (id, question, chat_provider, asked_at) VALUES ($1, 'q', 'mock', now())", [
-    q
-  ]);
+  await pool.query(
+    "INSERT INTO questions (id, question, chat_provider, asked_at, flow_id) VALUES ($1, 'q', 'mock', now(), $2)",
+    [q, flowId]
+  );
   await pool.query(
     "INSERT INTO question_gaps (question_id, summary, created_at, resolved_at) VALUES ($1,'a',now(),NULL),($1,'b',now(),now())",
     [q]
   );
 
-  const to = new Date();
-  const from = new Date(to.getTime() - 7 * 24 * 3600 * 1000);
-  const rows = await store.gapBacklog({ from, to, bucket: "day" });
+  const { from, to } = windowEndingNow();
+  const rows = await store.gapBacklog({ from, to, bucket: "day" }, flowId);
 
   const today = rows.at(-1);
   assert.ok(today);
@@ -69,8 +85,7 @@ test("jobThroughput buckets job rows by state", { skip: !runIntegration }, async
   );
 
   const store = new PostgresInsightsStore(pool, schema);
-  const to = new Date();
-  const from = new Date(to.getTime() - 7 * 24 * 3600 * 1000);
+  const { from, to } = windowEndingNow();
 
   const all = await store.jobThroughput({ from, to, bucket: "day" });
   const today = all.at(-1);
@@ -114,8 +129,7 @@ test("verificationSuccess splits gap_closure_verification by verdict", { skip: !
     [proposalId]
   );
 
-  const to = new Date();
-  const from = new Date(to.getTime() - 7 * 24 * 3600 * 1000);
+  const { from, to } = windowEndingNow();
   const result = await store.verificationSuccess({ from, to, bucket: "day" });
 
   assert.ok(result.totals.closed >= 1);
@@ -174,8 +188,7 @@ test("journey builds the branching Sankey from real domain rows", { skip: !runIn
     [proposalId, cluster.rows[0].id, flow, `${proposalId}-2`]
   );
 
-  const to = new Date();
-  const from = new Date(to.getTime() - 7 * 24 * 3600 * 1000);
+  const { from, to } = windowEndingNow();
   const { nodes, links } = await store.journey({ from, to, bucket: "day" }, flow);
 
   const value = (source: string, target: string): number =>
@@ -206,20 +219,48 @@ test("journey builds the branching Sankey from real domain rows", { skip: !runIn
 });
 
 test("answerLatency bins completed answer_question jobs", { skip: !runIntegration }, async (t) => {
+  // Its own pg-boss-shaped schema: a freshly migrated database has no `pgboss`
+  // schema until a broker has started against it, so reading "pgboss" here made
+  // the test depend on which other suites happened to run first.
+  const schema = `insights_pgboss_latency_test_${process.pid}`;
   const pool = new pg.Pool({ connectionString: databaseUrl });
-  t.after(() => pool.end());
-  const store = new PostgresInsightsStore(pool, "pgboss");
+  t.after(async () => {
+    await pool.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
+    await pool.end();
+  });
+  await pool.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
+  await pool.query(DDL(schema));
 
-  const to = new Date();
-  const from = new Date(to.getTime() - 7 * 24 * 3600 * 1000);
+  // Completed answer_question* rows land in the bin of (completed_on − created_on);
+  // a failed row, a still-active row, and another queue's row are ignored.
+  await pool.query(
+    `INSERT INTO "${schema}".job (name, state, created_on, completed_on) VALUES
+       ('answer_question__openai_compatible', 'completed', now() - interval '10 minutes', now() - interval '10 minutes' + interval '2 seconds'),
+       ('answer_question__claude',            'completed', now() - interval '10 minutes', now() - interval '10 minutes' + interval '20 seconds'),
+       ('answer_question__claude',            'completed', now() - interval '20 minutes', now() - interval '20 minutes' + interval '400 seconds'),
+       ('answer_question__claude',            'failed',    now() - interval '10 minutes', now() - interval '10 minutes' + interval '1 second'),
+       ('answer_question__claude',            'active',    now() - interval '10 minutes', NULL),
+       ('verify_document__claude',            'completed', now() - interval '10 minutes', now() - interval '10 minutes' + interval '3 seconds')`
+  );
+
+  const store = new PostgresInsightsStore(pool, schema);
+  const { from, to } = windowEndingNow();
   const bins = await store.answerLatency({ from, to, bucket: "day" });
 
-  // The histogram always returns every fixed bin (zero-filled), regardless of
-  // whether any pg-boss answer_question rows exist in the window.
-  assert.equal(bins.length, 7);
-  assert.equal(bins[0]?.label, "0–5s");
+  // Every fixed bin is returned (zero-filled), in order.
+  assert.deepEqual(
+    bins.map((bin) => [bin.label, bin.count]),
+    [
+      ["0–5s", 1],
+      ["5–15s", 0],
+      ["15–30s", 1],
+      ["30–60s", 0],
+      ["1–2m", 0],
+      ["2–5m", 0],
+      ["5m+", 1]
+    ]
+  );
   assert.equal(bins.at(-1)?.to, null);
-  for (const bin of bins) assert.ok(bin.count >= 0);
 });
 
 test("jobErrors splits failed job rows by category and job type", { skip: !runIntegration }, async (t) => {
@@ -244,8 +285,7 @@ test("jobErrors splits failed job rows by category and job type", { skip: !runIn
   );
 
   const store = new PostgresInsightsStore(pool, schema);
-  const to = new Date();
-  const from = new Date(to.getTime() - 7 * 24 * 3600 * 1000);
+  const { from, to } = windowEndingNow();
   const { byCategory, byType } = await store.jobErrors({ from, to, bucket: "day" });
 
   // 3 failed rows: 2 provider + 1 external.
@@ -295,8 +335,7 @@ test("aiUsage sums completion-envelope usage per (job type, provider)", { skip: 
   );
 
   const store = new PostgresInsightsStore(pool, schema);
-  const to = new Date();
-  const from = new Date(to.getTime() - 7 * 24 * 3600 * 1000);
+  const { from, to } = windowEndingNow();
   // Only gpt-4o on openai-compatible is priced; gpt-4o-mini and the CLI rows are
   // not, so they must come back without an estimatedCost (never priced as $0).
   const usage = await store.aiUsage({ from, to, bucket: "day" }, [
@@ -390,8 +429,7 @@ test("aiUsageByFlow groups by data->input->>flowId and prices per flow", { skip:
   );
 
   const store = new PostgresInsightsStore(pool, schema);
-  const to = new Date();
-  const from = new Date(to.getTime() - 7 * 24 * 3600 * 1000);
+  const { from, to } = windowEndingNow();
   const rows = await store.aiUsageByFlow({ from, to, bucket: "day" }, [
     { provider: "openai-compatible", model: "gpt-4o", inputPerMTok: 2.5, outputPerMTok: 10 }
   ]);
@@ -506,8 +544,7 @@ test("patrolImpact aggregates findings and proposals per task type", { skip: !ru
          '{"proposalsDrafted":4}'::jsonb, now())`
   );
 
-  const to = new Date();
-  const from = new Date(to.getTime() - 7 * 24 * 3600 * 1000);
+  const { from, to } = windowEndingNow();
   const runs = await store.patrolImpact({ from, to, bucket: "day" });
 
   const patrol = runs.find((row) => row.taskType === "correctness_patrol");
@@ -542,8 +579,7 @@ test("answerFeedback splits verdicts with the unhelpful-on-confident subset", { 
     [...ids, flowId]
   );
 
-  const to = new Date();
-  const from = new Date(to.getTime() - 7 * 24 * 3600 * 1000);
+  const { from, to } = windowEndingNow();
   const { totals, series } = await store.answerFeedback({ from, to, bucket: "day" }, flowId);
 
   assert.equal(totals.helpful, 2);

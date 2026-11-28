@@ -131,6 +131,15 @@ and the ordinals shift beneath the row, which then claims a different heading. T
 are actually being used?" — the question you need when deciding what to trim — Magpie keeps
 a separate **durable counter** per section (`section_citation_usage`, migration 0060).
 
+Because a re-index can delete a cited section while its answer job is still running, the
+audit insert **skips** a citation whose section no longer exists (logged as a warning)
+instead of failing the completion: the old FK violation returned a 500 that the watcher's
+idempotent replay hit again forever. The answer itself (and its full citation list on
+`questions.metadata`) and the usage counter are unaffected — only the audit row for the
+vanished section is missing (`insertCitationRows` in
+`apps/api/src/stores/postgres-question-log-store.ts`). Migration 0072 indexes
+`answer_citations(section_id)` so the section-delete cascade is an index lookup.
+
 - **Key.** `(documentId, anchor)` — the same durable section identity the claim-provenance
   fold re-anchors against, rather than the ordinal-derived section id. A renamed heading or
   a moved file starts a new counter, because the cited passage's identity genuinely changed.

@@ -43,10 +43,29 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
-    # The integration tests for the Postgres* stores run against a single-use
-    # pgvector container that the test:db wrapper boots, migrates, and tears down
-    # per run (see scripts/test-db.mjs, via Testcontainers). Docker is preinstalled
-    # on ubuntu-latest, so no service container or DATABASE_URL is needed here.
+    # The Postgres-backed tests (the Postgres* stores, the pg-boss broker, the
+    # run lock, the non-blocking orchestrators) run against a pgvector service
+    # container. test:db creates a fresh single-use database on it, migrates it,
+    # runs the suite with RUN_PG_INTEGRATION=1 so the gated *.integration.test.ts
+    # files actually execute, and drops it (see scripts/test-db.mjs). The image
+    # matches docker-compose.yml's `postgres` service (pgvector/pgvector:pg16):
+    # migration 0001 creates the `vector` extension.
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      TEST_DATABASE_ADMIN_URL: postgres://postgres:postgres@localhost:5432/postgres
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -66,8 +85,8 @@ jobs:
       - name: Test scripts
         run: npm run test:scripts
 
-      # Provisions a throwaway database, migrates it, runs the suite against it,
-      # and drops it — see scripts/test-db.mjs.
+      # Provisions a single-use database on the service container, migrates it,
+      # runs the whole suite (unit + RUN_PG_INTEGRATION) against it, and drops it.
       - name: Test
         run: npm run test:db
 
@@ -96,6 +115,58 @@ jobs:
 
       - name: Golden eval
         run: npm run eval:golden
+
+  e2e-jobs:
+    name: Queue E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    # Queue-lifecycle smoke test (scripts/e2e-jobs.ts): happy-path answer,
+    # cancel in flight, retry then permanent fail, and job/schedule listing.
+    # scripts/e2e-jobs-local.ts boots the deterministic OpenAI-compatible chat
+    # fixture + API + one watcher as Node processes (no image build) against a
+    # single-use database on the pgvector service container. No provider
+    # credentials. ~3.5 minutes, most of it the retry scenario's real pg-boss
+    # backoff. Stack logs are uploaded on failure.
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      TEST_DATABASE_ADMIN_URL: postgres://postgres:postgres@localhost:5432/postgres
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Queue e2e
+        run: npm run e2e:jobs:local
+
+      - name: Upload stack logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-jobs-logs
+          path: .magpie/e2e-jobs/*.log
+          if-no-files-found: ignore
 
   static:
     name: Lint and Dead Code

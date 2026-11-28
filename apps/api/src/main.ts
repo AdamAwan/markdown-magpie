@@ -1,4 +1,4 @@
-import { serve } from "@hono/node-server";
+import { getRequestListener } from "@hono/node-server";
 import { hydrateGithubTokenFromGhCli } from "@magpie/git";
 import { installCrashHandlers } from "@magpie/logger";
 import { initTelemetry, type TelemetryHandle } from "@magpie/telemetry";
@@ -7,9 +7,13 @@ import { loadConfig } from "./platform/config.js";
 import { buildApp } from "./app.js";
 import * as configService from "./features/config/service.js";
 import { reconcileSchedules } from "./jobs/schedule-reconciler.js";
-import { preflightDataPaths } from "./platform/preflight.js";
+import { startFailureSweep } from "./features/jobs/failure-sweep.js";
+import { assertDataPathsWritable } from "./platform/preflight.js";
+import { startQueueMetrics } from "./platform/queue-stats.js";
+import { logSecurityPosture } from "./platform/security-posture.js";
 import { checkoutRoot, snapshotRoot } from "./platform/repositories.js";
 import { logger } from "./logger.js";
+import { createDrainableServer, installGracefulShutdown } from "./shutdown.js";
 
 // Capture crashes outside handled paths (uncaught throws, unhandled rejections)
 // with structured context and a clean non-zero exit for the restart policy,
@@ -25,6 +29,19 @@ async function start(): Promise<void> {
   // here (caught below) before the broker connects or the server listens.
   const config = loadConfig();
   const port = config.port;
+  // Always say how this instance is secured (auth on/off, storage, CORS, any
+  // production overrides) — the one line an operator checks after a deploy.
+  logSecurityPosture(config, logger);
+  // Fail fast if a configured data directory is not writable: an unmounted or
+  // misowned checkout/snapshot root otherwise only surfaces as every clone,
+  // publish and snapshot refresh failing at run time (issue #130). Resolved to
+  // absolute paths the same way the stores do, so the error names exactly the
+  // directory the app would use. Throws to start()'s caller, which logs it and
+  // exits non-zero.
+  await assertDataPathsWritable([
+    { label: "Snapshot directory", envVar: "MAGPIE_SNAPSHOT_ROOT", dir: snapshotRoot(config) },
+    { label: "Checkout directory", envVar: "MAGPIE_CHECKOUT_ROOT", dir: checkoutRoot(config) }
+  ]);
   // Start telemetry before any HTTP/pg client is created so the auto-instrumentation
   // can patch them. A no-op (and never throws) when telemetry is disabled.
   const telemetry: TelemetryHandle = await initTelemetry(config.telemetry, logger);
@@ -35,6 +52,8 @@ async function start(): Promise<void> {
     // Reconcile saved product schedules into pg-boss now the broker is up. The
     // queue, not an in-process timer, fires scheduled work from here on.
     await reconcileSchedules(ctx);
+    // Queue-health gauges (O16–O22); read only at telemetry collection time.
+    startQueueMetrics(ctx);
   } catch (error) {
     logger.error({ err: error instanceof Error ? error.message : "Unknown error" }, "API startup failed");
     await ctx.jobs.stop().catch(() => undefined);
@@ -42,56 +61,39 @@ async function start(): Promise<void> {
     process.exitCode = 1;
     return;
   }
-  // Non-fatal: warn loudly if a configured data directory is not writable, so an
-  // unmounted/misowned path surfaces as one boot warning rather than a silent
-  // per-run failure (issue #130). Resolved to absolute paths the same way the
-  // stores do, so the message names exactly the directory the app will use.
-  await preflightDataPaths(
-    [
-      { label: "Snapshot directory", envVar: "MAGPIE_SNAPSHOT_ROOT", dir: snapshotRoot(config) },
-      { label: "Checkout directory", envVar: "MAGPIE_CHECKOUT_ROOT", dir: checkoutRoot(config) }
-    ],
-    logger
-  );
+  // Settle the side effects of jobs pg-boss fails by itself (expiry, lost
+  // heartbeat) — features/jobs/failure-sweep.ts. Stopped before the broker.
+  const failureSweep = startFailureSweep(ctx);
   const app = buildApp(ctx);
-  const server = serve({ fetch: app.fetch, port }, () => {
+  // A drainable node:http server (rather than @hono/node-server's serve(), whose
+  // HTTP/1-or-2 union type hides http.Server's connection controls) so SIGTERM
+  // can finish in-flight requests before teardown — see shutdown.ts.
+  const server = createDrainableServer(getRequestListener(app.fetch));
+  server.server.listen(port, () => {
     logger.info({ port }, "Markdown Magpie API listening");
     configService.logStartupConfig(ctx);
   });
 
-  // On a normal stop, stop accepting connections and give in-flight background
-  // work (merge cascades, crunch planning, manual task runs) a bounded window to
-  // finish so it isn't silently dropped mid-flight.
-  let shuttingDown = false;
-  const shutdown = (signal: string) => {
-    if (shuttingDown) {
-      return;
-    }
-    shuttingDown = true;
-    logger.info({ signal }, "received signal; draining background work before exit");
-    server.close();
-    Promise.race([ctx.background.whenIdle(), new Promise((resolve) => setTimeout(resolve, config.apiShutdownDrainMs))])
-      .then(() => ctx.jobs.stop())
-      // Close the shared store pool after the broker so no store query is mid-flight
-      // when its connections are torn down. Best-effort: shutdown exits regardless.
-      .then(() => ctx.pool?.end())
-      // Flush and stop telemetry last so any span/metric from the drain is exported.
-      .then(() => telemetry.shutdown())
-      .catch((error) =>
-        logger.warn(
-          { err: error instanceof Error ? error.message : "Unknown error" },
-          "error draining background work on shutdown"
-        )
-      )
-      .finally(() => {
-        if (ctx.background.pending > 0) {
-          logger.warn({ pending: ctx.background.pending }, "exiting with background tasks still in flight");
-        }
-        process.exit(0);
-      });
-  };
-  process.once("SIGINT", () => shutdown("SIGINT"));
-  process.once("SIGTERM", () => shutdown("SIGTERM"));
+  // On SIGTERM/SIGINT: stop accepting connections, let in-flight HTTP handlers
+  // and background work (merge cascades, manual task runs) finish within the
+  // drain window, then stop the broker, then end the store pool — after the
+  // broker, so no store query is mid-flight when its connections go — and flush
+  // telemetry last so any span/metric from the drain is exported. A second
+  // signal exits at once. See shutdown.ts and docs/api.md API37/API38.
+  installGracefulShutdown({
+    server,
+    drainMs: config.apiShutdownDrainMs,
+    background: ctx.background,
+    steps: [
+      { name: "failure sweep", run: () => failureSweep.stop() },
+      { name: "job broker", run: () => ctx.jobs.stop() },
+      { name: "store pool", run: async () => ctx.pool?.end() },
+      { name: "telemetry", run: () => telemetry.shutdown() }
+    ],
+    logger,
+    exit: (code) => process.exit(code),
+    signals: process
+  });
 }
 
 void start().catch((error) => {

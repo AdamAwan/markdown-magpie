@@ -98,9 +98,10 @@ The API is a [Hono](https://hono.dev) app served under `/api`. It listens on `PO
   (default `0`). Where a text filter narrows a list, `total` is the unfiltered live count
   and `matching` the count within the filter, so `offset` pages within the matches.
 - **API12** — **CORS.** Defaults to open (`access-control-allow-origin: *`); `OPTIONS`
-  preflight returns `204`. Set `CORS_ALLOWED_ORIGINS` (comma-separated) to restrict origins
-  in production. Allowed methods are `GET, POST, DELETE, OPTIONS`; allowed request headers
-  `content-type, authorization`.
+  preflight returns `204`. Set `CORS_ALLOWED_ORIGINS` (comma-separated) to restrict origins;
+  with `NODE_ENV=production` the open default is refused at startup (API17). Allowed methods
+  are `GET, POST, PATCH, DELETE, OPTIONS` (`PATCH` serves the seed-plan, source-conflict
+  and asserted-claim edits); allowed request headers `content-type, authorization`.
 - **API13** — **Security headers.** Every response carries `X-Content-Type-Options:
   nosniff`, `X-Frame-Options: SAMEORIGIN`, `Referrer-Policy`, and
   `Strict-Transport-Security` (`secureHeaders`, run before CORS so they cover the
@@ -133,6 +134,85 @@ The API is a [Hono](https://hono.dev) app served under `/api`. It listens on `PO
   (`/api/proposals/:id/verify-closure`). The watcher itself has **no database access**.
   With auth on, the job lifecycle callbacks accept **only** a service principal — a human
   `manage:jobs` holder gets 403 ([authorization.md](./authorization.md) AZ29).
+- **API26** — **Database restarts are survived, not fatal.** The shared store pool
+  (`createDbPool`) MUST handle `error` events both on the pool (an idle connection dropped)
+  and on every client it opens (a checked-out connection dropped, e.g. one holding an
+  advisory lock): they are logged and the process carries on. A Postgres restart therefore
+  fails the in-flight queries and `/api/ready` (API27) until the database is back, then the
+  pool reconnects on the next checkout — it no longer crashes the API with an unhandled
+  `error` event. pg-boss forwards its own pool's errors to its `error` event, which the
+  broker logs.
+- **API27** — **Readiness includes the knowledge index.** `GET /api/ready` is `503` until
+  the knowledge index has hydrated from Postgres (`checks.knowledgeIndex`), in addition to
+  the database and broker checks. A failed startup hydrate is retried in the background
+  ([ingestion.md#IN28](./ingestion.md)), so the probe turns green on its own once the store
+  is reachable, instead of a replica answering from an empty index while reporting ready.
+- **API28** — **Long-polls stop with their client.** `GET /api/jobs/:id/wait` MUST stop
+  polling the broker as soon as the request is aborted (the client disconnected): the wait
+  observes the request's abort signal and clears its poll timer, rather than polling for the
+  rest of `JOB_WAIT_TIMEOUT_MS` on behalf of nobody. An aborted wait answers `204` with no
+  body (nobody is there to read it).
+- **API31** — **Job lifecycle routes say 404 only when the job does not exist.**
+  `POST /api/jobs/:id/{heartbeat,fail,cancel,retry,accept-failure}` map exactly the
+  broker's `JobNotFoundError` to `404 job_not_found`; any other failure is a `500` (the
+  generic `internal_error` body), so a watcher can tell "this job is gone" (stop) from "the
+  API failed" (retry). They used to turn every error into a 404. The watcher retries
+  `fail()` on a 5xx, 408, 429 or network error exactly as it retries `complete()`
+  ([ai-jobs.md](./ai-jobs.md) J61).
+- **API32** — **`POST /api/jobs` takes an allowlist of types**; internal-only types are
+  `400 job_type_not_submittable` and a metered type is AI-admission-controlled
+  ([ai-jobs.md](./ai-jobs.md) J67, [rate-limiting.md](./rate-limiting.md) RL30).
+- **API33** — **Watcher lifecycle calls are fenced to the claimed attempt.** Heartbeat,
+  complete and fail take an optional `attempt` (the job's `retryCount` at claim); heartbeat
+  answers `{ job, cancelled, active }`, and a completion that did not persist (this attempt no
+  longer holds the job) is `409 job_not_active` with no side effects
+  ([ai-jobs.md](./ai-jobs.md) J60–J62).
+- **API36** — **Release.** `POST /api/jobs/:id/release` (`{ "workerName"?, "attempt"? }`) is the
+  watcher's shutdown hand-back and belongs to the same service-only lifecycle set as
+  API16: it returns an `active` job to the queue, claimable at once, **without spending a
+  retry**, and marks the named watcher idle ([ai-jobs.md](./ai-jobs.md) J53). It is a
+  no-op `200` (the job unchanged) on a job that is not `active`, so it can never resurrect
+  a cancelled, completed or failed job. With `attempt` it is fenced like the other
+  lifecycle calls (API33): only the attempt the watcher claimed is released; `404 job_not_found` for an unknown id.
+
+### Process lifecycle (shutdown)
+
+- **API37** — **SIGTERM drains in-flight HTTP requests before teardown.** On the first
+  SIGTERM or SIGINT the server stops accepting connections, closes idle keep-alive sockets,
+  and lets every request already being handled finish; each such response is sent with
+  `Connection: close` so the client reconnects elsewhere rather than reusing a socket on a
+  stopping process. The drain is bounded by `API_SHUTDOWN_DRAIN_MS` (default 10 s); a
+  handler still running at the deadline — e.g. a `GET /api/jobs/:id/wait` long-poll,
+  which can wait up to `JOB_WAIT_TIMEOUT_MS` (25 s) — has its connection force-closed. In-process
+  background work (merge cascades, manual task runs) is then awaited within **the same**
+  window, so the total drain stays bounded by `API_SHUTDOWN_DRAIN_MS`.
+- **API38** — **Teardown order, and forced exit.** Only after the drain: stop the job
+  broker, then end the shared store pool (after the broker, so no store query is
+  mid-flight when its connections go), then flush telemetry (last, so spans from the drain
+  export). Each step runs even if an earlier one failed; the process then exits 0. A
+  **second** SIGTERM/SIGINT exits 1 at once, and a backstop exits 1 if teardown has not
+  finished 10 s after the drain window. The container's stop grace period MUST exceed
+  `API_SHUTDOWN_DRAIN_MS` + that backstop (compose: `stop_grace_period: 30s`), and node
+  MUST receive the signal directly — the image runs `tini` as PID 1 and execs node in exec
+  form, never under `npm run` or a shell.
+
+### Startup safety & flow-scoped reads
+
+- **API17** — **Production safety.** With `NODE_ENV=production` the API MUST refuse to
+  start with `AUTH_REQUIRED=false`, with any store resolving to `memory`, or with CORS
+  allowing any origin, unless the matching override (`MAGPIE_ALLOW_UNAUTHENTICATED_PRODUCTION`,
+  `MAGPIE_ALLOW_MEMORY_STORAGE_IN_PRODUCTION`, `MAGPIE_ALLOW_ANY_CORS_ORIGIN_IN_PRODUCTION`)
+  is exactly `true` — all problems reported in one startup error
+  ([configuration.md](./configuration.md#production-safety)). In every environment it MUST
+  refuse to start when `MAGPIE_CHECKOUT_ROOT` or `MAGPIE_SNAPSHOT_ROOT` is not writable,
+  and MUST log one `event=security_posture` line (auth required/provider/issuer/audience,
+  memory-backed stores, CORS policy, overrides) plus a warning per insecure posture.
+- **API18** — **Flow-scoped reads.** The `read:knowledge` reads of questions, snapshots,
+  indexed knowledge and jobs apply the flow-scoped capabilities: lists are filtered to the
+  caller's readable flows with totals over the visible set, a cross-flow id is a `404`, and
+  job content from other flows is redacted rather than hidden
+  ([authorization.md](./authorization.md) AZ30–AZ34). Unchanged when no
+  `KNOWLEDGE_ROLE_GRANTS` are configured, with auth off, and for service principals.
 
 ## Mount map
 
@@ -182,12 +262,12 @@ Liveness check. Public (API5).
 
 Deep readiness check, in contrast to `/health`'s shallow liveness. Verifies the running
 process can actually serve traffic: Postgres is reachable (`SELECT 1` via the shared
-connection pool) and the pg-boss job broker has started. Public (API5), so orchestrator
-probes need no token. Returns `200` when ready and `503` otherwise, with a body reporting
-each dependency:
+connection pool), the pg-boss job broker has started, and the knowledge index has hydrated
+from storage (API27). Public (API5), so orchestrator probes need no token. Returns `200`
+when ready and `503` otherwise, with a body reporting each dependency:
 
 ```json
-{ "ready": true, "checks": { "database": true, "broker": true } }
+{ "ready": true, "checks": { "database": true, "broker": true, "knowledgeIndex": true } }
 ```
 
 Use `/ready` for readiness/startup probes (gate traffic on dependencies) and `/health`
@@ -213,7 +293,8 @@ those args (local development), in which case the console shows a "Development" 
 
 ### `GET /api/config` · `POST /api/config`
 
-Scope `manage:admin`.
+Scope `manage:admin`; on a provider without per-user scopes (Entra) both also need the
+`admin` role ([authorization.md](./authorization.md) AZ27).
 
 `GET` returns the resolved runtime configuration: API settings, storage backends (with the
 database URL masked), configured knowledge repositories, provider settings and secret
@@ -345,17 +426,23 @@ result carries a `[0,1]` relevance score.
 - `400 query_required` — missing `q`.
 - `200` — `{ "sections": [ DocumentSection, ... ] }`.
 
+Flow-scoped (API18): only the destinations of flows the caller holds `read` or `ask` on are
+searched; a caller with neither on any flow gets an empty result.
+
 ### `GET /api/knowledge/sections/:id`
 
 Resolves one indexed section in full — the lookup behind MCP's `kb_citation`, which
 expands a citation's excerpt into the complete evidence passage.
 
-- `404 section_not_found` — the id is not in the index (e.g. the section was re-indexed away).
+- `404 section_not_found` — the id is not in the index (e.g. the section was re-indexed
+  away), or it belongs to a flow the caller holds neither `read` nor `ask` on (API18).
 - `200` — `{ "section": DocumentSection }`.
 
 ### `POST /api/knowledge/repositories/index`
 
-Indexes the destination KB for a configured flow. See [ingestion.md](ingestion.md).
+Indexes the destination KB for a configured flow. See [ingestion.md](ingestion.md). Scope
+`manage:knowledge`; on Entra also the `ops` role (AZ27), checked before the `trigger`
+rate limit.
 
 ```json
 { "flowId": "docs" }
@@ -384,10 +471,12 @@ Lists indexed repositories.
 
 ### `GET /api/knowledge/documents`
 
-Lists indexed documents, sorted by path.
+Lists indexed documents, sorted by path, paginated (API11). Flow-scoped (API18): only
+documents in destinations of flows the caller holds `read` or `ask` on, and `total` counts
+the same set.
 
 ```json
-{ "documents": [ KnowledgeDocument, ... ] }
+{ "documents": [ KnowledgeDocument, ... ], "total": 12 }
 ```
 
 ### `GET /api/knowledge/stats`
@@ -410,6 +499,9 @@ knowledge-base trim has evidence behind it. See
 | `sort` | `least` | `least` (never-cited first, then coldest), `most`, or `recent`. |
 | `limit` / `offset` | `50` / `0` | Page over the ranked set; `total` is the unpaginated count. |
 | `repositoryId` | — | Narrow to one indexed destination. |
+
+Flow-scoped (API18): the report covers only destinations of flows the caller holds `read` or
+`ask` on, and then omits usage of documents no longer indexed.
 
 - `400 invalid_group` / `400 invalid_sort` — unrecognised value.
 - `200` —
@@ -509,7 +601,8 @@ it — a case-insensitive literal substring, not a pattern. `total` is the unpag
 of all listable (live) questions; `matching` is the count within the `q` filter (equal to
 `total` when `q` is absent), so `offset` pages within the matches. The console's Ask page
 drives its search box and Newer/Older pager off this: the pager walks `matching`, the
-sidebar badge shows `total`.
+sidebar badge shows `total`. Flow-scoped (API18): only questions in flows the caller holds
+`read` on, and both totals count the same visible set.
 
 ```json
 { "questions": [ QuestionLog, ... ], "total": 123, "matching": 7 }
@@ -536,11 +629,14 @@ the retry cap, so they are frozen from auto-redrafting (see
 `questions` are the parked questions an operator can act on (retry / dismiss below).
 `proposals` are the edge case where a merged proposal parked (`closure_status =
 needs_attention`) but its triggering question log was deleted, so there is no parked
-question to act on — surfaced read-only so the escalation is not invisible.
+question to act on — surfaced read-only so the escalation is not invisible. Both lists are
+filtered to flows the caller holds `read` on (API18).
 
 ### `GET /api/questions/:id`
 
-- `404 question_not_found`.
+- `404 question_not_found` — no such question, or it is in a flow the caller cannot read
+  (API18). The `/:id/feedback` and `/:id/gap*` actions below also 404 a question in a flow
+  the caller holds neither `read` nor `ask` on.
 - `200` — `{ "question": QuestionLog }`.
 
 ### `DELETE /api/questions/:id?scrub=<bool>`
@@ -913,7 +1009,8 @@ poller.
 
 ### `POST /api/proposals/:id/verify-closure`
 
-**Watcher callback** (API16, scope `manage:jobs`). The maintenance runner POSTs here when it
+**Watcher callback** (API16, scope `manage:jobs`; on Entra a human caller also needs the
+`ops` role, AZ27 — the watcher's service principal is always admitted). The maintenance runner POSTs here when it
 claims a `verify_gap_closure` job (enqueued by the merge cascade for any merged proposal
 that had triggering questions). The API **enqueues** a re-ask of each triggering question
 through the queued `answer_question` path against the freshly re-indexed knowledge base and
@@ -984,8 +1081,12 @@ maintenance jobs. Job states: `created`, `retry`, `active`, `completed`, `cancel
 Creates a job. Requires the `manage:jobs` scope.
 
 ```json
-{ "type": "draft_markdown_proposal", "input": { ... } }
+{ "type": "correctness_patrol", "input": { "flowId": "docs" } }
 ```
+
+Only the hand-submittable types are accepted (API32): `process_gaps_to_pull_requests`,
+`source_change_sync`, `correctness_patrol`, `editorial_patrol`, `seed_bootstrap`,
+`refresh_flow_snapshot`, `verify_document`, `summarize_gap`.
 
 `input` is validated against the job type's own `inputSchema` at creation (#285), so a
 payload that does not match the contract — including a source descriptor whose git `url`
@@ -993,6 +1094,8 @@ uses a disallowed transport (`ext::`, `git://`) or a `-`-prefixed value — is r
 before it is persisted or dispatched.
 
 - `400 invalid_job` — unknown/missing type, or a body that is not `{ type, input }`.
+- `400 job_type_not_submittable` — an internal-only type (API32).
+- `429 ai_capacity` (+ `Retry-After`) — a metered type while AI capacity is full (RL30).
 - `400 invalid_job_input` — `input` failed the job type's `inputSchema`.
 - `400 unconfigured_job_source` — `input.sources` contains a descriptor that is not exactly
   one the API builds from the operator's configured sources (an unknown id, or a different
@@ -1014,6 +1117,11 @@ pages (see [ai-jobs.md](./ai-jobs.md) J49).
 { "jobs": [ Job, ... ], "total": 1234 }
 ```
 
+Flow-scoped by **redaction** (API18, AZ34): a job in a flow the caller may not see keeps its
+id, type, state and timing but comes back with `input: {}`, no `output`, an error reduced to
+its `code`/`category`, and `redacted: true` — so `total` stays exact. `GET /:id` and
+`GET /:id/wait` redact the same way; an asker sees its own flow's answer jobs in full.
+
 ### `GET /api/jobs/:id`
 
 - `404 job_not_found`.
@@ -1024,6 +1132,7 @@ pages (see [ai-jobs.md](./ai-jobs.md) J49).
 Long-polls until the job is terminal. `200` with `{ "job": Job }` once terminal; `202` with
 the current `{ "job": Job }` while still running — re-issue to keep waiting
 (`JOB_WAIT_TIMEOUT_MS` bounds each call, `JOB_WAIT_POLL_MS` the server poll cadence).
+Polling stops as soon as the client disconnects (API28).
 
 - `404 job_not_found`.
 
@@ -1049,7 +1158,12 @@ service (client-credentials) principal: anyone else gets `403 forbidden` (AZ29).
 structured `error` object. Complete takes `{ "output", "executor"?, "usage"?, "provider"?,
 "model"? }` — usage is the run's summed provider-reported token spend (#241), and
 provider/model are the executing runner's identity so that spend can be priced per model;
-all three are best-effort telemetry (malformed values are dropped, never a 400). See
+all three are best-effort telemetry (malformed values are dropped, never a 400). Heartbeat,
+complete and fail also take `attempt` (API33): heartbeat returns `{ "job", "cancelled",
+"active" }`, and complete answers `409 job_not_active` when this attempt no longer holds the
+job. Only an unknown id is a 404 (API31).
+`POST /api/jobs/:id/release` (`{ "workerName"?, "attempt"? }` → `{ "job": Job }`) is the same
+service-only set: a shutting-down watcher's hand-back of its claim (API36). See
 [ai-jobs.md](ai-jobs.md).
 
 ### `GET /api/workers`
@@ -1178,6 +1292,8 @@ Scope `read:knowledge`. Every flow's latest downloaded snapshot (gaps, in-flight
 polled PR state) so a reviewer can see the context the fetch job assembled. `GET /` returns
 `{ "snapshots": [ ... ] }`; `GET /:flowId` returns one flow's `{ "snapshot": ... }`
 (`404 snapshot_not_found`). The un-routed/default flow is addressed as `default`.
+Flow-scoped (API18): only flows the caller holds `read` on; the `default` snapshot needs
+`read` on `*`, and any other flow's is a `404`.
 
 ### `GET /api/prompts`
 
@@ -1359,13 +1475,17 @@ defined in `packages/core/src/index.ts`. The `Job` shape (`JobView`) is defined 
 | Concern | Code |
 | --- | --- |
 | App assembly & mount map | `apps/api/src/app.ts` |
+| Server + graceful shutdown (API37/API38) | `apps/api/src/shutdown.ts`, wired in `apps/api/src/main.ts`; container signals: `Dockerfile`, `docker-compose*.yml` |
 | Endpoint modules | `apps/api/src/features/<name>/routes.ts` (+ `service.ts`, `schema.ts`) |
 | Error model & `onError` | `apps/api/src/http/errors.ts` |
 | JSON body reading (`invalid_json`) | `apps/api/src/http/body.ts` |
 | Rate limiting & `RateLimit-*` headers | `apps/api/src/http/rate-limit.ts` |
 | Request logging | `apps/api/src/http/logging.ts` |
 | Auth middleware, scopes, delegation | `apps/api/src/auth/middleware.ts` |
-| Flow-scoped capability checks (`assertCan`) | `apps/api/src/auth/capabilities.ts` |
+| Flow-scoped capability checks (`assertCan`, `canAny`, `readableFlowIds`) | `apps/api/src/auth/capabilities.ts` |
+| Job read redaction (API18) | `apps/api/src/features/jobs/visibility.ts` |
+| Production safety checks (API17) | `apps/api/src/platform/config.ts` (`productionSafetyIssues`) |
+| Startup security-posture log, data-root writability (API17) | `apps/api/src/platform/security-posture.ts`, `apps/api/src/platform/preflight.ts`, `apps/api/src/main.ts` |
 | Limit/offset/link helpers | `apps/api/src/platform/paths.ts` |
 | CORS / body-limit / security headers | `apps/api/src/app.ts` (Hono middleware) |
 | Response types | `packages/core/src/index.ts`, `packages/jobs/src/types.ts` |
@@ -1380,8 +1500,12 @@ Representative route-level tests (`apps/api/src/features/**/routes*.test.ts`):
 `proposals/routes.{bulk,flow-scope,merge,merge-guard,merge-idempotency,validation}.test.ts`,
 `jobs/routes.test.ts`, `source-map/routes.test.ts`, `source-sync/routes.test.ts`,
 `snapshots/routes.test.ts`, `scheduled-tasks/routes.test.ts`, `insights/routes.test.ts`,
-`config/routes.flow-scope.test.ts`. Cross-cutting HTTP concerns:
-`apps/api/src/http/{errors,logging,rate-limit}.test.ts`.
+`config/routes.flow-scope.test.ts`, `apps/api/src/auth/read-routes.flow-scope.test.ts`
+(API18). Cross-cutting HTTP concerns: `apps/api/src/http/{errors,logging,rate-limit}.test.ts`,
+`apps/api/src/app.test.ts` (CORS incl. `PATCH` preflight). Startup safety (API17):
+`apps/api/src/platform/{config,security-posture,preflight}.test.ts`. Release (API36):
+`apps/api/src/features/jobs/release.test.ts`. Shutdown drain (API37/API38):
+`apps/api/src/shutdown.test.ts`.
 
 ## Provenance (design history)
 

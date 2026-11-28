@@ -27,7 +27,11 @@ import {
   storeBackend
 } from "./platform/stores.js";
 import type { InsightsStore } from "./stores/insights-store.js";
-import { createConfiguredEmbeddingProvider, embeddingModelId } from "./platform/providers.js";
+import {
+  createConfiguredEmbeddingProvider,
+  createConfiguredQueryEmbeddingProvider,
+  embeddingModelId
+} from "./platform/providers.js";
 import { createDbPool } from "./platform/db-pool.js";
 import type { AppConfig } from "./platform/config.js";
 import type pg from "pg";
@@ -90,7 +94,12 @@ export interface AppContext {
   // tests) — readiness treats an absent pool as "no Postgres dependency to check".
   pool: pg.Pool | undefined;
   providers: {
+    // Background embedding: indexing, gap-cluster bucketing, questionnaire
+    // matching — batched, long timeout (EMBEDDING_TIMEOUT_MS).
     embedding: EmbeddingProvider | undefined;
+    // Request-path embedding: query-time retrieval and flow routing — short
+    // timeout behind a circuit breaker so a down provider degrades fast (J86).
+    queryEmbedding: EmbeddingProvider | undefined;
   };
   // Validated, env-derived static config, read once at startup.
   settings: AppConfig;
@@ -121,6 +130,9 @@ export async function createAppContext(config: AppConfig): Promise<AppContext> {
       ? new PostgresKnowledgeStore(pool, embeddingModelId(config))
       : undefined;
   const embedding = knowledgeStore ? createConfiguredEmbeddingProvider(config) : undefined;
+  // Request-path instance (short timeout + circuit breaker, J86) for query-time
+  // retrieval and embedding routing; `embedding` above stays the indexing one.
+  const queryEmbedding = knowledgeStore ? createConfiguredQueryEmbeddingProvider(config) : undefined;
   const knowledgeChanges = createKnowledgeChangeStore(config, pool);
   // The flow a destination repository belongs to, resolved from configuration at
   // write time so a change entry can be filtered by flow without joining back
@@ -136,7 +148,7 @@ export async function createAppContext(config: AppConfig): Promise<AppContext> {
           // independent of embeddings; the vector side is only added when embeddings
           // are configured. Both fall back to the in-memory path on error.
           keywordSearch: knowledgeStore,
-          ...(embedding ? { embeddingProvider: embedding, vectorSearch: knowledgeStore } : {}),
+          ...(queryEmbedding ? { embeddingProvider: queryEmbedding, vectorSearch: knowledgeStore } : {}),
           onNotice: (message) => logger.warn({ notice: message }, "knowledge index notice")
         },
         { store: knowledgeChanges, resolveFlowId: resolveFlowIdForDestination }
@@ -207,7 +219,8 @@ export async function createAppContext(config: AppConfig): Promise<AppContext> {
     jobs,
     pool,
     providers: {
-      embedding
+      embedding,
+      queryEmbedding
     },
     settings: config,
     config: new RuntimeConfigHolder({ aiProvider: config.aiProvider }),
@@ -238,15 +251,18 @@ export async function createAppContext(config: AppConfig): Promise<AppContext> {
         logger.error({ err: message }, "failed to adopt unversioned section embeddings");
       }
       // Syncing git checkouts is required: a failure here aborts startup (the
-      // caller maps a throw to a non-zero exit). Hydrating the index is
-      // best-effort — a fresh or unreachable store should not stop the server.
+      // caller maps a throw to a non-zero exit). Hydrating the index does not
+      // abort startup — an unreachable store should not stop the server — but a
+      // failed hydrate is retried in the background with backoff, and /api/ready
+      // stays 503 until one succeeds, so this replica never serves an empty index
+      // as if it were the knowledge base (docs/api.md API27).
       await syncConfiguredGitCheckouts(this.repositoryDeps());
-      try {
-        await knowledgeIndex.hydrate();
-      } catch (error) {
-        const message = error instanceof Error ? error.message : "Unknown error";
-        logger.error({ err: message }, "failed to hydrate knowledge index from storage");
-      }
+      await knowledgeIndex.startHydration({
+        onError: (error, attempt) => {
+          const message = error instanceof Error ? error.message : "Unknown error";
+          logger.error({ err: message, attempt }, "failed to hydrate knowledge index from storage; retrying");
+        }
+      });
       // Best-effort one-shot migration: give pre-existing proposals a gap cluster
       // so the reconciler has lineage to work from. No-ops once clusters exist.
       try {

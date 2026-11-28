@@ -48,7 +48,9 @@ function flowText(flow: RouteFlow, routingSummary: string | undefined): string {
  * watcher answers an abstention with the chat router.
  */
 export async function route(ctx: AppContext, request: RouteRequest): Promise<RouteResult> {
-  const provider = ctx.providers.embedding;
+  // The request-path provider (short timeout + circuit breaker, J86): a down
+  // embedding service fails over to the chat router fast instead of stalling.
+  const provider = ctx.providers.queryEmbedding;
   if (!provider || request.flows.length === 0) {
     return { status: "abstain" };
   }

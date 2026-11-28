@@ -8,6 +8,8 @@ import { logger } from "../logger.js";
 import { makeTestContext } from "../test-support/context.js";
 import { adminRoutes, configRoutes } from "../features/config/routes.js";
 import { jobRoutes } from "../features/jobs/routes.js";
+import { knowledgeRoutes } from "../features/knowledge/routes.js";
+import { proposalRoutes } from "../features/proposals/routes.js";
 import { fixPatrolRoutes } from "../features/patrol/routes.js";
 import { questionRoutes } from "../features/questions/routes.js";
 import { scheduledTaskRoutes } from "../features/scheduled-tasks/routes.js";
@@ -56,6 +58,8 @@ function appFor(ctx: AppContext, who: Principal): Hono {
   app.route("/fix-patrol", fixPatrolRoutes(ctx));
   app.route("/source-sync", sourceSyncRoutes(ctx));
   app.route("/flows", seedRoutes(ctx));
+  app.route("/knowledge", knowledgeRoutes(ctx));
+  app.route("/proposals", proposalRoutes(ctx));
   app.onError(onError);
   return app;
 }
@@ -71,6 +75,7 @@ interface PrivilegedRoute {
 // (usually a 400/404 for the dummy id or body) without side effects.
 const ROUTES: PrivilegedRoute[] = [
   { capability: "admin", method: "POST", path: "/config", body: {} },
+  { capability: "admin", method: "GET", path: "/config" },
   { capability: "admin", method: "DELETE", path: "/questions/missing" },
   { capability: "ops", method: "POST", path: "/jobs", body: { type: "not-a-job" } },
   { capability: "ops", method: "POST", path: "/jobs/missing/cancel" },
@@ -81,7 +86,11 @@ const ROUTES: PrivilegedRoute[] = [
   { capability: "ops", method: "POST", path: "/flows/missing/seed-bootstrap/run" },
   { capability: "ops", method: "POST", path: "/fix-patrol/run", body: { flowId: "missing" } },
   { capability: "ops", method: "POST", path: "/fix-patrol/improve/run", body: { flowId: "missing" } },
-  { capability: "ops", method: "POST", path: "/source-sync/run", body: { flowId: "missing" } }
+  { capability: "ops", method: "POST", path: "/source-sync/run", body: { flowId: "missing" } },
+  { capability: "ops", method: "POST", path: "/knowledge/repositories/index", body: { repositoryId: "missing" } },
+  // The maintenance watcher's verify_gap_closure callback: its service identity
+  // is admitted ("allows a genuine service principal" below).
+  { capability: "ops", method: "POST", path: "/proposals/missing/verify-closure" }
 ];
 
 async function call(app: Hono, route: PrivilegedRoute): Promise<number> {

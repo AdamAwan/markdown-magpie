@@ -7,16 +7,42 @@ import type { EmbeddingRoute, RoutableFlow } from "@magpie/retrieval";
 // Everything the worker loop needs from the API's durable job lifecycle. Kept as
 // an interface so the loop and runners can be tested against a fake without
 // touching the network.
-export interface WatcherApiClient {
+// The claim a lifecycle call is about: the job id plus the retryCount it was
+// claimed at, which names the attempt (docs/ai-jobs.md J60). The API fences
+// heartbeat/complete/fail to that attempt, so a watcher whose claim lapsed can
+// never refresh, complete or fail an attempt another watcher now holds. A
+// claimed JobView satisfies it.
+export type ClaimedJob = Pick<JobView, "id" | "retryCount">;
+
+// What a heartbeat reports. `active: false` means this attempt no longer holds
+// the job (cancelled, failed, completed, or re-queued after the claim lapsed):
+// abort the run and report nothing further. `active` is absent only from an API
+// predating J60 (and test fakes), which is read as "still held".
+export interface HeartbeatReply {
+  cancelled: boolean;
+  active?: boolean;
+}
+
+interface WatcherApiClient {
   claim(workerName: string, capabilities: JobCapability[]): Promise<JobView | undefined>;
-  heartbeat(jobId: string): Promise<{ cancelled: boolean }>;
+  heartbeat(job: ClaimedJob): Promise<HeartbeatReply>;
   // `usage` is the run's summed provider-reported token usage (#241), omitted
   // when the provider reported nothing; the API persists it on the completion
   // envelope for the Insights AI-usage chart. `identity` is the executing
   // runner's provider + configured model, omitted for non-AI runners; the API
   // persists it beside usage so token spend can be priced per model.
-  complete(jobId: string, output: unknown, usage?: AiUsage, identity?: AiExecutionIdentity): Promise<void>;
-  fail(jobId: string, error: JobError): Promise<void>;
+  complete(job: ClaimedJob, output: unknown, usage?: AiUsage, identity?: AiExecutionIdentity): Promise<void>;
+  fail(job: ClaimedJob, error: JobError): Promise<void>;
+}
+
+// The worker loop's own surface: the lifecycle above plus the shutdown hand-back,
+// which only the loop ever calls (runners never release a job), so it is kept off
+// the WatcherApi the runners are built against.
+export interface WorkerLoopApiClient extends WatcherApiClient {
+  // Hands a claimed job back to the queue without spending a retry (J53) — the
+  // shutdown path's alternative to leaving it active until the heartbeat sweep
+  // fails it. `signal` bounds the call so a draining watcher cannot hang on it.
+  release(job: ClaimedJob, signal?: AbortSignal): Promise<void>;
 }
 
 // A retrieved section as returned by POST /api/retrieve. Mirrors the API's
@@ -147,17 +173,20 @@ export interface HttpClientOptions {
   // the hot-path default on a large flow — a 30s cap here would silently abort
   // the call and fail the tick.
   maintenanceTimeoutMs?: number;
-  // Logs retried complete() attempts (see COMPLETE_RETRY_ATTEMPTS below).
+  // Logs retried complete()/fail() attempts (see SETTLE_RETRY_* below).
   // Defaults to a no-op so tests and callers that don't care can omit it.
   logger?: Logger;
-  // Overrides the base backoff delay between complete() retries. Defaults to
-  // COMPLETE_RETRY_BASE_DELAY_MS; exposed so tests aren't stuck waiting out the
-  // real production backoff.
-  completeRetryBaseDelayMs?: number;
+  // Override the complete()/fail() retry schedule (see SETTLE_RETRY_* below);
+  // exposed so tests aren't stuck waiting out the real production backoff.
+  settleRetry?: Partial<SettleRetryPolicy>;
 }
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 const DEFAULT_MAINTENANCE_TIMEOUT_MS = 15 * 60_000;
+// A heartbeat is tiny; a slow one must not eat the claim's margin. With the
+// catalog's 120s heartbeat window and a 30s beat (worker-loop.ts), a 10s cap
+// keeps three consecutive lost beats survivable (J60).
+const HEARTBEAT_TIMEOUT_MS = 10_000;
 
 // A non-2xx HTTP response, carrying the status so callers can tell a transient
 // server failure (5xx) or a network/timeout error (no status at all — see below)
@@ -174,21 +203,43 @@ class HttpRequestStatusError extends Error {
 
 // The finished provider output is only ever sitting in the runner's memory once —
 // if the complete() POST itself fails on a network blip or a transient 5xx (the
-// API mid-restart, a load balancer hiccup), the caller's only recourse used to be
-// falling back to fail(), which discards that output and forces pg-boss to redo
-// the entire (paid-for) generation. complete() is idempotent on the API side (see
-// completeJob in apps/api/src/features/jobs/service.ts), so retrying it locally a
-// few times is safe and far cheaper than a full regeneration. This retry also
-// doubles as the automatic recovery path for the API's `500 side_effects_failed`
-// response: the API persists the job's output BEFORE its side-effect fan-out, so
-// a re-POST on that 5xx replays only the side effects — never the generation. A
-// 4xx (invalid output, job not found, job cancelled) is a deterministic contract
-// failure no amount of retrying fixes, so those are not retried here.
-const COMPLETE_RETRY_ATTEMPTS = 3;
-const COMPLETE_RETRY_BASE_DELAY_MS = 250;
+// API mid-restart or mid-deploy, a load balancer hiccup), the caller's only
+// recourse used to be falling back to fail(), which discards that output and
+// forces pg-boss to redo the entire (paid-for) generation. complete() is
+// idempotent on the API side (see completeJob in
+// apps/api/src/features/jobs/service.ts), so it is retried for MINUTES — long
+// enough to ride out an API restart or a rolling deploy — not the ~2s it used to
+// be (J61). The worker loop keeps heartbeating meanwhile, so the claim does not
+// lapse while the API is reachable; if it does lapse while the API is down, the
+// API still salvages this attempt's completion from the job's own retry.
+//
+// This retry also doubles as the automatic recovery path for the API's `500
+// side_effects_failed` response: the API persists the job's output BEFORE its
+// side-effect fan-out, so a re-POST on that 5xx replays only the side effects —
+// never the generation. fail() rides the same schedule: a 5xx there means the
+// API could not record the failure (or settle its side effects) yet.
+//
+// Only transient answers are retried: a network error/timeout, a 5xx, 408 or 429.
+// Every other 4xx is a permanent verdict no retry can change — 400 invalid
+// output (or a repair already enqueued), 404 unknown job, 409 cancelled / no
+// longer held by this attempt — and is thrown at once.
+export interface SettleRetryPolicy {
+  // First backoff delay; each retry doubles it up to maxDelayMs, full-jittered.
+  baseDelayMs: number;
+  maxDelayMs: number;
+  // Give up once the next attempt would start later than this after the first.
+  budgetMs: number;
+}
 
-function isRetryableCompleteError(error: unknown): boolean {
-  return !(error instanceof HttpRequestStatusError) || error.status >= 500;
+const SETTLE_RETRY_POLICY: SettleRetryPolicy = {
+  baseDelayMs: 1_000,
+  maxDelayMs: 60_000,
+  budgetMs: 8 * 60_000
+};
+
+function isRetryableSettleError(error: unknown): boolean {
+  if (!(error instanceof HttpRequestStatusError)) return true;
+  return error.status >= 500 || error.status === 408 || error.status === 429;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -198,14 +249,14 @@ function sleep(ms: number): Promise<void> {
 // The watcher's only conduit to the API. It owns the URL shapes and the worker
 // identity that the API records on terminal transitions (so a failed/completed
 // job's diagnostics show which executor handled it).
-export class HttpWatcherApi implements WatcherApi {
+export class HttpWatcherApi implements WatcherApi, WorkerLoopApiClient {
   private readonly base: string;
   private readonly workerName: string;
   private readonly token?: ApiTokenProvider;
   private readonly timeoutMs: number;
   private readonly maintenanceTimeoutMs: number;
   private readonly logger?: Logger;
-  private readonly completeRetryBaseDelayMs: number;
+  private readonly settleRetry: SettleRetryPolicy;
 
   constructor(options: HttpClientOptions) {
     this.base = trimTrailingSlash(options.apiBaseUrl).replace(/\/api$/, "");
@@ -214,7 +265,7 @@ export class HttpWatcherApi implements WatcherApi {
     this.timeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
     this.maintenanceTimeoutMs = options.maintenanceTimeoutMs ?? DEFAULT_MAINTENANCE_TIMEOUT_MS;
     this.logger = options.logger;
-    this.completeRetryBaseDelayMs = options.completeRetryBaseDelayMs ?? COMPLETE_RETRY_BASE_DELAY_MS;
+    this.settleRetry = { ...SETTLE_RETRY_POLICY, ...options.settleRetry };
   }
 
   async claim(workerName: string, capabilities: JobCapability[]): Promise<JobView | undefined> {
@@ -222,49 +273,79 @@ export class HttpWatcherApi implements WatcherApi {
     return job ?? undefined;
   }
 
-  async heartbeat(jobId: string): Promise<{ cancelled: boolean }> {
+  async heartbeat(job: ClaimedJob): Promise<HeartbeatReply> {
     // Send the worker name so the API keeps this watcher marked busy on the job
-    // it is running (the registry behind the Jobs screen's connected-workers view).
-    const { cancelled } = await this.post<{ cancelled: boolean }>(`/api/jobs/${jobId}/heartbeat`, {
-      workerName: this.workerName
-    });
-    return { cancelled: Boolean(cancelled) };
+    // it is running (the registry behind the Jobs screen's connected-workers
+    // view), and the claimed attempt so the API answers for THIS claim.
+    const reply = await this.post<{ cancelled?: boolean; active?: boolean }>(
+      `/api/jobs/${job.id}/heartbeat`,
+      { workerName: this.workerName, attempt: job.retryCount },
+      undefined,
+      HEARTBEAT_TIMEOUT_MS
+    );
+    return { cancelled: Boolean(reply.cancelled), active: reply.active !== false };
   }
 
-  async complete(jobId: string, output: unknown, usage?: AiUsage, identity?: AiExecutionIdentity): Promise<void> {
+  async complete(job: ClaimedJob, output: unknown, usage?: AiUsage, identity?: AiExecutionIdentity): Promise<void> {
     // The output is only ever held in the runner's memory, so a dropped response
     // here must not fall straight through to worker-loop's fail() fallback (which
     // would discard it and force a full paid-for regeneration) when the failure
-    // is transient. Retry locally first; see COMPLETE_RETRY_ATTEMPTS above.
-    let attempt = 0;
-    for (;;) {
+    // is transient. Retry locally first; see SETTLE_RETRY_POLICY above.
+    await this.settleWithRetry(job.id, "completion", () =>
+      this.post(`/api/jobs/${job.id}/complete`, {
+        output,
+        executor: this.workerName,
+        attempt: job.retryCount,
+        ...(usage ? { usage } : {}),
+        ...(identity ? { provider: identity.provider } : {}),
+        ...(identity?.model ? { model: identity.model } : {})
+      })
+    );
+  }
+
+  async fail(job: ClaimedJob, error: JobError): Promise<void> {
+    // Stamp the executor so terminal diagnostics record who handled the job.
+    // Retried like complete(): a 5xx means the API could not record the failure
+    // yet, and a dropped fail() would leave the job to expire instead (API31).
+    await this.settleWithRetry(job.id, "failure", () =>
+      this.post(`/api/jobs/${job.id}/fail`, {
+        error: { ...error, executor: this.workerName },
+        attempt: job.retryCount
+      })
+    );
+  }
+
+  // Runs one terminal-transition POST under SETTLE_RETRY_POLICY: retry transient
+  // failures with full-jittered exponential backoff until the budget is spent,
+  // throw a permanent one (or the last transient one) to the caller.
+  private async settleWithRetry(jobId: string, what: string, send: () => Promise<unknown>): Promise<void> {
+    const { baseDelayMs, maxDelayMs, budgetMs } = this.settleRetry;
+    const startedAt = Date.now();
+    for (let retry = 0; ; retry += 1) {
       try {
-        await this.post(`/api/jobs/${jobId}/complete`, {
-          output,
-          executor: this.workerName,
-          ...(usage ? { usage } : {}),
-          ...(identity ? { provider: identity.provider } : {}),
-          ...(identity?.model ? { model: identity.model } : {})
-        });
+        await send();
         return;
       } catch (error) {
-        if (attempt >= COMPLETE_RETRY_ATTEMPTS || !isRetryableCompleteError(error)) {
+        const ceilingMs = Math.min(maxDelayMs, baseDelayMs * 2 ** retry);
+        // Full jitter over the upper half keeps a fleet that lost the API at the
+        // same moment from re-POSTing in lockstep when it returns.
+        const delayMs = Math.round(ceilingMs / 2 + Math.random() * (ceilingMs / 2));
+        if (!isRetryableSettleError(error) || Date.now() - startedAt + delayMs > budgetMs) {
           throw error;
         }
-        attempt += 1;
-        const delayMs = this.completeRetryBaseDelayMs * 2 ** (attempt - 1);
         this.logger?.warn(
-          { jobId, attempt, delayMs, err: error instanceof Error ? error.message : String(error) },
-          "job completion POST failed; retrying before falling back to failing the job"
+          { jobId, retry: retry + 1, delayMs, err: error instanceof Error ? error.message : String(error) },
+          `job ${what} POST failed; retrying`
         );
         await sleep(delayMs);
       }
     }
   }
 
-  async fail(jobId: string, error: JobError): Promise<void> {
-    // Stamp the executor so terminal diagnostics record who handled the job.
-    await this.post(`/api/jobs/${jobId}/fail`, { error: { ...error, executor: this.workerName } });
+  async release(job: ClaimedJob, signal?: AbortSignal): Promise<void> {
+    // The worker name lets the API mark this watcher idle in the registry; the
+    // attempt fences the release to the claim this watcher holds (J60).
+    await this.post(`/api/jobs/${job.id}/release`, { workerName: this.workerName, attempt: job.retryCount }, signal);
   }
 
   async retrieve(

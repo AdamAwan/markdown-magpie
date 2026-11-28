@@ -24,6 +24,7 @@ import {
   type QuestionLogStore
 } from "./question-log-store.js";
 import { valuesClause } from "./sql-bulk.js";
+import { logger } from "../logger.js";
 
 export class PostgresQuestionLogStore implements QuestionLogStore {
   constructor(private readonly pool: pg.Pool) {}
@@ -757,25 +758,30 @@ export class PostgresQuestionLogStore implements QuestionLogStore {
     return this.get(id);
   }
 
-  async list(limit: number, offset = 0, search?: string): Promise<QuestionLog[]> {
+  async list(limit: number, offset = 0, search?: string, flowIds?: readonly string[]): Promise<QuestionLog[]> {
     // Only live questions surface in the console list; verification re-asks (#154)
-    // are synthetic audit records, not questions a human asked.
+    // are synthetic audit records, not questions a human asked. A flow filter
+    // matches only questions routed to one of the flows (NULL flow_id never
+    // matches `= ANY`), and an empty array matches nothing.
     const result = await this.pool.query<QuestionRow>(
       `SELECT * FROM questions
        WHERE purpose = 'live' AND ($3::text IS NULL OR question ILIKE $3)
+         AND ($4::text[] IS NULL OR flow_id = ANY($4::text[]))
        ORDER BY asked_at DESC LIMIT $1 OFFSET $2`,
-      [limit, offset, searchPattern(search)]
+      [limit, offset, searchPattern(search), flowIds === undefined ? null : [...flowIds]]
     );
     const gapsByQuestion = await this.loadGaps(result.rows.map((row) => row.id));
     return result.rows.map((row) => mapQuestionRow(row, gapsByQuestion.get(row.id) ?? []));
   }
 
-  async count(search?: string): Promise<number> {
+  async count(search?: string, flowIds?: readonly string[]): Promise<number> {
     // Same filter as list(): the total the pager reports must match what a full
     // page walk would return.
     const result = await this.pool.query<{ count: number }>(
-      "SELECT count(*)::int AS count FROM questions WHERE purpose = 'live' AND ($1::text IS NULL OR question ILIKE $1)",
-      [searchPattern(search)]
+      `SELECT count(*)::int AS count FROM questions
+       WHERE purpose = 'live' AND ($1::text IS NULL OR question ILIKE $1)
+         AND ($2::text[] IS NULL OR flow_id = ANY($2::text[]))`,
+      [searchPattern(search), flowIds === undefined ? null : [...flowIds]]
     );
     return result.rows[0]?.count ?? 0;
   }
@@ -1125,6 +1131,19 @@ async function insertGapRows(
 // ON CONFLICT upsert; `updateAnswer()` deletes the question's prior citations
 // first, so a plain insert is sufficient (and exact-matches the prior
 // behavior, which did not upsert there either).
+//
+// A cited section can vanish between retrieval and completion: a re-index that
+// lands while the answer job runs deletes or renumbers it, and the section_id FK
+// then rejected the whole completion — a 500 the watcher replays forever, since
+// the section never comes back (docs/question-logging.md). The audit row is the
+// only thing that needs the section to exist (the answer and its citations live
+// on questions.metadata, and usage counts key on (document_id, anchor)), so a
+// citation whose section is gone is skipped rather than failing the completion.
+// The EXISTS filter handles the common case; the savepoint retry covers a section
+// deleted by a transaction that commits between the filter and the FK check.
+const FOREIGN_KEY_VIOLATION = "23503";
+const CITATION_INSERT_ATTEMPTS = 3;
+
 async function insertCitationRows(
   client: pg.PoolClient,
   questionId: string,
@@ -1145,25 +1164,50 @@ async function insertCitationRows(
             excerpt = EXCLUDED.excerpt
       `
     : "";
+  const sql = `
+    INSERT INTO answer_citations (
+      question_id, section_id, document_id, path, heading, anchor, excerpt
+    )
+    SELECT v.question_id, v.section_id, v.document_id, v.path, v.heading, v.anchor, v.excerpt
+    FROM (VALUES ${valuesClause(citations.length, 7)})
+      AS v(question_id, section_id, document_id, path, heading, anchor, excerpt)
+    WHERE EXISTS (SELECT 1 FROM document_sections s WHERE s.id = v.section_id)
+    ${conflictClause}
+  `;
+  const values = citations.flatMap((citation) => [
+    questionId,
+    citation.sectionId,
+    citation.documentId,
+    citation.path,
+    citation.heading,
+    citation.anchor,
+    citation.excerpt
+  ]);
 
-  await client.query(
-    `
-      INSERT INTO answer_citations (
-        question_id, section_id, document_id, path, heading, anchor, excerpt
-      )
-      VALUES ${valuesClause(citations.length, 7)}
-      ${conflictClause}
-    `,
-    citations.flatMap((citation) => [
-      questionId,
-      citation.sectionId,
-      citation.documentId,
-      citation.path,
-      citation.heading,
-      citation.anchor,
-      citation.excerpt
-    ])
-  );
+  for (let attempt = 1; ; attempt += 1) {
+    await client.query("SAVEPOINT insert_citations");
+    try {
+      const result = await client.query(sql, values);
+      await client.query("RELEASE SAVEPOINT insert_citations");
+      const skipped = citations.length - (result.rowCount ?? 0);
+      if (skipped > 0) {
+        logger.warn(
+          { questionId, skipped, cited: citations.length },
+          "skipped answer citations whose sections were removed by a re-index"
+        );
+      }
+      return;
+    } catch (error) {
+      await client.query("ROLLBACK TO SAVEPOINT insert_citations");
+      if (!isForeignKeyViolation(error) || attempt >= CITATION_INSERT_ATTEMPTS) {
+        throw error;
+      }
+    }
+  }
+}
+
+function isForeignKeyViolation(error: unknown): boolean {
+  return error instanceof pg.DatabaseError && error.code === FOREIGN_KEY_VIOLATION;
 }
 
 // Bumps the durable per-section citation counters for the sections this question

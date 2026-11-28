@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import type { JobView } from "@magpie/jobs";
+import { createLogger } from "@magpie/logger";
 import { createHealthServer, loadHealthConfig, TickTracker, type HealthServerConfig } from "./health-server.js";
+import type { WorkerLoopApiClient } from "./http-client.js";
+import type { JobRunner } from "./runners/types.js";
+import { WorkerLoop } from "./worker-loop.js";
 
 function testConfig(overrides: Partial<HealthServerConfig> = {}): HealthServerConfig {
   // Bind every interface ("0.0.0.0") rather than the literal loopback address:
@@ -98,6 +103,55 @@ describe("health server", () => {
       const { status, body } = await getJson(baseUrl, "/health");
       assert.equal(status, 503);
       assert.equal(body.status, "stale");
+    } finally {
+      await health.stop();
+    }
+  });
+
+  it("GET /health stays 200 through a job longer than the staleness threshold (J55)", async () => {
+    // The job runs 150ms against a 50ms threshold; only its 10ms heartbeat (a
+    // 0.02s heartbeat window, halved) keeps the watcher live while it runs.
+    const tracker = new TickTracker();
+    const health = createHealthServer({ config: testConfig({ staleAfterMs: 50 }), tracker, isReady: () => true });
+    const job: JobView = {
+      id: "job-1",
+      type: "answer_question",
+      queueName: "answer_question__openai_compatible",
+      deadLetter: false,
+      state: "active",
+      input: {},
+      retryCount: 0,
+      retryLimit: 3,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      expireInSeconds: 300,
+      heartbeatSeconds: 0.02
+    };
+    const api: WorkerLoopApiClient = {
+      claim: async () => job,
+      heartbeat: async () => ({ cancelled: false }),
+      complete: async () => {},
+      fail: async () => {},
+      release: async () => {}
+    };
+    const runner: JobRunner = {
+      capability: "openai-compatible",
+      supports: (type) => type === "answer_question",
+      run: () => new Promise((resolve) => setTimeout(() => resolve({}), 150))
+    };
+    const loop = new WorkerLoop(api, [runner], ["openai-compatible"], "w1", createLogger({ level: "silent" }), {
+      pollIntervalMs: 1,
+      onTick: () => tracker.tick()
+    });
+    await health.start();
+    try {
+      const address = health.server.address();
+      assert.ok(address && typeof address === "object");
+      const running = loop.tick();
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      const { status } = await getJson(`http://127.0.0.1:${address.port}`, "/health");
+      assert.equal(status, 200, "a long job must not read as a dead watcher");
+      await running;
     } finally {
       await health.stop();
     }

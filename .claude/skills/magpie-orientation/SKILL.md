@@ -77,11 +77,17 @@ Implications you must design around:
     neutral temp-dir cwd, `--tools ""`, `--strict-mcp-config`, `--setting-sources ""`,
     system prompt via `--system-prompt`; source-grounded claude runs get the MCP/settings
     flags too) so host or checkout MCP config, settings/hooks, and CLAUDE.md never reach
-    the agent — see "CLI environment isolation" in `docs/ai-jobs.md`.
+    the agent — see "CLI environment isolation" in `docs/ai-jobs.md`. The prompt goes over
+    **stdin by default** (`*_CLI_PROMPT_MODE=arg` is opt-in — argv fails above ~128 KB on
+    Linux / ~32 KB on Windows), stdout is capped (`AGENT_CLI_MAX_OUTPUT_BYTES`), and each
+    CLI is its own process group so a timeout/cancel kills its helpers too
+    (`runners/cli-process.ts`; `docs/ai-jobs.md` J80/J85).
   - **HTTP providers** run a bounded tool loop (`runners/source-agent.ts`): `list_dir` /
-    `read_file` / `grep` tools, max 24 steps, 400 KB total read budget, realpath
-    confinement (no `..`/symlink/absolute escape). Infra faults fail the job — the loop
-    never forces an ungrounded answer.
+    `read_file` / `grep` tools, max 24 steps, 400 KB total read budget (`grep` results
+    draw on it too, and `grep` is async with file/byte/match caps), realpath
+    confinement (no `..`/symlink/absolute escape), and one `MAGPIE_AGENTIC_TIMEOUT_MS`
+    deadline over the whole loop. Infra faults fail the job — the loop never forces an
+    ungrounded answer; a `finishReason: "length"` step fails as truncation.
   - The watcher stamps `mapUpdates.observedSha` from the checkout HEAD itself — an infra
     fact never trusted from the model.
 - **Provider-neutral.** `AI_PROVIDER` selects `openai-compatible | azure-openai | codex |
@@ -103,7 +109,11 @@ Implications you must design around:
 (`apps/api/src/stores/embed-sections.ts`), query-time retrieval
 (`apps/api/src/stores/knowledge-index.ts`, with an LRU query cache), flow routing, and
 gap-cluster bucketing. So "the API never calls a provider inline" is true for
-*chat/generative* work only.
+*chat/generative* work only. Query-time retrieval and embedding routing use a separate
+request-path instance (`ctx.providers.queryEmbedding`: 5 s timeout behind a circuit
+breaker) so a down embedding endpoint degrades to keyword-only fast; indexing keeps
+`ctx.providers.embedding` (60 s). Provider failures are typed `ProviderRequestError`s
+(`status`, `retryAfterMs`, `retryable`) — `docs/ai-jobs.md` J81–J86.
 
 ## 2. The product pipeline (feature map)
 
@@ -282,6 +292,10 @@ design in `maintenance-redesign.md`). When in doubt, trust the code.
     not 403 (`docs/authorization.md`). On Entra (delegated scopes reach every user)
     privileged routes also need the `admin`/`ops` capability on `*` from a human's
     roles (`requirePrivilege`, AZ27), and the API won't boot without role grants.
+    Read routes filter lists to readable flows (`readableFlowIds`), and job reads
+    redact other flows' input/output rather than hide rows (AZ30–AZ34). With
+    `NODE_ENV=production` the API refuses auth-off, in-memory stores and CORS `*`
+    unless a `MAGPIE_ALLOW_*` override is set (`docs/configuration.md`).
 19. **MCP** (`apps/mcp`) — thin client over the HTTP API, stdio + Streamable-HTTP
     transports, **ten tools**: `kb_ask`, `kb_search`, `kb_citation`, `kb_feedback`,
     `kb_flows`, `kb_outline`, `kb_seed`, `kb_questionnaire_create`,
@@ -296,7 +310,9 @@ design in `maintenance-redesign.md`). When in doubt, trust the code.
 20. **Observability** — `@magpie/telemetry` (OpenTelemetry traces + metrics, **off by
     default**; enabled only when `OTEL_EXPORTER_OTLP_ENDPOINT` is set) threads W3C trace
     context API → pg-boss job → watcher → callback; metrics `magpie.jobs.finished` /
-    `magpie.jobs.duration`. Structured pino logging via `@magpie/logger` (pretty mode
+    `magpie.jobs.duration`, plus API-side queue-health gauges (ready depth, oldest ready
+    age, dead letter, connected watchers, schedule last-success age — one grouped SQL read
+    per collection; alert examples in `docs/observability.md` O16–O22). Structured pino logging via `@magpie/logger` (pretty mode
     renders in-process, not via a worker thread — #236). `deploy/` has a
     Loki/Grafana/Alloy log stack.
 
@@ -398,7 +414,7 @@ apps/
 packages/
   core/       Shared domain types + provider interfaces (incl. ProvenanceClaim).
   auth/       Auth0 / Entra token validation + on-behalf-of helpers.
-  db/         SQL migrations (0001–0071; see the write-a-migration skill).
+  db/         SQL migrations (0001–0073; see the write-a-migration skill).
   git/        Git sync + PR adapters: ensureGitCheckout (blobless partial clones),
               PR status/mergeability polling, LocalGitProposalPublisher, checkout locks.
   jobs/       Job contracts: JOB_TYPES, capabilities, input/output schemas, queue
@@ -409,11 +425,12 @@ packages/
   prompts/    Shared AI prompt catalog (21 prompts, shared contract constants:
               CONSERVATIVE_CONTRACT, SOURCE_MAP_CONTRACT, FACTUAL_REGISTER_CONTRACT,
               UNTRUSTED_CONTENT_CONTRACT + wrapUntrusted delimiters for prompt-injection
-              hardening — see docs/threat-model.md C6).
+              hardening; each wrap carries a fresh random id and forged markers in
+              the content are neutralised — see docs/threat-model.md TM3/TM31).
   retrieval/  Embeddings, RRF fusion, chat/embedding HTTP providers, LLM flow router +
               embedding flow router. (Answer orchestration itself lives in api/watcher.)
   telemetry/  OpenTelemetry wiring (traces/metrics/log-trace mixin), off by default.
-scripts/      migrate.mjs (custom migrator), test-db.mjs (throwaway-PG harness),
+scripts/      migrate.mjs (custom migrator), test-db.mjs (single-use-DB harness),
               e2e-jobs.ts / eval-api.ts / eval-gap-threshold.ts, deck/screenshot tooling.
 deploy/       Loki + Grafana + Alloy logging stack config.
 knowledge-bases/  Intentionally-empty drop dir for local dev KBs.
@@ -491,9 +508,11 @@ npm run lint        # eslint .   (lint:fix to autofix)
 npm run format:check
 npm run deadcode    # knip — unused exports/files (kept strict)
 npm test            # unit tests across workspaces
-npm run test:db     # Postgres-backed tests (spins up a DB via scripts/test-db.mjs)
+npm run test:db     # unit + RUN_PG_INTEGRATION tests on a single-use DB (scripts/test-db.mjs;
+                    #   Docker, or TEST_DATABASE_ADMIN_URL for an existing Postgres)
 npm run db:migrate  # apply migrations
-npm run e2e:jobs    # queue e2e harness; eval:api / eval:gap-threshold for eval scripts
+npm run e2e:jobs    # queue e2e harness (e2e:jobs:local boots its own stack, as CI does);
+                    #   eval:api / eval:gap-threshold for eval scripts
 npm run eval:golden # golden-question answer-quality regression gate (docs/golden-eval.md)
 ```
 
@@ -512,7 +531,7 @@ steps — each is grounded in the real files and lists the gotchas:
 - **write-a-migration** — the custom SQL migrator's `NNNN_` naming rule, prefix-uniqueness
   guard, append-only/no-rollback model, and how to apply + test a migration.
 - **writing-magpie-tests** — `node:test` conventions, unit vs. Postgres-backed integration
-  (`RUN_PG_INTEGRATION` + the throwaway-container harness), and the queue e2e/eval scripts.
+  (`RUN_PG_INTEGRATION` + the single-use-database harness), and the queue e2e/eval scripts.
 - **magpie-local-troubleshooting** — diagnosing a broken local run (Docker, auth, config
   parsing, watcher `ECONNREFUSED`, CLI spawn errors).
 - **propose-a-skill** — end-of-work retrospective: decide whether what you just did is worth

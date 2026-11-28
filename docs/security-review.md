@@ -48,8 +48,9 @@ policy.
 - **Document sections and embeddings** — the indexed knowledge-base content and
   its vector embeddings.
 - **Proposals, gap clusters, repositories, AI job records** — operational data.
-  `ai_jobs` rows hold job input/output (question text and retrieved context) as
-  JSONB.
+  Job records live in the `pg-boss` job queue tables (schema `pgboss`); a job's
+  input and output (question text, retrieved context, draft Markdown) are stored
+  there as JSONB.
 
 The application does **not** implement field-level encryption; encryption at
 rest is the responsibility of the hosting infrastructure (encrypted volume or a
@@ -90,6 +91,14 @@ and opens pull requests to the configured destination repositories.
   API refuses to start unless the identity provider (`AUTH_PROVIDER`: Auth0 or
   Microsoft Entra ID) is configured with a real audience and issuer. The API, web
   app, and both MCP transports validate the provider's JWTs.
+- **Production cannot be booted insecure by accident.** With `NODE_ENV=production`
+  (set by the image) the API refuses to start with auth disabled, with any store
+  in memory, or with CORS allowing any origin, and the HTTP MCP server refuses to
+  start with auth disabled — each unless its own explicit `MAGPIE_ALLOW_*`
+  override is set to `true` ([configuration.md](configuration.md#production-safety)).
+  The API also refuses to start when its checkout or snapshot directory is not
+  writable, and logs its security posture (auth on/off, provider, issuer,
+  audience, storage, CORS, overrides) on every boot.
 - **Two-layer authorization.** Routes enforce global-scope checks
   (`read:knowledge`, `ask:knowledge`, `manage:knowledge`, `manage:jobs`,
   `manage:admin`, `feedback:questions`) that fail closed, plus flow-scoped
@@ -100,20 +109,47 @@ and opens pull requests to the configured destination repositories.
   capabilities, AZ27), and the API refuses to start without role grants (AZ28).
   The watcher's job claim/heartbeat/complete/fail endpoints accept only service
   (client-credentials) principals, so a human operator cannot read job inputs by
-  claiming jobs or forge job results (AZ29). Jobs submitted through `POST /api/jobs`
+  claiming jobs or forge job results (AZ29). Read routes honour the flow-scoped
+  capabilities too: lists (questions, snapshots, indexed documents, search,
+  citation usage) are filtered to the flows the caller may read, a resource in
+  another flow reads as 404, and job inputs/outputs from other flows are redacted
+  (AZ30–AZ34). The HTTP MCP server checks at startup, and reports on `/health`,
+  whether its service credential holds `act:on-behalf-of` — without it the API
+  ignores the forwarded user and MCP tool calls run with the service identity's
+  all-flows access ([mcp.md](mcp.md) M32). Jobs submitted through `POST /api/jobs`
   may only reference operator-configured sources — a caller cannot point the watcher's
   agent at a host path, a different repository, or extra fetch hosts — and the watcher
   confines every source `subpath` to its root, including through symlinks
   ([ai-jobs.md](ai-jobs.md) J52).
 - **Mandatory human review of AI output.** No AI-generated content reaches a
   destination repository's default branch without a human merging a pull
-  request. See [threat-model.md](threat-model.md) (control C4) and the operator
+  request. See [threat-model.md](threat-model.md) (TM9–TM13) and the operator
   requirements below.
 - **Input handling.** Request bodies are validated with Zod schemas; all SQL is
   parameterized (no string concatenation); request bodies are capped at 4 MB.
-- **Transport headers.** `secureHeaders()` sets `X-Content-Type-Options`,
+  Questionnaire `.xlsx` uploads are decompressed under hard bounds (entry count,
+  per-part and total inflated size) so a zip bomb is refused with
+  `413 workbook_too_large` while it is being inflated
+  ([questionnaires.md](questionnaires.md) Q37).
+- **Rate limiting and AI cost controls.** Metered endpoints are throttled per
+  principal (`ask` and `trigger` tiers, 429 + `Retry-After`; per-client-IP when
+  there is no principal; counters in Postgres, so shared by every API replica),
+  concurrent in-flight AI jobs are capped at enqueue time
+  with slots reserved for interactive asks, and each maintenance tick has a
+  fan-out budget ([rate-limiting.md](rate-limiting.md)).
+- **Transport headers.** The API's `secureHeaders()` sets `X-Content-Type-Options`,
   `X-Frame-Options`, `Referrer-Policy`, HSTS, and Cross-Origin isolation headers.
-  CORS defaults to `*` but is restricted via `CORS_ALLOWED_ORIGINS`.
+  CORS defaults to `*` for local development, is restricted via
+  `CORS_ALLOWED_ORIGINS`, and `*` is refused in production (above).
+- **Console Content-Security-Policy.** The web console keeps its OIDC session in
+  `localStorage`, so it ships a per-request, nonce-based CSP: scripts run only
+  with the request's nonce (`'strict-dynamic'`, no `'unsafe-inline'`, no
+  `'unsafe-eval'` in production), `connect-src` is limited to the console's own
+  origin, the configured API origin and the identity provider's origin,
+  `object-src 'none'`, and `base-uri`/`form-action`/`frame-ancestors` are
+  `'self'`. Styles allow `'unsafe-inline'` (Emotion CSS-in-JS). Alongside it:
+  `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, HSTS,
+  `Cross-Origin-Opener-Policy`, a `Permissions-Policy`, and no `X-Powered-By`.
 - **Hardened container.** Multi-stage build, runs as a non-root user
   (`uid 1001`), production-only dependencies (`npm prune --omit=dev`), pinned
   base image.
@@ -147,8 +183,11 @@ completed for a production/internal deployment:
       Grafana behind authentication/SSO, or only run the `logging` profile on a
       trusted, non-exposed host. If you ship logs some other way (or not at all),
       this item does not apply.
-- [ ] **Set `CORS_ALLOWED_ORIGINS`** to your web origin(s); do not ship the `*`
-      default.
+- [ ] **Set `CORS_ALLOWED_ORIGINS`** to your web origin(s). With
+      `NODE_ENV=production` the API refuses to start on the `*` default; do not
+      work around that with `MAGPIE_ALLOW_ANY_CORS_ORIGIN_IN_PRODUCTION`. Likewise
+      leave `MAGPIE_ALLOW_UNAUTHENTICATED_PRODUCTION` and
+      `MAGPIE_ALLOW_MEMORY_STORAGE_IN_PRODUCTION` unset.
 - [ ] **Configure the identity provider for real** (`AUTH_REQUIRED` unset/true,
       real `AUTH_*` / legacy `AUTH0_*`). On Auth0, grant `manage:knowledge` /
       `manage:jobs` / `manage:admin` narrowly via RBAC. On Entra, scopes cannot be
@@ -156,6 +195,10 @@ completed for a production/internal deployment:
       them in `KNOWLEDGE_ROLE_GRANTS` (`admin` / `ops` on `*` only for the people
       who administer the deployment) — see [authorization.md](authorization.md)
       AZ27/AZ28.
+- [ ] **Grant the MCP's M2M application `act:on-behalf-of`** if you run the HTTP
+      MCP server, and check its `/health` reports `"onBehalfOf": "enabled"`.
+      Otherwise MCP tool calls are authorized as the MCP service identity (all
+      flows), not as the signed-in user ([authorization.md](authorization.md) AZ23).
 - [ ] **Enable branch protection** on destination repositories: require human
       approval, disallow direct pushes, and ensure the bot account cannot
       approve/merge its own PRs. Never wire an auto-merge path for AI-authored
@@ -165,7 +208,8 @@ completed for a production/internal deployment:
       §2.
 - [ ] **Manage secrets outside plaintext env files** where your environment
       requires it (Docker/K8s secrets, Vault, or a cloud secret manager).
-- [ ] **Confirm log hygiene.** Request logs contain only `{status, durationMs}`.
+- [ ] **Confirm log hygiene.** Request logs carry only a request id, the method,
+      the path, `status` and `durationMs` (no bodies, headers or query strings).
       Keep provider log levels at INFO in production (DEBUG paths in the watcher
       are more verbose). Set retention to match your policy in whatever log
       backend you use (the example logging stack's Loki, if you run it, is
@@ -175,18 +219,14 @@ completed for a production/internal deployment:
 
 Tracked, not yet implemented — disclose these to reviewers:
 
-- **No application-level rate limiting.** `POST /api/ask` enqueues billable AI
-  jobs; an authenticated caller can flood the queue. A per-principal limiter is
-  recommended (and belongs at the reverse proxy or in the API).
 - **No data-retention policy for questions/answers.** Job records self-purge
   (14/30 days), but stored questions/answers accumulate indefinitely. Add a
   retention job matching your policy. (Log retention is separate and lives in
   whatever log backend you deploy — e.g. 7 days in the example logging stack.)
-- **Scope-only routes on Entra.** A few routes outside the AZ27 list still rely
-  on Entra's non-per-user scopes: `GET /api/config` (masked runtime config),
-  `POST /api/knowledge/repositories/index` (re-index), and
-  `POST /api/proposals/:id/verify-closure` (see
-  [authorization.md](authorization.md) AZ27 residual note).
+- **Tokens in browser storage.** The console stores its OIDC session (access and
+  refresh token) in `localStorage`; the CSP above contains script injection but
+  a Backend-for-Frontend that keeps tokens off the browser is the full fix
+  (tracked as #316).
 - **Report-only image/config scans.** Trivy scans are non-gating today
   (`exit-code: 0`); flip to gating once the baseline is clean.
 - **No SAST / CodeQL** in CI, and **no license-compliance gate** (the project

@@ -8,7 +8,8 @@ export {
   ON_BEHALF_OF_ROLES_HEADER,
   serializeOnBehalfRoles,
   parseOnBehalfRoles,
-  resolveEffectivePrincipal
+  resolveEffectivePrincipal,
+  tokenGrantsOnBehalfOf
 } from "./on-behalf-of.js";
 export {
   AUTH_PROVIDERS,

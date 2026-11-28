@@ -68,10 +68,34 @@ test("buildGitAuthEnv ignores an override pointing at an unset/blank env var", (
   assert.equal(decodeAuthEnv(buildGitAuthEnv("https://github.com/a/b.git", "ACME_PAT")), "x-access-token:ghp_default");
 });
 
-test("buildGitAuthEnv never overrides an ssh remote or credential-embedded url", () => {
+test("buildGitAuthEnv never attaches a credential to an ssh remote", () => {
   process.env.ACME_PAT = "override";
   assert.deepEqual(buildGitAuthEnv("git@github.com:a/b.git", "ACME_PAT"), {});
-  assert.deepEqual(buildGitAuthEnv("https://user:pass@github.com/a/b.git", "ACME_PAT"), {});
+  assert.deepEqual(buildGitAuthEnv("ssh://git@github.com/a/b.git", "ACME_PAT"), {});
+});
+
+// TM38: auth is attached over https only.
+test("buildGitAuthEnv never attaches a credential over http, git:// or file://", () => {
+  process.env.GITHUB_TOKEN = "ghp_default";
+  process.env.ACME_PAT = "override";
+  assert.deepEqual(buildGitAuthEnv("http://github.com/a/b.git"), {});
+  assert.deepEqual(buildGitAuthEnv("http://git.acme.internal/x/y.git", "ACME_PAT"), {});
+  assert.deepEqual(buildGitAuthEnv("http://user:pass@git.acme.internal/x/y.git"), {});
+  assert.deepEqual(buildGitAuthEnv("git://github.com/a/b.git", "ACME_PAT"), {});
+  assert.deepEqual(buildGitAuthEnv("file:///srv/repos/docs.git", "ACME_PAT"), {});
+});
+
+// TM36: the embedded https credential authenticates via the header, because the
+// URL git is given (and stores) is stripped of it.
+test("buildGitAuthEnv sends a credential embedded in an https url as the header", () => {
+  process.env.GITHUB_TOKEN = "ghp_default";
+  process.env.ACME_PAT = "override";
+  assert.equal(
+    decodeAuthEnv(buildGitAuthEnv("https://user:p%40ss@github.com/a/b.git", "ACME_PAT")),
+    "user:p@ss",
+    "the operator's embedded credential wins and is percent-decoded"
+  );
+  assert.equal(decodeAuthEnv(buildGitAuthEnv("https://ghp_inurl@github.com/a/b.git")), "ghp_inurl:");
 });
 
 test("commentOnPullRequest authenticates with the tokenEnv override when set", async () => {

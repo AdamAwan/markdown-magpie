@@ -1,4 +1,4 @@
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import type { AppContext } from "../../context.js";
 import { requireScopes } from "../../auth/middleware.js";
 import { rateLimit } from "../../http/rate-limit.js";
@@ -7,31 +7,57 @@ import { HttpError } from "../../http/errors.js";
 import { readJsonBody } from "../../http/body.js";
 import * as knowledgeService from "./service.js";
 import { knowledgeRepositoryErrorCode } from "./service.js";
-import { can } from "../../auth/capabilities.js";
+import { can, readableFlowIds, requirePrivilege } from "../../auth/capabilities.js";
+import type { KnowledgeCapability } from "../../stores/knowledge-repositories.js";
 import { parseChangeQuery } from "./changes.js";
+
+// The capabilities that expose a flow's INDEXED knowledge (its destination
+// knowledge base, the published answer corpus): `read`, and `ask` — an asker
+// already reaches the same sections through /api/retrieve and the answers' cited
+// excerpts, so kb_search/kb_citation keep working for them (docs/authorization.md
+// AZ32).
+const KNOWLEDGE_READ: readonly KnowledgeCapability[] = ["read", "ask"];
 
 export function knowledgeRoutes(ctx: AppContext): Hono {
   const app = new Hono();
 
-  app.post("/repositories/index", requireScopes("manage:knowledge"), rateLimit(ctx, "trigger"), async (c) => {
-    const payload = await readJsonBody<{
-      flowId?: string;
-      localPath?: string;
-      repositoryId?: string;
-      name?: string;
-    }>(c);
+  // The repositories the caller's knowledge reads cover, or undefined when
+  // unrestricted. A caller that can read no flow gets an empty list (nothing
+  // visible), never "everything".
+  const readableRepositories = (c: Context): string[] | undefined => {
+    const flowIds = readableFlowIds(ctx, c, KNOWLEDGE_READ);
+    return flowIds === undefined ? undefined : knowledgeService.repositoriesForFlows(ctx, flowIds);
+  };
 
-    let selection: { localPath: string; repositoryId?: string; name?: string };
-    try {
-      selection = await knowledgeService.resolveSelection(ctx, payload);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "configured_repository_required";
-      throw new HttpError(400, knowledgeRepositoryErrorCode(message), message);
+  // A manual re-index is a deployment-wide maintenance trigger: on a provider
+  // without per-user scopes it needs the ops role (docs/authorization.md AZ27).
+  // The privilege gate runs before the rate limiter so a denied caller spends no
+  // trigger budget.
+  app.post(
+    "/repositories/index",
+    requireScopes("manage:knowledge"),
+    requirePrivilege(ctx, "ops"),
+    rateLimit(ctx, "trigger"),
+    async (c) => {
+      const payload = await readJsonBody<{
+        flowId?: string;
+        localPath?: string;
+        repositoryId?: string;
+        name?: string;
+      }>(c);
+
+      let selection: { localPath: string; repositoryId?: string; name?: string };
+      try {
+        selection = await knowledgeService.resolveSelection(ctx, payload);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "configured_repository_required";
+        throw new HttpError(400, knowledgeRepositoryErrorCode(message), message);
+      }
+
+      const summary = await knowledgeService.indexSelection(ctx, selection);
+      return c.json(summary);
     }
-
-    const summary = await knowledgeService.indexSelection(ctx, selection);
-    return c.json(summary);
-  });
+  );
 
   app.get("/repositories", requireScopes("read:knowledge"), (c) => {
     const limit = parseLimit(c.req.query("limit") ?? null, 50);
@@ -42,7 +68,7 @@ export function knowledgeRoutes(ctx: AppContext): Hono {
   app.get("/documents", requireScopes("read:knowledge"), (c) => {
     const limit = parseLimit(c.req.query("limit") ?? null, 50);
     const offset = parseOffset(c.req.query("offset") ?? null);
-    return c.json(knowledgeService.listDocuments(ctx, { limit, offset }));
+    return c.json(knowledgeService.listDocuments(ctx, { limit, offset }, readableRepositories(c)));
   });
 
   app.get("/stats", requireScopes("read:knowledge"), (c) => c.json(knowledgeService.stats(ctx)));
@@ -61,13 +87,17 @@ export function knowledgeRoutes(ctx: AppContext): Hono {
     }
 
     return c.json(
-      await knowledgeService.citationUsage(ctx, {
-        group,
-        sort,
-        limit: parseLimit(c.req.query("limit") ?? null, 50),
-        offset: parseOffset(c.req.query("offset") ?? null),
-        ...(c.req.query("repositoryId") ? { repositoryId: c.req.query("repositoryId") } : {})
-      })
+      await knowledgeService.citationUsage(
+        ctx,
+        {
+          group,
+          sort,
+          limit: parseLimit(c.req.query("limit") ?? null, 50),
+          offset: parseOffset(c.req.query("offset") ?? null),
+          ...(c.req.query("repositoryId") ? { repositoryId: c.req.query("repositoryId") } : {})
+        },
+        readableRepositories(c)
+      )
     );
   });
 
@@ -136,12 +166,18 @@ export function knowledgeRoutes(ctx: AppContext): Hono {
       throw new HttpError(400, "query_required");
     }
 
-    const ranked = await knowledgeService.search(ctx, query, parseLimit(c.req.query("limit") ?? null, 5));
+    const ranked = await knowledgeService.search(
+      ctx,
+      query,
+      parseLimit(c.req.query("limit") ?? null, 5),
+      readableRepositories(c)
+    );
     return c.json({ sections: ranked.map((result) => result.section), ranked });
   });
 
   app.get("/sections/:id", requireScopes("read:knowledge"), (c) => {
-    const section = knowledgeService.getSection(ctx, c.req.param("id"));
+    // A section in a flow the caller cannot read is a 404, never a 403.
+    const section = knowledgeService.getSection(ctx, c.req.param("id"), readableRepositories(c));
     if (!section) {
       throw new HttpError(404, "section_not_found");
     }

@@ -1,4 +1,4 @@
-import { AI_JOB_TYPES, INTERACTIVE_AI_JOB_TYPES } from "@magpie/jobs";
+import { AI_JOB_TYPES, INTERACTIVE_AI_JOB_TYPES, isJobCapability, type JobCapability } from "@magpie/jobs";
 import type { AppContext } from "../context.js";
 import type { InFlightCapacity } from "../jobs/broker.js";
 import { HttpError } from "../http/errors.js";
@@ -27,6 +27,15 @@ import { logger } from "../logger.js";
 // remains as a cheap, non-atomic pre-check (a load-shedding optimization that
 // rejects a saturated system before any log row is written) — see
 // docs/rate-limiting.md.
+//
+// What counts as "in flight" is fleet-aware (RL29): an ACTIVE job always counts,
+// but a QUEUED one counts only when a live watcher (seen within the registry's
+// active window) advertises a capability that can claim it. Queued work no live
+// watcher can run costs nothing; counting it let an orphaned queue — jobs left on
+// a provider the fleet stopped running, or a fleet that is simply down — hold the
+// ceiling shut for up to the queue's 14-day retention, 429ing every ask though
+// nothing was running. Once a watcher for that queue appears, its backlog counts
+// again immediately, so recovery is still admission-controlled.
 
 // The shared limit/reserved math for BOTH admission policies (interactive and
 // non-interactive), or undefined when rate limiting is disabled (a pass-through —
@@ -47,7 +56,7 @@ function aiCapacityBounds(ctx: AppContext): { limit: number; reserved: number } 
 // The capacity envelope for interactive AI admission, or undefined when rate
 // limiting is disabled. An interactive enqueue is shed only when its reserved
 // lane is full AND the global ceiling is reached (see the reserve rule).
-export function aiInflightCapacity(ctx: AppContext): InFlightCapacity | undefined {
+export async function aiInflightCapacity(ctx: AppContext): Promise<InFlightCapacity | undefined> {
   const bounds = aiCapacityBounds(ctx);
   if (!bounds) {
     return undefined;
@@ -55,7 +64,8 @@ export function aiInflightCapacity(ctx: AppContext): InFlightCapacity | undefine
   return {
     types: [...AI_JOB_TYPES],
     limit: bounds.limit,
-    reserve: { types: [...INTERACTIVE_AI_JOB_TYPES], reserved: bounds.reserved }
+    reserve: { types: [...INTERACTIVE_AI_JOB_TYPES], reserved: bounds.reserved },
+    ...(await servedCapabilities(ctx))
   };
 }
 
@@ -66,15 +76,39 @@ export function aiInflightCapacity(ctx: AppContext): InFlightCapacity | undefine
 // reduces to the simple `inFlight >= capacity.limit`. Returns undefined when rate
 // limiting is disabled (a pass-through). This IS the maintenance admission rule
 // (#288b); sub-item (c) reuses it for the questionnaire answer batch.
-export function nonInteractiveAiCapacity(ctx: AppContext): InFlightCapacity | undefined {
+export async function nonInteractiveAiCapacity(ctx: AppContext): Promise<InFlightCapacity | undefined> {
   const bounds = aiCapacityBounds(ctx);
   if (!bounds) {
     return undefined;
   }
   return {
     types: [...AI_JOB_TYPES],
-    limit: Math.max(0, bounds.limit - bounds.reserved)
+    limit: Math.max(0, bounds.limit - bounds.reserved),
+    ...(await servedCapabilities(ctx))
   };
+}
+
+// The capabilities the live watcher fleet advertises (RL29), from the same
+// registry and active window the Jobs screen's "connected watchers" uses. A
+// registry read failure falls back to counting every queued job — the stricter,
+// pre-RL29 rule — rather than failing or loosening admission.
+async function servedCapabilities(ctx: AppContext): Promise<{ servedCapabilities?: JobCapability[] }> {
+  try {
+    const watchers = await ctx.stores.watchers.list(ctx.settings.watcher.activeWindowMs);
+    const capabilities = new Set<JobCapability>();
+    for (const watcher of watchers) {
+      for (const capability of watcher.capabilities) {
+        if (isJobCapability(capability)) capabilities.add(capability);
+      }
+    }
+    return { servedCapabilities: [...capabilities] };
+  } catch (error) {
+    logger.warn(
+      { err: error instanceof Error ? error.message : String(error) },
+      "watcher registry read failed; ai capacity counts every queued job"
+    );
+    return {};
+  }
 }
 
 // Builds the 429 `ai_capacity` HttpError (with a Retry-After header) for observed
@@ -111,14 +145,14 @@ export function aiCapacityError(ctx: AppContext, observed: { inFlight: number; r
 // before. The authoritative, race-free gate is createIfAdmitted at enqueue time;
 // this only avoids churn on an already-full system.
 export async function assertAiCapacity(ctx: AppContext): Promise<void> {
-  const capacity = aiInflightCapacity(ctx);
+  const capacity = await aiInflightCapacity(ctx);
   if (!capacity) {
     return;
   }
   const reserve = capacity.reserve;
   const [inFlight, reserveInFlight] = await Promise.all([
-    ctx.jobs.countInFlight(capacity.types),
-    reserve ? ctx.jobs.countInFlight(reserve.types) : Promise.resolve(0)
+    ctx.jobs.countInFlight(capacity.types, capacity.servedCapabilities),
+    reserve ? ctx.jobs.countInFlight(reserve.types, capacity.servedCapabilities) : Promise.resolve(0)
   ]);
 
   // The same block rule createIfAdmitted evaluates under the lock.

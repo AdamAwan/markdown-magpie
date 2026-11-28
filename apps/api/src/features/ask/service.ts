@@ -70,7 +70,7 @@ export async function ask(
   // Authoritative, race-free admission: count + enqueue atomically under the
   // broker's advisory lock (#288a) so concurrent asks can't overshoot the
   // ceiling. When rate limiting is disabled there is no ceiling — enqueue plainly.
-  const capacity = aiInflightCapacity(ctx);
+  const capacity = await aiInflightCapacity(ctx);
   if (!capacity) {
     const job = await ctx.jobs.create("answer_question", input);
     return { questionId: log.id, conversationId: conversation, job };

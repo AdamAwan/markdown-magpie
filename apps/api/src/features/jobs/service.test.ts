@@ -192,14 +192,21 @@ test("heartbeat, cancellation, and failed-only retry expose lifecycle state", as
   const ctx = makeTestContext();
   const created = await ctx.jobs.create("answer_question", answerInput());
   await claimJob(ctx, "worker", ["codex"]);
-  assert.equal((await heartbeatJob(ctx, created.id)).state, "active");
+  assert.deepEqual(await heartbeatJob(ctx, created.id), {
+    job: await ctx.jobs.get(created.id),
+    active: true
+  });
   assert.equal((await cancelJob(ctx, created.id)).state, "cancelled");
-  assert.equal((await heartbeatJob(ctx, created.id)).state, "cancelled");
+  const afterCancel = await heartbeatJob(ctx, created.id);
+  assert.equal(afterCancel.job.state, "cancelled");
+  assert.equal(afterCancel.active, false, "a cancelled job tells its watcher to stop");
   await assert.rejects(() => retryJob(ctx, created.id), /only "?failed/i);
 
   const failed = await ctx.jobs.create("answer_question", answerInput());
-  await claimJob(ctx, "worker", ["codex"]);
+  // As in pg-boss, each attempt is a claim; a failure only consumes the budget
+  // of the attempt that was claimed.
   for (let attempt = 0; attempt <= failed.retryLimit; attempt += 1) {
+    await claimJob(ctx, "worker", ["codex"]);
     await failJob(ctx, failed.id, { code: "provider", message: "failed", category: "provider" });
   }
   assert.equal((await retryJob(ctx, failed.id)).state, "created");
@@ -234,6 +241,30 @@ test("wait returns current jobs on timeout and terminal jobs immediately", async
   const terminal = await waitForJob(ctx, created.id, { timeoutMs: 10, pollMs: 1 });
   assert.equal(terminal.terminal, true);
   assert.equal(terminal.job.state, "cancelled");
+});
+
+test("wait stops polling as soon as the client disconnects", async () => {
+  const ctx = makeTestContext();
+  const created = await ctx.jobs.create("answer_question", answerInput());
+  let polls = 0;
+  const get = ctx.jobs.get.bind(ctx.jobs);
+  ctx.jobs.get = async (id) => {
+    polls += 1;
+    return get(id);
+  };
+  const controller = new AbortController();
+  // A long timeout and poll: without the abort this wait would last a minute.
+  const waiting = waitForJob(ctx, created.id, { timeoutMs: 60_000, pollMs: 30_000, signal: controller.signal });
+  await new Promise((resolve) => setImmediate(resolve));
+  const started = Date.now();
+  controller.abort(new Error("client disconnected"));
+  await assert.rejects(waiting, /client disconnected/);
+  assert.ok(Date.now() - started < 1_000, "the wait ends promptly, without sleeping out its poll interval");
+  assert.equal(polls, 1, "no broker poll after the disconnect");
+
+  // An already-aborted signal never polls at all.
+  await assert.rejects(waitForJob(ctx, created.id, { signal: AbortSignal.abort(new Error("gone")) }), /gone/);
+  assert.equal(polls, 1);
 });
 
 test("display projection recursively redacts secrets without mutating stored input", () => {
