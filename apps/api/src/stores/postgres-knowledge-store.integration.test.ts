@@ -3,6 +3,7 @@ import { test } from "node:test";
 import { randomUUID } from "node:crypto";
 import pg from "pg";
 import { PostgresKnowledgeStore } from "./postgres-knowledge-store.js";
+import { toVectorLiteral } from "./vector-literal.js";
 
 // DB-backed tests for the keyword-search SQL. Gated by RUN_PG_INTEGRATION so the
 // default unit run stays database-free (see the writing-magpie-tests skill).
@@ -123,4 +124,108 @@ test("a stopword-only question returns nothing", { skip: !runIntegration }, asyn
   t.after(() => pool.end());
   const store = new PostgresKnowledgeStore(pool);
   assert.deepEqual(await store.searchByKeyword("the and of", 10), []);
+});
+
+// --- vector search under a repository filter (docs/retrieval.md R24) ---
+
+// A 1536-dim vector pointing along `axis`, nudged by `jitter` on the next axis
+// so seeded sections are distinct but tightly clustered.
+function vectorNear(axis: number, jitter: number): number[] {
+  const vector = new Array<number>(1536).fill(0);
+  vector[axis] = 1;
+  vector[(axis + 1) % 1536] = jitter;
+  return vector;
+}
+
+async function seedEmbeddedRepository(pool: pg.Pool, repositoryId: string, embeddings: number[][]): Promise<string[]> {
+  const documentId = `${repositoryId}:doc.md`;
+  await pool.query(
+    "INSERT INTO repositories (id, name, default_branch, local_path, provider) VALUES ($1, $1, 'main', '/tmp', 'local')",
+    [repositoryId]
+  );
+  await pool.query(
+    "INSERT INTO documents (id, repository_id, path, title, content) VALUES ($1, $2, 'doc.md', 'Doc', '#')",
+    [documentId, repositoryId]
+  );
+  const ids = embeddings.map((_, ordinal) => `${documentId}#${ordinal}`);
+  await pool.query(
+    `INSERT INTO document_sections (id, document_id, path, heading, heading_path, anchor, ordinal, content, embedding)
+     SELECT v.id, $2, 'doc.md', 'H', ARRAY['H'], 'h', v.ordinal - 1, 'body', v.embedding::vector
+     FROM unnest($1::text[], $3::text[]) WITH ORDINALITY AS v(id, embedding, ordinal)`,
+    [ids, documentId, embeddings.map((embedding) => toVectorLiteral(embedding))]
+  );
+  return ids;
+}
+
+test(
+  "a filtered vector search returns a small flow's sections even when the HNSW candidates are all elsewhere",
+  { skip: !runIntegration },
+  async (t) => {
+    // Steer the planner onto the HNSW index for the approximate query, as it is on
+    // a production-sized corpus where the flow filter looks unselective: with
+    // explicit sorts and seq scans penalised, the index's ready-made distance
+    // ordering wins over "fetch the flow's sections, then sort". The exact query
+    // must sort, so it still runs correctly (just with the penalty applied).
+    const pool = new pg.Pool({ connectionString: databaseUrl, options: "-c enable_seqscan=off -c enable_sort=off" });
+    const big = `vec-big-${randomUUID()}`;
+    const small = `vec-small-${randomUUID()}`;
+    t.after(async () => {
+      await pool.query("DELETE FROM documents WHERE repository_id = ANY($1)", [[big, small]]);
+      await pool.query("DELETE FROM repositories WHERE id = ANY($1)", [[big, small]]);
+    });
+    t.after(() => pool.end());
+
+    // 200 sections clustered right on the query axis: every one of HNSW's
+    // ef_search (default 40) candidates comes from here.
+    await seedEmbeddedRepository(
+      pool,
+      big,
+      Array.from({ length: 200 }, (_, index) => vectorNear(0, 0.001 * (index + 1)))
+    );
+    // The small flow's 3 sections sit on another axis, far from the query.
+    const smallIds = await seedEmbeddedRepository(pool, small, [
+      vectorNear(7, 0.1),
+      vectorNear(7, 0.2),
+      vectorNear(7, 0.3)
+    ]);
+
+    const query = vectorNear(0, 0);
+    // The pre-fix query shape under-returns: the index hands back corpus-wide
+    // nearest candidates and the repository filter then discards them.
+    const approximate = await pool.query(
+      `SELECT s.id FROM document_sections s JOIN documents d ON d.id = s.document_id
+       WHERE s.embedding IS NOT NULL AND d.repository_id = ANY($2)
+       ORDER BY s.embedding <=> $1::vector LIMIT 5`,
+      [toVectorLiteral(query), [small]]
+    );
+    assert.ok(
+      (approximate.rowCount ?? 0) < smallIds.length,
+      `precondition: the bare HNSW query under-returns (got ${approximate.rowCount})`
+    );
+
+    const store = new PostgresKnowledgeStore(pool);
+    const hits = await store.searchByEmbedding(query, 5, [small]);
+    assert.deepEqual(
+      hits.map((hit) => hit.id),
+      smallIds,
+      "every section of the small flow comes back, nearest first"
+    );
+
+    // An unfiltered search still returns `limit` hits from the index.
+    assert.equal((await store.searchByEmbedding(query, 5)).length, 5);
+  }
+);
+
+test("migration 0072 indexes the section foreign keys", { skip: !runIntegration }, async (t) => {
+  const pool = new pg.Pool({ connectionString: databaseUrl });
+  t.after(() => pool.end());
+  const result = await pool.query<{ indexname: string }>(
+    `SELECT indexname FROM pg_indexes
+     WHERE indexname IN ('document_sections_document_id_idx', 'answer_citations_section_id_idx')
+     ORDER BY indexname`
+  );
+  assert.deepEqual(
+    result.rows.map((row) => row.indexname),
+    ["answer_citations_section_id_idx", "document_sections_document_id_idx"]
+  );
 });

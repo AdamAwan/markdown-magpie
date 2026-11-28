@@ -394,20 +394,27 @@ export class PostgresKnowledgeStore
     // configured model produced are comparable to the query embedding — stale
     // vectors from a previous model are invisible here until re-embedded.
     const repositoryFilter = repositoryIds && repositoryIds.length > 0 ? repositoryIds : null;
-    const result = await this.pool.query<{ id: string; similarity: string }>(
-      `
-        SELECT s.id, 1 - (s.embedding <=> $1::vector) AS similarity
-        FROM document_sections s
-        JOIN documents d ON d.id = s.document_id
-        WHERE s.embedding IS NOT NULL
-          AND ($3::text[] IS NULL OR d.repository_id = ANY($3))
-          AND ($4::text IS NULL OR s.embedding_model = $4)
-        ORDER BY s.embedding <=> $1::vector
-        LIMIT $2
-      `,
-      [literal, limit, repositoryFilter, this.embeddingModel ?? null]
-    );
-    return result.rows.map((row) => ({ id: row.id, similarity: Number(row.similarity) }));
+    const values = [literal, limit, repositoryFilter, this.embeddingModel ?? null];
+    const result = await this.pool.query<{ id: string; similarity: string }>(VECTOR_SEARCH_SQL, values);
+    if (repositoryFilter === null || result.rows.length >= limit) {
+      return mapVectorHits(result.rows);
+    }
+
+    // A short FILTERED result is not proof the flow has fewer matches. The HNSW
+    // scan collects only hnsw.ef_search (default 40) nearest candidates from the
+    // WHOLE corpus and the repository filter runs on those afterwards — so a
+    // small flow whose sections are not among the corpus-wide nearest came back
+    // with few or zero hits even though it had plenty of embedded sections
+    // (docs/retrieval.md R24). Re-run it as an EXACT search: the repository
+    // filter then runs before the distance ordering, so the result is the true
+    // top-`limit` within the flow. Only a short filtered result pays for it, and
+    // a short result means the flow is small relative to the corpus — exactly
+    // when an exact scan of its sections is cheap. (pgvector 0.8's
+    // hnsw.iterative_scan would solve this inside the index, but the project does
+    // not pin a pgvector version that has it — the compose and test images track
+    // pgvector/pgvector:pg16 — and setting an unknown hnsw.* parameter errors.)
+    const exact = await this.pool.query<{ id: string; similarity: string }>(EXACT_VECTOR_SEARCH_SQL, values);
+    return mapVectorHits(exact.rows);
   }
 
   async searchByKeyword(
@@ -581,6 +588,40 @@ export class PostgresKnowledgeStore
       );
     }
   }
+}
+
+// The approximate (HNSW) vector search. `ORDER BY embedding <=> query` is the
+// exact shape the document_sections_embedding_hnsw index (0006) serves.
+// $1 query vector, $2 limit, $3 repository filter (NULL = all), $4 model stamp
+// (NULL = unversioned store).
+const VECTOR_SEARCH_SQL = `
+  SELECT s.id, 1 - (s.embedding <=> $1::vector) AS similarity
+  FROM document_sections s
+  JOIN documents d ON d.id = s.document_id
+  WHERE s.embedding IS NOT NULL
+    AND ($3::text[] IS NULL OR d.repository_id = ANY($3))
+    AND ($4::text IS NULL OR s.embedding_model = $4)
+  ORDER BY s.embedding <=> $1::vector
+  LIMIT $2
+`;
+
+// The same search, exact. Ordering by the computed similarity (rather than the
+// bare distance operator) is deliberately a form no HNSW index can serve, so the
+// planner filters to the requested repositories first and sorts every matching
+// section by its true distance. Same parameters as VECTOR_SEARCH_SQL.
+const EXACT_VECTOR_SEARCH_SQL = `
+  SELECT s.id, 1 - (s.embedding <=> $1::vector) AS similarity
+  FROM document_sections s
+  JOIN documents d ON d.id = s.document_id
+  WHERE s.embedding IS NOT NULL
+    AND ($3::text[] IS NULL OR d.repository_id = ANY($3))
+    AND ($4::text IS NULL OR s.embedding_model = $4)
+  ORDER BY similarity DESC, s.id
+  LIMIT $2
+`;
+
+function mapVectorHits(rows: Array<{ id: string; similarity: string }>): Array<{ id: string; similarity: number }> {
+  return rows.map((row) => ({ id: row.id, similarity: Number(row.similarity) }));
 }
 
 interface RepositoryRow {
