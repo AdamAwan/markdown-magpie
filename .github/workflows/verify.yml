@@ -116,6 +116,58 @@ jobs:
       - name: Golden eval
         run: npm run eval:golden
 
+  e2e-jobs:
+    name: Queue E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    # Queue-lifecycle smoke test (scripts/e2e-jobs.ts): happy-path answer,
+    # cancel in flight, retry then permanent fail, and job/schedule listing.
+    # scripts/e2e-jobs-local.ts boots the deterministic OpenAI-compatible chat
+    # fixture + API + one watcher as Node processes (no image build) against a
+    # single-use database on the pgvector service container. No provider
+    # credentials. ~3.5 minutes, most of it the retry scenario's real pg-boss
+    # backoff. Stack logs are uploaded on failure.
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      TEST_DATABASE_ADMIN_URL: postgres://postgres:postgres@localhost:5432/postgres
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Queue e2e
+        run: npm run e2e:jobs:local
+
+      - name: Upload stack logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-jobs-logs
+          path: .magpie/e2e-jobs/*.log
+          if-no-files-found: ignore
+
   static:
     name: Lint and Dead Code
     runs-on: ubuntu-latest

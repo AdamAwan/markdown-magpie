@@ -20,12 +20,11 @@
  * Re-pin:   npm run eval:golden -- --update-baseline
  */
 
-import { spawn, type ChildProcess } from "node:child_process";
 import { mkdirSync, readFileSync, readdirSync, writeFileSync, appendFileSync } from "node:fs";
-import { createServer } from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { aggregate, compareToBaseline, scoreCase } from "./lib/golden-scoring.mjs";
+import { cleanEnv, createLauncher, freePort, sleep, waitFor } from "./lib/local-stack.mjs";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const fixturesDir = path.join(rootDir, "scripts", "fixtures");
@@ -118,81 +117,8 @@ interface EvalResult {
   cases: Record<string, boolean>;
 }
 
-const children: ChildProcess[] = [];
-
-function launch(name: string, args: string[], env: NodeJS.ProcessEnv): ChildProcess {
-  const child = spawn(process.execPath, args, { cwd: rootDir, env, stdio: ["ignore", "pipe", "pipe"] });
-  const logPath = path.join(evalStateDir, `${name}.log`);
-  writeFileSync(logPath, "");
-  const append = (chunk: Buffer) => appendFileSync(logPath, chunk);
-  child.stdout?.on("data", append);
-  child.stderr?.on("data", append);
-  child.on("exit", (code) => {
-    if (code !== null && code !== 0) {
-      console.error(`[eval] ${name} exited with code ${code} — see ${logPath}`);
-    }
-  });
-  children.push(child);
-  return child;
-}
-
-function stopChildren(): void {
-  for (const child of children) {
-    if (child.exitCode === null) {
-      child.kill("SIGTERM");
-    }
-  }
-}
-
-function freePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const server = createServer();
-    server.listen(0, "127.0.0.1", () => {
-      const address = server.address();
-      if (address && typeof address === "object") {
-        const port = address.port;
-        server.close(() => resolve(port));
-      } else {
-        server.close(() => reject(new Error("could not allocate a port")));
-      }
-    });
-  });
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-async function waitFor(label: string, timeoutMs: number, probe: () => Promise<boolean>): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    try {
-      if (await probe()) {
-        return;
-      }
-    } catch {
-      // not up yet
-    }
-    await sleep(POLL_MS);
-  }
-  throw new Error(`Timed out waiting for ${label}`);
-}
-
-// A child env with every knob that could steer the pipeline stripped, so a
-// developer's shell (real provider keys, embedding config, knowledge repos)
-// can never change what the eval measures. DATABASE_URL comes from
-// test-db.mjs and is kept.
-function cleanEnv(overrides: Record<string, string>): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...process.env };
-  const steering =
-    /^(OPENAI_COMPATIBLE_|AZURE_OPENAI_|KNOWLEDGE_|WATCHER_|FLOW_ROUTER_|GAP_|AI_|AUTH_|MAGPIE_|EMBEDDING_|OTEL_|LOG_|PORT$|API_BASE_URL$|SOURCE)/;
-  for (const key of Object.keys(env)) {
-    if (steering.test(key)) {
-      delete env[key];
-    }
-  }
-  return { ...env, ...overrides };
-}
+const stack = createLauncher({ cwd: rootDir, logDir: evalStateDir, tag: "eval" });
+const launch = stack.launch;
 
 async function httpJson<T>(url: string, init?: RequestInit): Promise<{ status: number; body: T }> {
   const response = await fetch(url, {
@@ -500,5 +426,5 @@ main()
     process.exitCode = 1;
   })
   .finally(() => {
-    stopChildren();
+    stack.stopAll();
   });
